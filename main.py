@@ -316,69 +316,33 @@ def calculate_md5(file_path):
         return None
 
 
-def upload_to_smugmug(file_path, filename):
-    """Uploads a photo to SmugMug using OAuth 1.0a signing."""
-    smugmug_config = load_smugmug_config()
-    if not smugmug_config:
-        return False
-    album_api_uri = smugmug_config.get('album_api_uri')
-    api_key = smugmug_config.get('api_key')
-    api_secret = smugmug_config.get('api_secret')
-    oauth_token = smugmug_config.get('oauth_token')
-    oauth_secret = smugmug_config.get('oauth_token_secret') # Using 'oauth_secret' to match example
-
-    if not all([album_api_uri, api_key, api_secret, oauth_token, oauth_secret]):
-        logging.error("Missing SmugMug configuration details.")
-        return False
-
-    upload_url = 'https://upload.smugmug.com/'
-    md5_hash = calculate_md5(file_path)
-    file_size = os.path.getsize(file_path)
-
-    oauth_params = {
-        'oauth_consumer_key': api_key,
-        'oauth_nonce': str(uuid.uuid4()),
-        'oauth_signature_method': 'HMAC-SHA1',
-        'oauth_timestamp': str(int(time.time())),
-        'oauth_token': oauth_token,
-        'oauth_version': '1.0'
-    }
-
-    base_string = 'POST&' + urllib.parse.quote_plus(upload_url) + '&' + urllib.parse.quote_plus(
-        urllib.parse.urlencode(sorted(oauth_params.items())))
-
-    # Sign the request
-    key = urllib.parse.quote_plus(api_secret) + '&' + urllib.parse.quote_plus(oauth_secret)
-    signature = hmac.new(key.encode('utf-8'), base_string.encode('utf-8'), hashlib.sha1).digest()
-    signature = base64.b64encode(signature).decode('utf-8')
-
-    oauth_params['oauth_signature'] = signature
-
-    header_string = 'OAuth ' + ', '.join([f'{key}="{value}"' for key, value in oauth_params.items()])
-
-    headers = {
-        'Authorization': header_string,
-        'X-Smug-Version': 'v2',
-        'X-Smug-Client': 'GP2SM-Transfer/1.0',  # Replace with your actual application name and version
-        'X-Smug-MD5': md5_hash,
-        'X-Smug-Filename': filename,
-        'Content-Length': str(file_size),
-        'X-Smug-ResponseType': 'JSON',
-        'X-Smug-AlbumUri': album_api_uri
-    }
-
+def upload_to_smugmug(auth_session, album_api_uri, file_path, filename, image_type='image/jpeg'):
+    """Upload image to specified Album API URI, given an authenticated session and image file path."""
     try:
-        with open(file_path, 'rb') as img_file:
-            files = {'image': (filename, img_file)}
-            response = requests.post(upload_url, files=files, headers=headers)
-            response.raise_for_status()
-            upload_data = response.json()
-            if 'stat' in upload_data and upload_data['stat'] == 'ok':
-                logging.info(f"Successfully uploaded to SmugMug: {filename}")
-                return True
-            else:
-                logging.error(f"Failed to upload {filename} to SmugMug. Response: {upload_data}")
-                return False
+        with open(file_path, 'rb') as image_file:
+            image_data = image_file.read()
+
+        headers = {
+            'Accept': b'application/json',
+            'Content-Length': str(len(image_data)),
+            'Content-MD5': hashlib.md5(image_data).hexdigest(),
+            'Content-Type': image_type,
+            'X-Smug-AlbumUri': album_api_uri,
+            'X-Smug-FileName': filename,
+            'X-Smug-ResponseType': 'JSON',
+            'X-Smug-Version': 'v2',
+        }
+
+        response = auth_session.post('https://upload.smugmug.com/', headers=headers, data=image_data)
+        response.raise_for_status()
+        upload_data = response.json()
+        if 'stat' in upload_data and upload_data['stat'] == 'ok':
+            logging.info(f"Successfully uploaded to SmugMug: {upload_data.get('Image', {}).get('URL', 'Unknown URL')}")
+            return True
+        else:
+            logging.error(f"Failed to upload {filename} to SmugMug. Response: {upload_data}")
+            return False
+
     except requests.exceptions.RequestException as e:
         logging.error(f"Error uploading {filename} to SmugMug: {e}")
         if hasattr(e.response, 'text'):
@@ -387,10 +351,6 @@ def upload_to_smugmug(file_path, filename):
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
-
-# You might need to adjust your get_smugmug_auth function or ensure
-# your smugmug_config.json contains 'oauth_secret' instead of 'oauth_token_secret'
-# or update the variable name in this function.
 
 
 def remove_from_google_photos(service, media_item_id):
@@ -437,6 +397,7 @@ def main():
     if not google_photos_service:
         return
 
+    smugmug_config = load_smugmug_config()
     smugmug_auth = get_smugmug_auth()
     if not smugmug_auth:
         return
@@ -478,7 +439,8 @@ def main():
             logging.info(f"Photo '{filename}' not found on SmugMug. Downloading and uploading.")
             file_path, downloaded_filename, _, _ = download_google_photo(google_photos_service, photo)
             if file_path:
-                if upload_to_smugmug(file_path, downloaded_filename):
+                # if upload_to_smugmug(smugmug_auth, file_path, downloaded_filename):
+                if upload_to_smugmug(smugmug_auth, smugmug_config.get('album_api_uri'), file_path, filename, 'image/jpeg'):
                     logging.info(f"Successfully transferred '{downloaded_filename}' to SmugMug.")
                     # No deletion here as it was not on SmugMug before
                 else:
