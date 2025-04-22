@@ -1,3 +1,23 @@
+# Google Photos to SmugMug Transfer Script
+#
+# This script facilitates transferring media from Google Photos to SmugMug.
+#
+# Attribution:
+# - Core logic and structure generated with assistance from Google Gemini AI.
+# - SmugMug upload logic inspired by/adapted from SkiTheSlicer's work:
+#   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
+#
+
+# Google Photos to SmugMug Transfer Script
+#
+# This script facilitates transferring media from Google Photos to SmugMug.
+#
+# Attribution:
+# - Core logic and structure generated with assistance from Google Gemini AI.
+# - SmugMug upload logic inspired by/adapted from SkiTheSlicer's work:
+#   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
+#
+
 # Standard library imports
 import argparse
 import json
@@ -360,7 +380,11 @@ def calculate_md5(file_path):
 
 
 def upload_to_smugmug(auth_session, album_api_uri, file_path, filename, mime_type):
-    """Upload media file to specified Album API URI, given an authenticated session, file path, filename and mime_type."""
+    """
+    Upload media file to specified Album API URI, given an authenticated session, file path, filename and mime_type.
+    Note: SmugMug upload implementation details (headers, endpoint) inspired by
+    https://github.com/SkiTheSlicer/smugmug-api-v2-upload by SkiTheSlicer.
+    """
     try:
         with open(file_path, 'rb') as media_file:
             media_data = media_file.read()
