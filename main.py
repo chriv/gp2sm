@@ -331,7 +331,8 @@ def check_photo_exists_smugmug(auth, album_key, filename, mime_type, file_hash=N
                     if is_video:
                         # For videos, compare filenames
                         # Also check if SmugMug reports it as a 'Video' type if available
-                        if item_filename and filename == item_filename and (item_type is None or item_type == 'Video'):
+                        logging.info(f"Comparing Google Photos filename: '{filename}' with SmugMug filename: '{item_filename}'")
+                        if item_filename and filename.lower() == item_filename.lower() and (item_type is None or item_type == 'Video'):
                             logging.info(f"Video '{filename}' found on SmugMug by filename match.")
                             return True
                     else:
