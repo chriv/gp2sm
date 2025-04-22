@@ -7,17 +7,6 @@
 # - SmugMug upload logic inspired by/adapted from SkiTheSlicer's work:
 #   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
 #
-
-# Google Photos to SmugMug Transfer Script
-#
-# This script facilitates transferring media from Google Photos to SmugMug.
-#
-# Attribution:
-# - Core logic and structure generated with assistance from Google Gemini AI.
-# - SmugMug upload logic inspired by/adapted from SkiTheSlicer's work:
-#   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
-#
-
 __version__ = "1.0"
 
 # Standard library imports
