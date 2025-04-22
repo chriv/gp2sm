@@ -18,6 +18,8 @@
 #   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
 #
 
+__version__ = "1.0"
+
 # Standard library imports
 import argparse
 import json

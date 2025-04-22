@@ -1,6 +1,16 @@
-# Google Photos to SmugMug Transfer Tool
+# gp2sm
 
-This Python script transfers photos and videos from your Google Photos library to a specified SmugMug album. It includes features to handle authentication, check for duplicates, and optionally delete items from Google Photos after confirming their existence on SmugMug.
+This Python script (version 1.0) transfers photos and videos from your Google Photos™ library to a specified SmugMug® album. It includes features to handle authentication, check for duplicates, and optionally delete items from Google Photos™ after confirming their existence on SmugMug®.
+
+## Important Notes
+
+*   This project is not affiliated with, endorsed by, or officially supported by Google™ or SmugMug®.
+*   Google Photos™ is a trademark of Google LLC.
+*   SmugMug® is a registered trademark of SmugMug, Inc.
+
+## License
+
+This project is released into the public domain under The Unlicense. See the [LICENSE](LICENSE) file for details.
 
 ## Features
 
