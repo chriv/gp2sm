@@ -1,21 +1,18 @@
-import os
+# Standard library imports
+import argparse
 import json
+import logging
+import os
+import hashlib
+
+# Third-party imports
 import requests
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-import logging
-import webbrowser
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from requests_oauthlib import OAuth1Session
-import argparse
-import hashlib
-import hmac
-import base64
-import time
-import uuid
-import urllib.parse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -136,11 +133,15 @@ if __name__ == '__main__':
         else:
             print("Failed to obtain SmugMug OAuth tokens.")
 
-def get_smugmug_auth():
-    """Returns an OAuth1 object for SmugMug API authentication, obtaining tokens if needed."""
-    smugmug_config = load_smugmug_config()
+def get_smugmug_auth(smugmug_config):
+    """
+    Returns an OAuth1 object for SmugMug API authentication and the potentially updated config,
+    obtaining tokens if needed.
+    Accepts the loaded smugmug_config dictionary.
+    """
     if not smugmug_config:
-        return None
+        logging.error("SmugMug configuration not provided to get_smugmug_auth.")
+        return None, None # Return None for auth and config
 
     api_key = smugmug_config.get('api_key')
     api_secret = smugmug_config.get('api_secret')
@@ -148,11 +149,11 @@ def get_smugmug_auth():
     oauth_token_secret = smugmug_config.get('oauth_token_secret')
 
     if not api_key or not api_secret:
-        logging.error("SmugMug API Key and Secret must be configured in smugmug_config.json.")
-        return None
+        logging.error("SmugMug API Key and Secret must be configured.")
+        return None, smugmug_config # Return None for auth, but original config
 
-    if oauth_token == "YOUR_SMUGMUG_OAUTH_TOKEN" or not oauth_token or not oauth_token_secret:
-        logging.info("SmugMug OAuth tokens not found in config. Initiating authorization flow...")
+    if not oauth_token or not oauth_token_secret or oauth_token == "YOUR_SMUGMUG_OAUTH_TOKEN":
+        logging.info("SmugMug OAuth tokens not found or invalid in config. Initiating authorization flow...")
         new_oauth_token, new_oauth_token_secret = obtain_smugmug_oauth_tokens(api_key, api_secret)
         if new_oauth_token and new_oauth_token_secret:
             smugmug_config['oauth_token'] = new_oauth_token
@@ -162,12 +163,13 @@ def get_smugmug_auth():
             oauth_token_secret = new_oauth_token_secret
         else:
             logging.error("Failed to obtain SmugMug OAuth tokens. Please check the logs and try again.")
-            return None
+            # Return None for auth, but the config might have been partially updated (though unlikely useful)
+            return None, smugmug_config
 
     auth = OAuth1Session(api_key, client_secret=api_secret, resource_owner_key=oauth_token,
                          resource_owner_secret=oauth_token_secret)
     logging.info("SmugMug API authentication configured.")
-    return auth
+    return auth, smugmug_config # Return auth session and potentially updated config
 
 
 def get_google_photos(service, album_id=None):
@@ -207,7 +209,7 @@ def get_google_photos(service, album_id=None):
 
 def calculate_file_hash(file_path):
     """Calculates the SHA256 hash of a file."""
-    import hashlib  # Import hashlib here to ensure it's available
+    # hashlib is imported globally now
     hasher = hashlib.sha256()
     try:
         with open(file_path, 'rb') as afile:
@@ -224,16 +226,21 @@ def calculate_file_hash(file_path):
         return None
 
 
-def check_photo_exists_smugmug(auth, filename, file_hash=None, min_size_bytes=None, max_size_bytes=None):
-    """Checks if a photo exists on SmugMug, primarily by hash if feasible, otherwise by filename and size."""
-    smugmug_config = load_smugmug_config()
-    if not smugmug_config:
-        return False
-    album_key = smugmug_config.get('album_key')
-
+def check_photo_exists_smugmug(auth, album_key, filename, mime_type, file_hash=None):
+    """
+    Checks if a media item exists in the specified SmugMug album.
+    - For images (mime_type starting with 'image/'), checks by MD5 hash.
+    - For videos (mime_type starting with 'video/'), checks by filename.
+    Accepts the authenticated session, album_key, filename, mime_type, and optional MD5 file_hash (required for images).
+    Returns True if found, False otherwise.
+    """
     if not album_key:
-        logging.warning(
-            "No SmugMug Album Key specified in smugmug_config.json. Existence check might be less efficient or skipped.")
+        logging.warning("No SmugMug Album Key provided. Cannot check for media existence.")
+        return False # Cannot check without album key
+
+    is_video = mime_type.startswith('video/')
+    if not is_video and not file_hash:
+        logging.warning(f"Image file '{filename}' requires a file hash for existence check, but none was provided.")
         return False
 
     album_uri = f"/api/v2/album/{album_key}"
@@ -248,21 +255,26 @@ def check_photo_exists_smugmug(auth, filename, file_hash=None, min_size_bytes=No
             data = response.json()
 
             if 'Response' in data and 'AlbumImage' in data['Response']:
-                for image in data['Response']['AlbumImage']:
-                    if image.get('FileName') == filename:
-                        if file_hash:
-                            # Ideally, we'd have a hash from SmugMug to compare
-                            logging.warning("Hash-based checking not fully implemented for SmugMug.")
-                            return True  # For now, if filename matches and hash is provided, consider it a match
-                        elif min_size_bytes and max_size_bytes:
-                            image_size = image.get('OriginalSize')
-                            if image_size is not None and min_size_bytes <= image_size <= max_size_bytes:
-                                return True
-                        else:
-                            return True  # Filename matches and no size constraints
+                for item in data['Response']['AlbumImage']: # Renamed 'image' to 'item' for clarity
+                    item_filename = item.get('FileName')
 
-            if 'NextPage' in data['Response']['Pages']:
-                next_page_url = data['Response']['Pages']['NextPage']
+                    if is_video:
+                        # Check by filename for videos
+                        if item_filename and filename == item_filename:
+                             logging.info(f"Video '{filename}' found on SmugMug by filename match.")
+                             return True
+                    else:
+                        # Check by hash for images
+                        smugmug_hash = item.get('ArchivedMD5')
+                        # Ensure file_hash is not None before comparing
+                        if file_hash and smugmug_hash and file_hash.lower() == smugmug_hash.lower():
+                            logging.info(f"Image '{filename}' found on SmugMug with matching MD5 hash: {file_hash}")
+                            return True # Exact match found
+
+            # Pagination logic
+            pages_info = data.get('Response', {}).get('Pages')
+            if pages_info and 'NextPage' in pages_info:
+                next_page_url = f"https://api.smugmug.com{pages_info['NextPage']}" # Ensure full URL
             else:
                 next_page_url = None
 
@@ -274,27 +286,58 @@ def check_photo_exists_smugmug(auth, filename, file_hash=None, min_size_bytes=No
 
 
 def download_google_photo(service, media_item):
-    """Downloads a photo from Google Photos in its original quality."""
-    try:
-        response = service.mediaItems().get(mediaItemId=media_item['id']).execute()
-        download_url = response.get('baseUrl') + '=d'  # '=d' forces download
-        image_data = requests.get(download_url)
-        image_data.raise_for_status()  # Raise an exception for bad status codes
+    """Downloads a media item (photo or video) from Google Photos in its original quality."""
+    media_item_id = media_item['id']
+    filename = media_item.get('filename', f"media_{media_item_id}")
+    mime_type = media_item.get('mimeType', '')
+    is_video = mime_type.startswith('video/')
 
-        filename = media_item.get('filename', f"photo_{media_item['id']}")
-        file_path = f"temp_{filename}"
+    try:
+        # Note: mediaItems().get() might not be needed if baseUrl is already in the list response
+        # However, keeping it for now to ensure we have the latest baseUrl
+        item_details = service.mediaItems().get(mediaItemId=media_item_id).execute()
+        base_url = item_details.get('baseUrl')
+        if not base_url:
+            logging.error(f"Could not get baseUrl for media item {media_item_id}")
+            return None, None, None, None
+
+        # Append appropriate parameter for download based on type
+        download_param = '=dv' if is_video else '=d'
+        download_url = base_url + download_param
+
+        logging.debug(f"Attempting download from URL: {download_url}")
+        media_response = requests.get(download_url, stream=True) # Use stream=True for potentially large files
+        media_response.raise_for_status()  # Raise an exception for bad status codes
+
+        # Construct temporary file path
+        temp_dir = "temp_downloads" # Consider using a dedicated temp directory
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+        file_path = os.path.join(temp_dir, f"temp_{filename}")
+
+        # Write content to file
         with open(file_path, 'wb') as f:
-            f.write(image_data.content)
-        logging.info(f"Downloaded photo from Google Photos: {filename}")
-        return file_path, filename, response.get('mediaMetadata', {}).get('width'), response.get('mediaMetadata',
-                                                                                                 {}).get('height')
+            for chunk in media_response.iter_content(chunk_size=8192): # Write in chunks
+                f.write(chunk)
+
+        logging.info(f"Downloaded {'video' if is_video else 'photo'} from Google Photos: {filename} to {file_path}")
+
+        # Get metadata (width/height might not apply to video, but harmless)
+        metadata = item_details.get('mediaMetadata', {})
+        width = metadata.get('width')
+        height = metadata.get('height')
+        return file_path, filename, width, height
+
     except HttpError as error:
         logging.error(
-            f'An error occurred while downloading photo {media_item.get("filename", media_item["id"])} from Google Photos: {error}')
+            f'An API error occurred while downloading {filename} ({media_item_id}) from Google Photos: {error}')
         return None, None, None, None
     except requests.exceptions.RequestException as e:
         logging.error(
-            f'An error occurred during the download request for photo {media_item.get("filename", media_item["id"])}: {e}')
+            f'A network error occurred during the download request for {filename} ({media_item_id}): {e}')
+        return None, None, None, None
+    except IOError as e:
+        logging.error(f"An error occurred writing temporary file {file_path}: {e}")
         return None, None, None, None
 
 
@@ -316,31 +359,40 @@ def calculate_md5(file_path):
         return None
 
 
-def upload_to_smugmug(auth_session, album_api_uri, file_path, filename, image_type='image/jpeg'):
-    """Upload image to specified Album API URI, given an authenticated session and image file path."""
+def upload_to_smugmug(auth_session, album_api_uri, file_path, filename, mime_type):
+    """Upload media file to specified Album API URI, given an authenticated session, file path, filename and mime_type."""
     try:
-        with open(file_path, 'rb') as image_file:
-            image_data = image_file.read()
+        with open(file_path, 'rb') as media_file:
+            media_data = media_file.read()
 
         headers = {
-            'Accept': b'application/json',
-            'Content-Length': str(len(image_data)),
-            'Content-MD5': hashlib.md5(image_data).hexdigest(),
-            'Content-Type': image_type,
+            'Accept': 'application/json', # Use string, requests_oauthlib handles encoding
+            'Content-Length': str(len(media_data)),
+            'Content-MD5': hashlib.md5(media_data).hexdigest(),
+            'Content-Type': mime_type, # Use the provided mime_type
             'X-Smug-AlbumUri': album_api_uri,
             'X-Smug-FileName': filename,
             'X-Smug-ResponseType': 'JSON',
             'X-Smug-Version': 'v2',
         }
 
-        response = auth_session.post('https://upload.smugmug.com/', headers=headers, data=image_data)
-        response.raise_for_status()
+        # Use the authenticated session directly for the POST request
+        response = auth_session.post('https://upload.smugmug.com/', headers=headers, data=media_data)
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
         upload_data = response.json()
-        if 'stat' in upload_data and upload_data['stat'] == 'ok':
-            logging.info(f"Successfully uploaded to SmugMug: {upload_data.get('Image', {}).get('URL', 'Unknown URL')}")
+
+        # Check the response structure for success indication
+        # SmugMug upload response might vary, adjust based on actual API response
+        if upload_data.get('stat') == 'ok' and 'Image' in upload_data: # Check for 'Image' key for success
+            image_info = upload_data.get('Image', {})
+            status_url = image_info.get('StatusURL') # URL to check upload status
+            image_url = image_info.get('URL') # Final URL once processed
+            logging.info(f"Successfully initiated upload for '{filename}' to SmugMug. Status URL: {status_url}, Final URL (approx): {image_url}")
+            # Note: Upload might still be processing on SmugMug's side.
+            # For critical applications, you might poll the StatusURL.
             return True
         else:
-            logging.error(f"Failed to upload {filename} to SmugMug. Response: {upload_data}")
+            logging.error(f"Failed to upload '{filename}' to SmugMug. Response: {upload_data}")
             return False
 
     except requests.exceptions.RequestException as e:
@@ -368,22 +420,6 @@ def remove_from_google_photos(service, media_item_id):
         return False
 
 
-def not_main():
-    smugmug_auth = get_smugmug_auth()
-    if not smugmug_auth:
-        return
-
-    headers = {'Accept': 'application/json'}
-    try:
-        response = smugmug_auth.get('https://api.smugmug.com/api/v2/user/me', headers=headers)
-        response.raise_for_status()
-        user_data = response.json()
-        print("Successfully fetched user data:")
-        print(json.dumps(user_data, indent=2))
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching user data from SmugMug: {e}")
-        print(f"Response Text: {response.text}")
-
 def main():
     """Main function to orchestrate the photo transfer."""
     parser = argparse.ArgumentParser(description="Transfer photos from Google Photos to SmugMug.")
@@ -398,9 +434,22 @@ def main():
         return
 
     smugmug_config = load_smugmug_config()
-    smugmug_auth = get_smugmug_auth()
-    if not smugmug_auth:
+    if not smugmug_config:
+        logging.error("Failed to load SmugMug configuration. Exiting.")
         return
+
+    smugmug_auth, smugmug_config = get_smugmug_auth(smugmug_config) # Pass config, get auth and potentially updated config back
+    if not smugmug_auth:
+        logging.error("Failed to authenticate with SmugMug. Exiting.")
+        return
+
+    # Get album details now that config is confirmed loaded and potentially updated
+    album_key = smugmug_config.get('album_key')
+    album_api_uri = smugmug_config.get('album_api_uri')
+    if not album_key or not album_api_uri:
+        logging.error("SmugMug 'album_key' and 'album_api_uri' must be set in the configuration file. Exiting.")
+        return
+
 
     google_photos = get_google_photos(google_photos_service, args.google_photos_album_id)
     total_photos = len(google_photos)
@@ -410,18 +459,53 @@ def main():
         processed_count += 1
         filename = photo.get('filename')
         media_item_id = photo['id']
-        file_size = photo.get('mediaMetadata', {}).get('fileSize')
-        min_size = int(file_size) - 100 if file_size else None  # Add a small buffer for size comparison
-        max_size = int(file_size) + 100 if file_size else None
+        mime_type = photo.get('mimeType')
 
-        logging.info(f"Processing photo {processed_count}/{total_photos}: {filename} ({media_item_id})")
+        if not filename or not mime_type:
+            logging.warning(f"Skipping item {media_item_id} due to missing filename or mimeType.")
+            continue
 
-        # Check if photo exists on SmugMug
-        exists_on_smugmug = check_photo_exists_smugmug(smugmug_auth, filename, min_size_bytes=min_size,
-                                                       max_size_bytes=max_size)
+        logging.info(f"Processing {processed_count}/{total_photos}: {filename} ({media_item_id}, Type: {mime_type})")
 
+        # Determine if it's a video
+        is_video = mime_type.startswith('video/')
+
+        # --- Existence Check ---
+        exists_on_smugmug = False
+        temp_file_path = None
+        file_hash = None
+
+        if is_video:
+            # For videos, check by filename *before* downloading
+            logging.debug(f"Checking for video '{filename}' on SmugMug by filename...")
+            exists_on_smugmug = check_photo_exists_smugmug(smugmug_auth, album_key, filename, mime_type)
+        else:
+            # For images, download first to get hash
+            logging.debug(f"Downloading image '{filename}' to calculate hash...")
+            temp_file_path, _, _, _ = download_google_photo(google_photos_service, photo)
+            if not temp_file_path:
+                logging.error(f"Skipping image '{filename}' due to download error.")
+                continue
+            file_hash = calculate_md5(temp_file_path)
+            if not file_hash:
+                logging.error(f"Skipping image '{filename}' due to hash calculation error.")
+                if os.path.exists(temp_file_path): os.remove(temp_file_path)
+                continue
+            logging.debug(f"Calculated MD5 for '{filename}': {file_hash}")
+            # Check by hash
+            exists_on_smugmug = check_photo_exists_smugmug(smugmug_auth, album_key, filename, mime_type, file_hash=file_hash)
+
+
+        # --- Process Based on Existence ---
         if exists_on_smugmug:
-            logging.info(f"Photo '{filename}' already exists on SmugMug.")
+            log_reason = "filename match" if is_video else f"matching hash: {file_hash}"
+            logging.info(f"Media '{filename}' already exists on SmugMug ({log_reason}).")
+            # Clean up downloaded file if it exists (only images were downloaded at this stage)
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+                logging.debug(f"Removed temporary file: {temp_file_path}")
+
+            # Handle optional deletion from Google Photos
             if args.delete_from_google:
                 print(f"Confirm deletion of '{filename}' from Google Photos? (yes/no): ", end="")
                 confirmation = input().lower()
@@ -436,15 +520,31 @@ def main():
                 logging.info(
                     f"Skipping deletion of '{filename}' from Google Photos (use --delete-from-google to enable).")
         else:
-            logging.info(f"Photo '{filename}' not found on SmugMug. Downloading and uploading.")
-            file_path, downloaded_filename, _, _ = download_google_photo(google_photos_service, photo)
-            if file_path:
-                # if upload_to_smugmug(smugmug_auth, file_path, downloaded_filename):
-                if upload_to_smugmug(smugmug_auth, smugmug_config.get('album_api_uri'), file_path, filename, 'image/jpeg'):
-                    logging.info(f"Successfully transferred '{downloaded_filename}' to SmugMug.")
-                    # No deletion here as it was not on SmugMug before
-                else:
-                    logging.error(f"Failed to transfer '{downloaded_filename}' to SmugMug.")
+            log_reason = "filename" if is_video else f"hash: {file_hash}"
+            logging.info(f"Media '{filename}' ({log_reason}) not found on SmugMug. Proceeding with upload.")
+
+            # Download video if it wasn't already downloaded for hash check
+            if is_video:
+                 logging.debug(f"Downloading video '{filename}' for upload...")
+                 temp_file_path, _, _, _ = download_google_photo(google_photos_service, photo)
+                 if not temp_file_path:
+                     logging.error(f"Skipping video '{filename}' due to download error during upload phase.")
+                     continue
+
+            # Ensure we have a temp_file_path before attempting upload
+            if not temp_file_path:
+                 logging.error(f"Cannot upload '{filename}', temporary file path is missing.")
+                 continue
+
+            # Upload the downloaded file (image or video) using the correct mime_type
+            # The upload_to_smugmug function handles removing the temp_file_path in its finally block
+            if upload_to_smugmug(smugmug_auth, album_api_uri, temp_file_path, filename, mime_type):
+                logging.info(f"Successfully initiated transfer of '{filename}' to SmugMug.")
+                # Optional: Consider deleting from Google Photos *after* successful upload?
+                # This would require another command-line flag, e.g., --delete-after-upload
+            else:
+                logging.error(f"Failed to transfer '{filename}' to SmugMug.")
+                # Note: upload_to_smugmug should have already tried to remove the temp file if it still exists
 
 
 if __name__ == "__main__":
