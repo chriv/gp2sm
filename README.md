@@ -1,5 +1,27 @@
 # gp2sm
+# Google Photos to SmugMug Transfer Tool
 
+A Python tool for transferring media (photos and videos) from Google Photos to SmugMug.
+
+## Features
+
+- Transfer photos and videos from Google Photos to SmugMug
+- Check for duplicate files based on filename (for videos) or MD5 hash (for photos)
+- Optional deletion of media from Google Photos after transfer
+- Support for processing specific Google Photos albums
+- Dry run mode to test without actually transferring or deleting files
+- Selective transfer of only photos or only videos
+
+## Prerequisites
+
+- Python 3.6 or later
+- Google Photos API access
+- SmugMug API access
+
+## Installation
+
+1. Clone this repository or download the source code
+2. Install required dependencies:
 This Python script (version 1.0) transfers photos and videos from your Google Photos™ library to a specified SmugMug® album. It includes features to handle authentication, check for duplicates, and optionally delete items from Google Photos™ after confirming their existence on SmugMug®.
 
 ## Important Notes
