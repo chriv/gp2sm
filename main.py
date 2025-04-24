@@ -14,7 +14,6 @@ import argparse
 import json
 import logging
 import os
-import hashlib
 
 # Third-party imports
 import requests
@@ -23,7 +22,6 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from requests_oauthlib import OAuth1Session
 
 # Local module imports
 from smugmug_module import SmugMug
@@ -40,20 +38,6 @@ BATCH_SIZE = 50  # Number of photos to process in each batch
 # Google Photos API Scopes (removed edit scope)
 GOOGLE_PHOTOS_SCOPES = ['https://www.googleapis.com/auth/photoslibrary.readonly',
                         'https://www.googleapis.com/auth/photoslibrary.appendonly']
-
-
-def load_smugmug_config():
-    """Loads SmugMug API configuration from a JSON file."""
-    try:
-        with open(SMUGMUG_CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            return config
-    except FileNotFoundError:
-        logging.error(f"SmugMug configuration file not found: {SMUGMUG_CONFIG_FILE}")
-        return None
-    except json.JSONDecodeError:
-        logging.error(f"Error decoding JSON from SmugMug configuration file: {SMUGMUG_CONFIG_FILE}")
-        return None
 
 
 def authenticate_google_photos():
