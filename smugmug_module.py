@@ -8,11 +8,11 @@
 #   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
 #
 
-# Standard library imports
-import os
+import hashlib
 import json
 import logging
-import hashlib
+# Standard library imports
+import os
 
 # Third-party imports
 import requests
@@ -149,7 +149,7 @@ class SmugMug:
         # If we have tokens (either loaded or newly obtained), create the session
         if oauth_token and oauth_token_secret and oauth_token != "YOUR_SMUGMUG_OAUTH_TOKEN":
             self.auth_session = OAuth1Session(api_key, client_secret=api_secret, resource_owner_key=oauth_token,
-                                resource_owner_secret=oauth_token_secret)
+                                              resource_owner_secret=oauth_token_secret)
             logging.info("SmugMug API authentication configured.")
 
             # Set album details from config
@@ -158,16 +158,27 @@ class SmugMug:
             self.album_name = self.config.get('album_name')
             self.folder_name = self.config.get('folder_name')
 
-            # Check if we have either album_key and album_api_uri OR album_name
-            if (not self.album_key or not self.album_api_uri) and not self.album_name:
-                logging.error("SmugMug configuration must include either 'album_key' and 'album_api_uri' OR 'album_name'.")
-                logging.error("Please configure these in smugmug_config.json or use --smugmug-album command line argument.")
-                return False
-
-            # If we have album_name but not album_key/album_api_uri, we'll need to get or create the album
-            if self.album_name and (not self.album_key or not self.album_api_uri):
+            # Handle placeholder values and prioritize album_name or album_key
+            if self.album_name and self.album_name.strip() != '' and self.album_name != 'YOUR_SMUGMUG_ALBUM_NAME':
                 logging.info(f"Using album name from config file: '{self.album_name}'")
-                # We'll handle album selection/creation when needed
+                # Clear key and uri as name takes precedence
+                self.album_key = None
+                self.album_api_uri = None
+            elif self.album_key and self.album_key.strip() != '' and self.album_key != 'TARGET_SMUGMUG_ALBUM_KEY':
+                logging.info(f"Using album key from config file: '{self.album_key}'")
+                # If album_api_uri is missing or placeholder, generate it
+                if not self.album_api_uri or self.album_api_uri == '/api/v2/album/TARGET_SMUGMUG_ALBUM_KEY':
+                    self.album_api_uri = f'/api/v2/album/{self.album_key}'
+                    logging.info(f"Generated album_api_uri from album_key: '{self.album_api_uri}'")
+                # Clear name as key takes precedence
+                self.album_name = None
+            else:
+                # If neither album_name nor album_key is valid, log an error and return False
+                logging.error(
+                    "SmugMug configuration must include either a valid 'album_key' and 'album_api_uri' OR a valid 'album_name'.")
+                logging.error(
+                    "Please configure these in smugmug_config.json or use the --smugmug-album command line argument.")
+                return False
 
             # If we have folder_name, log it
             if self.folder_name:
@@ -199,7 +210,7 @@ class SmugMug:
         # MD5 is required for images per SmugMug API for existence checks
         if not is_video and not file_hash:
             logging.warning(f"Image file '{filename}' requires an MD5 hash for existence check, but none was provided.")
-            return False # Cannot check image without hash
+            return False  # Cannot check image without hash
 
         # Construct the API URL to list images in the album
         album_details_url = f"https://api.smugmug.com/api/v2/album/{album_key}"
@@ -208,11 +219,12 @@ class SmugMug:
         try:
             # First, get album details to find the Images URI
             album_response = self.auth_session.get(album_details_url, headers=headers)
-            album_response.raise_for_status() # Raise for HTTP errors
+            album_response.raise_for_status()  # Raise for HTTP errors
             album_data = album_response.json()
 
             # Navigate through the response to find the Images URI
-            images_uri = album_data.get('Response', {}).get('Album', {}).get('Uris', {}).get('AlbumImages', {}).get('Uri')
+            images_uri = album_data.get('Response', {}).get('Album', {}).get('Uris', {}).get('AlbumImages', {}).get(
+                'Uri')
 
             if not images_uri:
                 logging.error(f"Could not find Images URI for SmugMug album key {album_key}. Cannot check existence.")
@@ -232,19 +244,21 @@ class SmugMug:
                 if 'Response' in data and 'AlbumImage' in data['Response']:
                     for item in data['Response']['AlbumImage']:
                         item_filename = item.get('FileName')
-                        item_type = item.get('Type') # SmugMug might distinguish 'Image' and 'Video' types
+                        item_type = item.get('Type')  # SmugMug might distinguish 'Image' and 'Video' types
 
                         # Check based on media type
                         if is_video:
                             # For videos, compare filenames
-                            if item_filename and filename.lower() == item_filename.lower() and (item_type is None or item_type == 'Video'):
+                            if item_filename and filename.lower() == item_filename.lower() and (
+                                    item_type is None or item_type == 'Video'):
                                 return True
                         else:
                             # For images, compare MD5 hashes
-                            smugmug_md5 = item.get('ArchivedMD5') # This field stores the MD5 hash
-                            if file_hash and smugmug_md5 and file_hash.lower() == smugmug_md5.lower() and (item_type is None or item_type == 'Image'):
+                            smugmug_md5 = item.get('ArchivedMD5')  # This field stores the MD5 hash
+                            if file_hash and smugmug_md5 and file_hash.lower() == smugmug_md5.lower() and (
+                                    item_type is None or item_type == 'Image'):
                                 logging.info(f"Image '{filename}' found on SmugMug with matching MD5 hash: {file_hash}")
-                                return True # Exact match found
+                                return True  # Exact match found
 
                 # Pagination logic
                 pages_info = data.get('Response', {}).get('Pages')
@@ -252,7 +266,7 @@ class SmugMug:
                     # Construct the full URL for the next page
                     next_page_url = f"https://api.smugmug.com{pages_info['NextPage']}"
                 else:
-                    next_page_url = None # No more pages
+                    next_page_url = None  # No more pages
 
             # If the loop finishes without finding the item, it doesn't exist
             logging.debug(f"Media '{filename}' not found in SmugMug album {album_key} after checking all pages.")
@@ -320,7 +334,8 @@ class SmugMug:
                 image_info = upload_data.get('Image', {})
                 status_url = image_info.get('StatusURL')
                 image_url = image_info.get('URL')
-                logging.info(f"Successfully initiated upload for '{filename}'. SmugMug Status URL: {status_url}, Final URL (approx): {image_url}")
+                logging.info(
+                    f"Successfully initiated upload for '{filename}'. SmugMug Status URL: {status_url}, Final URL (approx): {image_url}")
                 return True
             else:
                 logging.error(f"Failed to upload '{filename}' to SmugMug. Response: {upload_data}")
@@ -472,6 +487,7 @@ class SmugMug:
                 logging.error("No albums found in SmugMug account.")
                 return []
 
+
         except requests.exceptions.RequestException as e:
             logging.error(f"Error listing albums from SmugMug: {e}")
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
@@ -565,7 +581,6 @@ class SmugMug:
                 creation_url = f"https://api.smugmug.com{root_node_uri}!children"
                 logging.info(f"Creating album '{album_name}' under root node using URL: {creation_url}")
 
-
             # Prepare the album creation request
             headers = {
                 'Accept': 'application/json',
@@ -579,15 +594,14 @@ class SmugMug:
                 'Name': album_name,
                 'UrlName': album_name.title().replace(' ', ''),  # First character needs to be uppercase
                 'Type': 'Album',  # Explicitly set type to Album
-                'Privacy': 'Private', # Set Privacy to Private (Only Me) as requested
-                'LargestSize': 'Original', # Set Maximum Display Size to Original
-                'Protected': False, # Set Right-Click Message to Off
-                'SmugSearchable': 'No', # Set SmugMug Searchable to No
-                'WorldSearchable': 'No', # Set Web Searchable to No
-                'AllowDownloads': True # Set Allow Downloads to On
+                'Privacy': 'Private',  # Set Privacy to Private (Only Me) as requested
+                'LargestSize': 'Original',  # Set Maximum Display Size to Original
+                'Protected': False,  # Set Right-Click Message to Off
+                'SmugSearchable': 'No',  # Set SmugMug Searchable to No
+                'WorldSearchable': 'No',  # Set Web Searchable to No
+                'AllowDownloads': True  # Set Allow Downloads to On
             }
             # Removed: logging.info("Using simplified album_data for creation under node with Privacy set to Private.")
-
 
             # Create the album by POSTing to the determined URL
             # Use 'data' parameter instead of 'json' for form-urlencoded data
@@ -603,36 +617,36 @@ class SmugMug:
 
             node_response = data.get('Response', {}).get('Node', {})
             if node_response and node_response.get('Type') == 'Album':
-                 logging.info("API response contains a Node object of type Album.")
-                 # The created album's details should be linked from the created node's Uris
-                 node_uris = node_response.get('Uris', {})
-                 # The API provides the Album URI under the 'Album' key in the node's Uris
-                 album_uri_data = node_uris.get('Album', {}) # Look specifically for 'Album' key in Uris
+                logging.info("API response contains a Node object of type Album.")
+                # The created album's details should be linked from the created node's Uris
+                node_uris = node_response.get('Uris', {})
+                # The API provides the Album URI under the 'Album' key in the node's Uris
+                album_uri_data = node_uris.get('Album', {})  # Look specifically for 'Album' key in Uris
 
-                 if album_uri_data:
-                      album_uri = album_uri_data.get('Uri')
-                      # The AlbumKey is also available directly on the returned Node object
-                      # OR it is the last segment of the Album URI
-                      album_key = node_response.get('AlbumKey') # Try getting from Node object first
-                      if not album_key and album_uri: # If not on Node object, try splitting URI
-                           album_key = album_uri.split('/')[-1]
+                if album_uri_data:
+                    album_uri = album_uri_data.get('Uri')
+                    # The AlbumKey is also available directly on the returned Node object
+                    # OR it is the last segment of the Album URI
+                    album_key = node_response.get('AlbumKey')  # Try getting from Node object first
+                    if not album_key and album_uri:  # If not on Node object, try splitting URI
+                        album_key = album_uri.split('/')[-1]
 
-
-                      if not album_uri or not album_key:
-                           logging.error(f"Created Album Node, but missing Album URI ('{album_uri}') or Album Key ('{album_key}') in response.")
-                           logging.error(f"Node Response: {json.dumps(node_response, indent=2)}")
-                           # Set to None to indicate failure in getting details
-                           album_key = None
-                           album_uri = None
-                      else:
-                           logging.info(f"Successfully extracted Album URI '{album_uri}' and Album Key '{album_key}' from created Node response.")
-                 else:
-                      logging.error("Created Album Node, but missing 'Album' URI data in node Uris.")
-                      logging.error(f"Node Response: {json.dumps(node_response, indent=2)}")
+                    if not album_uri or not album_key:
+                        logging.error(
+                            f"Created Album Node, but missing Album URI ('{album_uri}') or Album Key ('{album_key}') in response.")
+                        logging.error(f"Node Response: {json.dumps(node_response, indent=2)}")
+                        # Set to None to indicate failure in getting details
+                        album_key = None
+                        album_uri = None
+                    else:
+                        logging.info(
+                            f"Successfully extracted Album URI '{album_uri}' and Album Key '{album_key}' from created Node response.")
+                else:
+                    logging.error("Created Album Node, but missing 'Album' URI data in node Uris.")
+                    logging.error(f"Node Response: {json.dumps(node_response, indent=2)}")
             else:
-                 logging.error("API response did not contain a Node object of type Album as expected.")
-                 logging.error(f"Full API Response: {json.dumps(data, indent=2)}")
-
+                logging.error("API response did not contain a Node object of type Album as expected.")
+                logging.error(f"Full API Response: {json.dumps(data, indent=2)}")
 
             # Final check if we successfully got both key and uri
             if album_key and album_uri:
@@ -642,7 +656,7 @@ class SmugMug:
 
                 # *** Save album_key and album_api_uri to config file ***
                 logging.info("Attempting to save album_key and album_api_uri to config file.")
-                if self.config is not None: # Check if config object exists
+                if self.config is not None:  # Check if config object exists
                     # Save directly to the root of the config dictionary
                     self.config['album_key'] = album_key
                     self.config['album_api_uri'] = album_uri
@@ -658,9 +672,9 @@ class SmugMug:
 
                 return album_key, album_uri
             else:
-                 logging.error(f"Album '{album_name}' created, but missing AlbumKey or Uri in response.")
-                 # The Node Response was already logged above if available
-                 return None, None
+                logging.error(f"Album '{album_name}' created, but missing AlbumKey or Uri in response.")
+                # The Node Response was already logged above if available
+                return None, None
 
 
         except requests.exceptions.RequestException as e:
@@ -718,12 +732,14 @@ class SmugMug:
                 logging.debug(f"  {attr}: Current = {current_value}, Desired = {desired_value}")
                 # Special handling for boolean values which might be represented differently
                 if isinstance(desired_value, bool) and isinstance(current_value, int):
-                     # Compare boolean desired value to integer current value (0 or 1)
-                     if desired_value != bool(current_value):
-                          logging.warning(f"  Attribute '{attr}' has unexpected value: Current = {current_value}, Desired = {desired_value}. Adding to patch payload.")
-                          patch_payload[attr] = desired_value
+                    # Compare boolean desired value to integer current value (0 or 1)
+                    if desired_value != bool(current_value):
+                        logging.warning(
+                            f"  Attribute '{attr}' has unexpected value: Current = {current_value}, Desired = {desired_value}. Adding to patch payload.")
+                        patch_payload[attr] = desired_value
                 elif current_value != desired_value:
-                    logging.warning(f"  Attribute '{attr}' has unexpected value: Current = {current_value}, Desired = {desired_value}. Adding to patch payload.")
+                    logging.warning(
+                        f"  Attribute '{attr}' has unexpected value: Current = {current_value}, Desired = {desired_value}. Adding to patch payload.")
                     patch_payload[attr] = desired_value
 
             # If there are discrepancies, send a PATCH request to correct them
@@ -735,7 +751,8 @@ class SmugMug:
                     'Content-Type': 'application/json'
                 }
                 # *** CHANGE: Use 'json' parameter instead of 'data' for JSON payload ***
-                patch_response = self.auth_session.patch(f"https://api.smugmug.com{album_uri}", headers=patch_headers, json=patch_payload)
+                patch_response = self.auth_session.patch(f"https://api.smugmug.com{album_uri}", headers=patch_headers,
+                                                         json=patch_payload)
                 patch_response.raise_for_status()
                 logging.info(f"Successfully corrected album attributes for {album_uri}.")
             else:
@@ -748,7 +765,8 @@ class SmugMug:
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
                 logging.error(f"SmugMug API Response Text: {e.response.text}")
         except Exception as e:
-            logging.error(f"An unexpected error occurred during album attribute validation/correction for {album_uri}: {e}")
+            logging.error(
+                f"An unexpected error occurred during album attribute validation/correction for {album_uri}: {e}")
 
     def get_or_create_album(self, album_name, folder_uri=None):
         """
@@ -1000,7 +1018,7 @@ class SmugMug:
             with open(file_path, 'rb') as afile:
                 # Read in chunks to handle large files
                 while True:
-                    chunk = afile.read(65536) # 64KB chunk size
+                    chunk = afile.read(65536)  # 64KB chunk size
                     if not chunk:
                         break
                     hasher.update(chunk)

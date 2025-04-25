@@ -6,10 +6,9 @@
 # - Core logic and structure generated with assistance from Google Gemini AI.
 #
 
+import logging
 # Standard library imports
 import os
-import json
-import logging
 
 # Third-party imports
 import requests
@@ -22,25 +21,26 @@ from googleapiclient.errors import HttpError
 
 class GooglePhotos:
     """Class encapsulating all Google Photos-related functionality."""
-    
+
     # Google Photos API Scopes
     SCOPES = ['https://www.googleapis.com/auth/photoslibrary.readonly',
               'https://www.googleapis.com/auth/photoslibrary.appendonly']
-    
-    def __init__(self, credentials_file='google_photos_credentials.json', token_file='google_photos_token.json', batch_size=50):
+
+    def __init__(self, credentials_file='google_photos_credentials.json', token_file='google_photos_token.json',
+                 batch_size=50):
         """Initialize with the paths to Google Photos configuration files."""
         self.credentials_file = credentials_file
         self.token_file = token_file
         self.batch_size = batch_size
         self.service = None
-        
+
         # Try to authenticate during initialization
         self.authenticate()
-    
+
     def is_authenticated(self):
         """Returns True if authenticated with Google Photos, False otherwise."""
         return self.service is not None
-    
+
     def authenticate(self):
         """
         Authenticates with the Google Photos API using OAuth 2.0.
@@ -62,7 +62,8 @@ class GooglePhotos:
                         self.credentials_file, self.SCOPES)
                     creds = flow.run_local_server(port=0)
                 except FileNotFoundError:
-                    logging.error(f"Google Photos credentials file not found: {self.credentials_file}. Please ensure it exists.")
+                    logging.error(
+                        f"Google Photos credentials file not found: {self.credentials_file}. Please ensure it exists.")
                     return False
             # Save the credentials for the next run
             try:
@@ -73,7 +74,7 @@ class GooglePhotos:
 
         try:
             self.service = build('photoslibrary', 'v1', credentials=creds,
-                            discoveryServiceUrl='https://photoslibrary.googleapis.com/$discovery/rest?version=v1')
+                                 discoveryServiceUrl='https://photoslibrary.googleapis.com/$discovery/rest?version=v1')
             logging.info("Successfully authenticated with Google Photos API.")
             # Optional: Verify credentials by making a small API call
             self.service.mediaItems().list(pageSize=1).execute()
@@ -81,19 +82,19 @@ class GooglePhotos:
             return True
         except HttpError as error:
             logging.error(f'An HTTP error occurred during Google Photos API authentication or verification: {error}')
-            self.service = None # Ensure service is None if verification fails
+            self.service = None  # Ensure service is None if verification fails
             return False
         except Exception as e:
             logging.error(f'An unexpected error occurred during Google Photos API authentication: {e}')
             self.service = None
             return False
-    
+
     def get_photos(self, album_id=None):
         """Retrieves a list of photos from the Google Photos library, optionally from a specific album."""
         if not self.is_authenticated():
             logging.error("Not authenticated with Google Photos. Cannot retrieve photos.")
             return []
-            
+
         photos = []
         nextPageToken = None
         # Construct the body of the request. This is required for both library and album searches.
@@ -109,10 +110,10 @@ class GooglePhotos:
         while True:
             try:
                 if album_id:
-                     logging.info(f"Fetching photos from Google Photos album ID: {album_id}")
-                     # Search method requires the body payload
-                     results = method(body=body).execute() # Pass body directly to search
-                     items = results.get('mediaItems')
+                    logging.info(f"Fetching photos from Google Photos album ID: {album_id}")
+                    # Search method requires the body payload
+                    results = method(body=body).execute()  # Pass body directly to search
+                    items = results.get('mediaItems')
                 else:
                     logging.info("Fetching all photos from Google Photos library.")
                     # List method takes parameters directly
@@ -120,40 +121,40 @@ class GooglePhotos:
                     items = results.get('mediaItems')
 
                 if not items:
-                    if nextPageToken: # If there was a token but no items, something might be wrong or it's the end
-                         logging.info("No more items found with the current page token.")
-                    else: # No token and no items means empty
-                         logging.info("No photos found in Google Photos.")
+                    if nextPageToken:  # If there was a token but no items, something might be wrong or it's the end
+                        logging.info("No more items found with the current page token.")
+                    else:  # No token and no items means empty
+                        logging.info("No photos found in Google Photos.")
                     break
 
                 photos.extend(items)
                 # Pagination: next page token might be in the results for list *or* search
                 nextPageToken = results.get('nextPageToken')
                 if nextPageToken:
-                     # Update the body for the next page of search results
-                     if album_id:
-                          body['pageToken'] = nextPageToken
+                    # Update the body for the next page of search results
+                    if album_id:
+                        body['pageToken'] = nextPageToken
                 else:
-                    break # No more pages
+                    break  # No more pages
 
             except HttpError as error:
                 logging.error(f'An error occurred while retrieving photos from Google Photos: {error}')
                 break
             except Exception as e:
-                 logging.error(f'An unexpected error occurred while retrieving photos from Google Photos: {e}')
-                 break # Exit loop on unexpected error as well
+                logging.error(f'An unexpected error occurred while retrieving photos from Google Photos: {e}')
+                break  # Exit loop on unexpected error as well
 
         logging.info(f"Retrieved {len(photos)} photos from Google Photos.")
         return photos
-    
+
     def download_photo(self, media_item):
         """Downloads a media item (photo or video) from Google Photos in its original quality."""
         if not self.is_authenticated():
             logging.error("Not authenticated with Google Photos. Cannot download photo.")
             return None, None, None, None, None
-            
+
         media_item_id = media_item['id']
-        filename = media_item.get('filename', f"media_{media_item_id}.dat") # Add a default extension
+        filename = media_item.get('filename', f"media_{media_item_id}.dat")  # Add a default extension
         mime_type = media_item.get('mimeType', '')
         is_video = mime_type.startswith('video/')
 
@@ -165,7 +166,7 @@ class GooglePhotos:
             base_url = item_details.get('baseUrl')
             if not base_url:
                 logging.error(f"Could not get baseUrl for media item {media_item_id} ({filename}).")
-                return None, None, None, None, None # Include mime_type in return
+                return None, None, None, None, None  # Include mime_type in return
 
             # Append appropriate parameter for download based on type.
             # =dv for videos (original quality), =d for photos (original quality).
@@ -191,13 +192,14 @@ class GooglePhotos:
                     f.write(chunk)
                     downloaded_size += len(chunk)
 
-            logging.info(f"Downloaded {filename} ({media_item_id}, {'video' if is_video else 'photo'}) to {file_path} ({downloaded_size} bytes).")
+            logging.info(
+                f"Downloaded {filename} ({media_item_id}, {'video' if is_video else 'photo'}) to {file_path} ({downloaded_size} bytes).")
 
             # Get metadata (width/height might not apply to video, but harmless to get if available)
             metadata = item_details.get('mediaMetadata', {})
             width = metadata.get('width')
             height = metadata.get('height')
-            return file_path, filename, width, height, mime_type # Return mime_type
+            return file_path, filename, width, height, mime_type  # Return mime_type
 
         except HttpError as error:
             logging.error(
@@ -207,26 +209,26 @@ class GooglePhotos:
             logging.error(
                 f'A network error occurred during the download request for {filename} ({media_item_id}): {e}')
             if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
-                 logging.error(f"HTTP Status Code: {e.response.status_code}")
+                logging.error(f"HTTP Status Code: {e.response.status_code}")
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
-                 logging.error(f"Response Text: {e.response.text}")
+                logging.error(f"Response Text: {e.response.text}")
             return None, None, None, None, None
         except IOError as e:
             logging.error(f"An error occurred writing temporary file {file_path}: {e}")
             return None, None, None, None, None
         except Exception as e:
-             logging.error(f"An unexpected error occurred during download of '{filename}' ({media_item_id}): {e}")
-             return None, None, None, None, None
-    
+            logging.error(f"An unexpected error occurred during download of '{filename}' ({media_item_id}): {e}")
+            return None, None, None, None, None
+
     def remove_photo(self, media_item_id, dry_run=False):
         """Removes a photo from Google Photos."""
         if not self.is_authenticated():
             logging.error("Not authenticated with Google Photos. Cannot remove photo.")
             return False
-            
+
         if dry_run:
             logging.info(f"[DRY RUN] Would remove photo from Google Photos: {media_item_id}")
-            return True # Simulate success in dry run
+            return True  # Simulate success in dry run
         try:
             # The batchRemove endpoint expects a list of IDs
             response = self.service.mediaItems().batchRemove(mediaItemIds=[media_item_id]).execute()
@@ -235,20 +237,22 @@ class GooglePhotos:
             # A successful response with no errors means the request was accepted,
             # but individual item failures might be in the response if not empty.
             # Let's check for a non-empty response which might indicate errors.
-            if response: # If response is not empty, it might contain error details
-                 logging.warning(f"Google Photos batchRemove response was not empty for {media_item_id}: {response}. Check response for errors.")
-                 # Depending on the specific error structure, you might need more detailed parsing here.
-                 # For now, assume non-empty indicates a potential issue or partial failure.
-                 return False # Indicate failure if response is not empty (suggests errors)
-            else: # Empty response or 204 implies success for the requested item(s)
+            if response:  # If response is not empty, it might contain error details
+                logging.warning(
+                    f"Google Photos batchRemove response was not empty for {media_item_id}: {response}. Check response for errors.")
+                # Depending on the specific error structure, you might need more detailed parsing here.
+                # For now, assume non-empty indicates a potential issue or partial failure.
+                return False  # Indicate failure if response is not empty (suggests errors)
+            else:  # Empty response or 204 implies success for the requested item(s)
                 logging.info(f"Successfully removed photo from Google Photos: {media_item_id}")
                 return True
         except HttpError as error:
             logging.error(f'An API error occurred while removing photo {media_item_id} from Google Photos: {error}')
             # Log response text if available for more details
             if hasattr(error, 'resp') and hasattr(error.resp, 'text'):
-                 logging.error(f"Google Photos API Response Text: {error.resp.text}")
+                logging.error(f"Google Photos API Response Text: {error.resp.text}")
             return False
         except Exception as e:
-             logging.error(f"An unexpected error occurred during removal of photo {media_item_id} from Google Photos: {e}")
-             return False
+            logging.error(
+                f"An unexpected error occurred during removal of photo {media_item_id} from Google Photos: {e}")
+            return False

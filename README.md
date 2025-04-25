@@ -64,7 +64,6 @@ This project is released into the public domain under The Unlicense. See the [LI
     *   Enable the **Google Photos Library API** for your project.
     *   Download the client secrets JSON file.
     *   Rename the downloaded file to `google_photos_credentials.json` and place it in the same directory as the script.
-    *   Copy `google_photos_credentials.json.example` to `google_photos_credentials.json` and fill in the `client_id` and `client_secret` from the downloaded file.
 4.  **Configure SmugMug API:**
     *   Register an application on the SmugMug Developer Portal to get your API Key and Secret. See: [SmugMug Developer Apply](https://api.smugmug.com/api/developer/apply)
     *   Copy `smugmug_config.json.example` to `smugmug_config.json`.
