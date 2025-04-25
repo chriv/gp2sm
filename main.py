@@ -46,6 +46,10 @@ def main():
                         help='Skip processing media items identified as photos (images).')
     parser.add_argument('--ignore-videos', action='store_true',
                         help='Skip processing media items identified as videos.')
+    parser.add_argument('--smugmug-album', type=str,
+                        help='Name of the SmugMug album to use. If the album does not exist, it will be created.')
+    parser.add_argument('--smugmug-folder', type=str,
+                        help='Name of the SmugMug folder to place the album in. If the folder does not exist, it will be created.')
 
     args = parser.parse_args()
 
@@ -80,10 +84,45 @@ def main():
     # Get album details now that config is confirmed loaded
     album_key = smugmug_config.get('album_key')
     album_api_uri = smugmug_config.get('album_api_uri')
-    if not album_key or not album_api_uri:
-        logging.error("SmugMug 'album_key' and 'album_api_uri' must be set in the configuration file (smugmug_config.json). Exiting.")
-        print("Please ensure 'album_key' (e.g., 'ABCDE') and 'album_api_uri' (e.g., '/api/v2/album/ABCDE') are configured in smugmug_config.json.")
+    album_name = smugmug_config.get('album_name')
+    folder_name = smugmug_config.get('folder_name')
+
+    # Override config with command-line arguments if provided
+    if args.smugmug_album:
+        album_name = args.smugmug_album
+        smugmug.album_name = album_name
+        logging.info(f"Using album name from command line: '{album_name}'")
+
+    if args.smugmug_folder:
+        folder_name = args.smugmug_folder
+        smugmug.folder_name = folder_name
+        logging.info(f"Using folder name from command line: '{folder_name}'")
+
+    # Check if we have either album_key and album_api_uri OR album_name
+    if (not album_key or not album_api_uri) and not album_name:
+        logging.error("SmugMug configuration must include either 'album_key' and 'album_api_uri' OR 'album_name'.")
+        print("Please ensure 'album_key' (e.g., 'ABCDE') and 'album_api_uri' (e.g., '/api/v2/album/ABCDE') are configured in smugmug_config.json,")
+        print("or specify an album name using 'album_name' in the config file or --smugmug-album on the command line.")
         return
+
+    # If we have album_name but not album_key/album_api_uri, we need to get or create the album
+    if album_name and (not album_key or not album_api_uri):
+        # If we have a folder name, get or create the folder first
+        folder_uri = None
+        if folder_name:
+            folder_uri = smugmug.get_or_create_folder(folder_name)
+            if not folder_uri:
+                logging.error(f"Failed to get or create SmugMug folder '{folder_name}'. Exiting.")
+                return
+
+        # Now get or create the album
+        if not smugmug.get_or_create_album(album_name, folder_uri):
+            logging.error(f"Failed to get or create SmugMug album '{album_name}'. Exiting.")
+            return
+
+        # Update album_key and album_api_uri from the SmugMug object
+        album_key = smugmug.album_key
+        album_api_uri = smugmug.album_api_uri
 
     # Get media items from Google Photos
     photos = google_photos.get_photos(args.google_photos_album_id)
@@ -267,4 +306,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

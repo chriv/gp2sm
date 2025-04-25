@@ -37,7 +37,7 @@ This project is released into the public domain under The Unlicense. See the [LI
 ## Features
 
 *   **Google Photos Integration:** Authenticates with Google Photos using OAuth 2.0 and fetches media items.
-*   **SmugMug Integration:** Authenticates with SmugMug using OAuth 1.0a and uploads media to a specified album.
+*   **SmugMug Integration:** Authenticates with SmugMug using OAuth 1.0a and uploads media to a specified album. Supports specifying albums by name or ID, and can automatically create albums and folders if they don't exist.
 *   **Handles Photos and Videos:** Correctly downloads and uploads both image and video file types.
 *   **Duplicate Checking:**
     *   Checks for existing **images** on SmugMug using MD5 hash comparison to prevent exact duplicates.
@@ -69,7 +69,10 @@ This project is released into the public domain under The Unlicense. See the [LI
     *   Register an application on the SmugMug Developer Portal to get your API Key and Secret. See: [SmugMug Developer Apply](https://api.smugmug.com/api/developer/apply)
     *   Copy `smugmug_config.json.example` to `smugmug_config.json`.
     *   Fill in your `api_key` and `api_secret` in `smugmug_config.json`.
-    *   Find the **Album Key** for your target SmugMug album (this is usually part of the album's URL) and update `album_key` and `album_api_uri` accordingly in `smugmug_config.json`.
+    *   You have two options for specifying the target SmugMug album:
+        *   **Option 1:** Specify the album name in the `album_name` field in `smugmug_config.json`. The script will either select an existing album with that name or create a new one if it doesn't exist.
+        *   **Option 2:** Find the **Album Key** for your target SmugMug album (this is usually part of the album's URL) and update `album_key` and `album_api_uri` accordingly in `smugmug_config.json`.
+    *   Optionally, specify a folder name in the `folder_name` field to place the album in a specific folder. If the folder doesn't exist, it will be created.
     *   Leave `oauth_token` and `oauth_token_secret` as placeholders initially; the script will populate these after the first successful authorization.
 
 ## Running the Script
@@ -93,6 +96,26 @@ This project is released into the public domain under The Unlicense. See the [LI
 *   `--delete-from-google`: (Optional) If a media item is found to already exist on SmugMug (based on hash for images, filename for videos), prompt the user for confirmation before attempting to delete it from Google Photos. **Use with caution!**
     ```bash
     python main.py --delete-from-google
+    ```
+*   `--smugmug-album <ALBUM_NAME>`: (Optional) Specify the name of the SmugMug album to use. If the album doesn't exist, it will be created. This overrides the `album_name`, `album_key`, and `album_api_uri` settings in the config file.
+    ```bash
+    python main.py --smugmug-album "My Album Name"
+    ```
+*   `--smugmug-folder <FOLDER_NAME>`: (Optional) Specify the name of the SmugMug folder to place the album in. If the folder doesn't exist, it will be created. This overrides the `folder_name` setting in the config file.
+    ```bash
+    python main.py --smugmug-album "My Album Name" --smugmug-folder "My Folder Name"
+    ```
+*   `--dry-run`: (Optional) Perform a dry run: download and check existence, but do not upload to SmugMug or delete from Google Photos.
+    ```bash
+    python main.py --dry-run
+    ```
+*   `--ignore-photos`: (Optional) Skip processing media items identified as photos (images).
+    ```bash
+    python main.py --ignore-photos
+    ```
+*   `--ignore-videos`: (Optional) Skip processing media items identified as videos.
+    ```bash
+    python main.py --ignore-videos
     ```
 
 ## How Duplicate Checking Works

@@ -3,6 +3,14 @@
   "api_secret": "YOUR_SMUGMUG_API_SECRET",
   "oauth_token": "YOUR_SMUGMUG_OAUTH_TOKEN",
   "oauth_token_secret": "YOUR_SMUGMUG_OAUTH_TOKEN_SECRET",
+
+  "_comment1": "Either specify album_key and album_api_uri OR album_name",
   "album_key": "TARGET_SMUGMUG_ALBUM_KEY",
-  "album_api_uri": "/api/v2/album/TARGET_SMUGMUG_ALBUM_KEY"
+  "album_api_uri": "/api/v2/album/TARGET_SMUGMUG_ALBUM_KEY",
+
+  "_comment2": "Alternative to album_key and album_api_uri: specify album_name",
+  "album_name": "YOUR_SMUGMUG_ALBUM_NAME",
+
+  "_comment3": "Optional: specify folder_name to place the album in",
+  "folder_name": "YOUR_SMUGMUG_FOLDER_NAME"
 }
