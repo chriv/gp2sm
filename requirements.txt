@@ -1,5 +1,5 @@
-google-auth
-google-auth-httplib2
-google-api-python-client
 requests
+google-auth
+google-auth-oauthlib
+google-api-python-client
 requests-oauthlib

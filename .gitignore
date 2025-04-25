@@ -1,4 +1,6 @@
 .idea/
 .venv/
+.vscode/
+temp_downloads/
 *.json
 smugmugapikeyandsecret.txt
