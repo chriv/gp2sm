@@ -185,6 +185,7 @@ def cleanup(google_photos_instance):
     logger.info("Running cleanup...")
     if google_photos_instance:
         try:
+            google_photos_instance.cleanup_temp_dir()
             del google_photos_instance
         except Exception as e:
             logger.warning(f"Error during Google Photos cleanup: {e}")
