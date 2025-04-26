@@ -116,11 +116,27 @@ This project is released into the public domain under The Unlicense. See the [LI
     ```bash
     python main.py --ignore-videos
     ```
+* `--process-heic`: (Optional) Process HEIC files (Apple Live Photos). By default, these are ignored. **Warning:** SmugMug converts HEIC files into static JPGs, losing the 'live' video component. Duplicate checking for HEIC files is impossible and therefore disabled when this flag is used.
+    ```bash
+    python main.py --process-heic
+    ```
 
 ## How Duplicate Checking Works
 
 *   **Images:** The script downloads the image from Google Photos, calculates its MD5 hash, and then checks if any image in the target SmugMug album has a matching `ArchivedMD5` value.
 *   **Videos:** Because SmugMug re-encodes videos upon upload, their MD5 hash changes. Therefore, the script checks for existing videos by comparing the `FileName` from Google Photos against the filenames of items already in the target SmugMug album. This check happens *before* downloading the video to save bandwidth if it already exists.
+
+## HEIC File Handling (Apple Live Photos)
+
+* Apple Live Photos typically consist of a `.jpg` image and a `.mov` or `.heic` file containing the short video portion.
+* Google Photos preserves both parts.
+* SmugMug accepts `.heic` uploads but converts them into static `.jpg` images, changing the file extension and content. The 'live' video aspect is lost.
+* Because of this conversion, it's impossible to reliably check for duplicates of `.heic` files on SmugMug based on filename or hash.
+* **By default, this script IGNORES `.heic` files.**
+* You can enable processing of `.heic` files using the `--process-heic` command-line flag or by setting `"process_heic": true` in `smugmug_config.json`.
+* If you enable HEIC processing, be aware that:
+    * The live video portion will be lost on SmugMug.
+    * Duplicate checking for `.heic` files is completely skipped. You may end up with duplicate *converted* JPGs on SmugMug if you run the script multiple times with this option enabled.
 
 ## License
 

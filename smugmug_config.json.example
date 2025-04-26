@@ -12,5 +12,8 @@
   "album_name": "YOUR_SMUGMUG_ALBUM_NAME",
 
   "_comment3": "Optional: specify folder_name to place the album in",
-  "folder_name": "YOUR_SMUGMUG_FOLDER_NAME"
+  "folder_name": "YOUR_SMUGMUG_FOLDER_NAME",
+
+  "_comment4": "Optional: Set to true to process HEIC files (default: false)",
+  "process_heic": false
 }
