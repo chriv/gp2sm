@@ -7,23 +7,24 @@
 # - SmugMug upload logic inspired by/adapted from SkiTheSlicer's work:
 #   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
 #
-__version__ = "1.3"  # Updated version number
+__version__ = "1.4"  # Updated version number for logging changes
 
 # Standard library imports
 import argparse
+import json                 # Needed for JSON checks
 import logging
 import os
 import shutil
 import sys
 import time
-import json  # Needed for JSON checks
+from logging.handlers import RotatingFileHandler
+
+# Third-party imports
+import colorlog
 
 # Local module imports
-# Add custom exception import
 from google_photos_module import GooglePhotos, GoogleCredentialsNotFoundError
 from smugmug_module import SmugMug
-
-# Third-party imports (currently none, but placeholder)
 
 # --- TODO List ---
 # DONE: Clean up temp_downloads (handled by google_photos_module.__del__)
@@ -35,36 +36,87 @@ from smugmug_module import SmugMug
 # DONE: Generate a smugmug_config.json file with placeholders and comments if it doesn't exist
 # DONE: If script terminates from missing config file requirements, add the missing placeholders and comments to the config
 # DONE: Instruct user how to get google_api_keys.json if missing
-# TODO: Colorize logging output
-# TODO: Implement file logging
+# DONE: Colorize logging output
+# DONE: Implement file logging
 # TODO: Fix Google Photos Album selection (programmatically get Album ID from name?) - Low Priority
 # TODO: There appear to be local variables with the same purpose as attributes in the SmugMug class. Refactor for clarity.
 # TODO: Review SmugMug folder/album creation logic for robustness, especially edge cases with existing names/paths.
-# TODO: Update README.md with latest options, setup steps, and HEIC/deletion details.
-# TODO: Update smugmug_config.json.example.txt to match DEFAULT_SMUGMUG_CONFIG.
 # TODO: Add more comprehensive error handling around API calls (rate limits, specific HTTP errors).
 # TODO: Consider adding option to specify start/end dates for Google Photos items.
 # TODO: PEP 8 compliance review.
-# TODO: Clean up imports.
 
-# Configure logging
-# Consider adding a file handler as well
-log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(module)s:%(lineno)d] - %(message)s')
-log_handler = logging.StreamHandler(sys.stdout)  # Log to console
-log_handler.setFormatter(log_formatter)
+# --- Logging Setup ---
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)  # Set default level
-logger.addHandler(log_handler)
+# Define custom SUCCESS level (between INFO and WARNING)
+SUCCESS_LEVEL_NUM = 25
+logging.addLevelName(SUCCESS_LEVEL_NUM, "SUCCESS")
 
-# Optional: Add file logging
-# file_handler = logging.FileHandler("gp2sm_transfer.log")
-# file_handler.setFormatter(log_formatter)
-# logger.addHandler(file_handler)
+def log_success(self, message, *args, **kws):
+    # Add method to logger class
+    if self.isEnabledFor(SUCCESS_LEVEL_NUM):
+        self._log(SUCCESS_LEVEL_NUM, message, args, **kws)
+logging.Logger.success = log_success
 
+# Define format strings
+LOG_FORMAT_CONSOLE = (
+    '%(log_color)s%(asctime)s - %(levelname)-8s - '
+    '[%(module)s:%(lineno)d] - %(message)s%(reset)s'
+)
+LOG_FORMAT_FILE = (
+    '%(asctime)s - %(levelname)-8s - [%(name)s:%(module)s:%(lineno)d] - %(message)s'
+)
+
+# Get the root logger
+logger = logging.getLogger()  # Get the root logger (important!)
+
+# --- Setup Colored Console Handler ---
+console_formatter = colorlog.ColoredFormatter(
+    LOG_FORMAT_CONSOLE,
+    datefmt='%Y-%m-%d %H:%M:%S',
+    reset=True,
+    log_colors={
+        'DEBUG': 'cyan',
+        'INFO': 'white',
+        'SUCCESS': 'green',  # Custom level color
+        'WARNING': 'yellow',
+        'ERROR': 'red',
+        'CRITICAL': 'red,bg_white',
+    },
+    secondary_log_colors={},
+    style='%'
+)
+console_handler = colorlog.StreamHandler(sys.stdout)  # Use colorlog's handler
+console_handler.setFormatter(console_formatter)
+
+# --- Setup Rotating File Handler ---
+LOG_FILE = "gp2sm_transfer.log"
+LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+LOG_BACKUP_COUNT = 3  # Keep 3 backup log files
+
+file_formatter = logging.Formatter(LOG_FORMAT_FILE, datefmt='%Y-%m-%d %H:%M:%S')
+try:
+    file_handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding='utf-8'  # Explicitly set encoding
+    )
+    file_handler.setFormatter(file_formatter)
+    # --- Add Handlers to Root Logger ---
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+except Exception as e:
+    # If file handler setup fails, log to console only
+    logger.addHandler(console_handler)  # Ensure console handler is added
+    logger.error(f"!!! Failed to set up file logging to {LOG_FILE}: {e} !!!")
+    logger.error("!!! Log messages will only be shown on the console. !!!")
+
+# Set initial logging level (will be updated by --debug flag later)
+logger.setLevel(logging.INFO)
+
+# --- End of Logging Setup ---
 
 # --- Configuration File Constants ---
-# Use constants for filenames
 GOOGLE_PHOTOS_CREDENTIALS_FILE = 'google_api_keys.json'
 SMUGMUG_CONFIG_FILE = 'smugmug_config.json'
 GOOGLE_PHOTOS_TOKEN_FILE = 'google_photos_token.json'
@@ -76,11 +128,13 @@ LOCK_FILE = "gp2sm.lock"  # File used to prevent multiple instances
 # Global variable for lock file handle
 lock_file_handle = None
 
-
 def acquire_lock():
     """Tries to acquire an exclusive lock file."""
     global lock_file_handle
     try:
+        # Use 'w' mode to truncate/overwrite if it exists but wasn't locked
+        # Use os.O_CREAT | os.O_EXCL for atomic creation check if available/needed,
+        # but simple 'x' mode is often sufficient. Let's stick to 'x'.
         lock_file_handle = open(LOCK_FILE, "x")
         logging.info(f"Acquired lock file: {LOCK_FILE}")
         return True
@@ -89,9 +143,13 @@ def acquire_lock():
         print(f"Error: Lock file '{LOCK_FILE}' found. Is another instance running?")
         print("If not, please manually delete the lock file and try again.")
         return False
+    except PermissionError:
+        logging.error(f"Permission denied when trying to create lock file: {LOCK_FILE}")
+        print(f"Error: Could not create lock file '{LOCK_FILE}' due to permission issues.")
+        return False
     except Exception as e:
-        logging.error(f"An error occurred trying to create lock file '{LOCK_FILE}': {e}")
-        print(f"Error: Could not create lock file '{LOCK_FILE}'. Check permissions.")
+        logging.error(f"An error occurred trying to create lock file '{LOCK_FILE}': {e}", exc_info=True)
+        print(f"Error: Could not create lock file '{LOCK_FILE}'. Check permissions or other errors in log.")
         return False
 
 
@@ -114,7 +172,7 @@ def release_lock():
         logging.warning(f"Lock file handle was None, but lock file '{LOCK_FILE}' exists. Attempting removal.")
         try:
             os.remove(LOCK_FILE)
-            logging.info(f"Removed orphaned lock file: {LOCK_FILE}")
+            logging.info(f"Removed potentially orphaned lock file: {LOCK_FILE}")
         except Exception as e:
             logging.error(f"Error removing orphaned lock file '{LOCK_FILE}': {e}")
 
@@ -128,7 +186,10 @@ def cleanup(google_photos_instance):
 
     # Clean up Google Photos temporary directory (uses its __del__ method)
     if google_photos_instance:
-        del google_photos_instance  # Trigger __del__ explicitly if object exists
+        try:
+            del google_photos_instance  # Trigger __del__ explicitly if object exists
+        except Exception as e:
+            logging.warning(f"Error during Google Photos cleanup: {e}")
 
     # Release the lock file
     release_lock()
@@ -139,33 +200,41 @@ def main():
     """Main function to orchestrate the photo transfer."""
 
     # --- Argument Parsing ---
-    parser = argparse.ArgumentParser(description="Transfer photos from Google Photos to SmugMug.")
+    parser = argparse.ArgumentParser(
+        description="Transfer photos and videos from Google Photos to SmugMug.",
+        epilog="Example: python main.py --smugmug-album \"Google Photos Import\" --smugmug-folder \"Vacations/2024\" --process-heic"
+    )
     parser.add_argument('--delete-from-google', action='store_true',
-                        help='[UNSUPPORTED] Ask to delete from Google Photos after successful SmugMug check/upload (API does not support deletion).')
+                        help='[SIMULATED] Ask to delete from Google Photos after successful SmugMug check/upload (API currently does NOT support deletion).')
     parser.add_argument('--google-photos-album-id', type=str,
                         help='Process photos only from the specified Google Photos album ID.')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Perform a dry run: check existence, log actions, but do not upload to SmugMug or delete from Google Photos.')
+                        help='Perform a dry run: check existence, log actions, but do not upload to SmugMug or simulate deletion.')
     parser.add_argument('--ignore-photos', action='store_true',
                         help='Skip processing media items identified as photos (images).')
     parser.add_argument('--ignore-videos', action='store_true',
                         help='Skip processing media items identified as videos.')
     parser.add_argument('--smugmug-album', type=str,
-                        help='Name of the SmugMug album. Overrides config file setting. If album/path does not exist, it will be created.')
+                        help='Name of the target SmugMug album. Overrides config file setting. If album/path does not exist, it will be created.')
     parser.add_argument('--smugmug-folder', type=str,
                         help='Path of SmugMug folders (e.g., "Folder/SubFolder"). Overrides config file setting. If path does not exist, it will be created.')
     parser.add_argument('--process-heic', action='store_true',
                         help='Process HEIC files (Live Photos). Default is to ignore them. WARNING: SmugMug converts these to JPGs, losing the live aspect, and duplicate checking is disabled.')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging.')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging (both console and file).')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
 
     args = parser.parse_args()
 
-    # --- Setup Logging Level ---
+    # --- Update Logging Level Based on Arg ---
+    # *AFTER* parsing args, set the level for all handlers
     if args.debug:
         logger.setLevel(logging.DEBUG)
-        logging.debug("Debug logging enabled.")
+        # Set level for individual handlers too if needed, but root logger level usually suffices
+        # console_handler.setLevel(logging.DEBUG)
+        # file_handler.setLevel(logging.DEBUG)
+        logging.debug("Debug logging enabled.")  # This will now be cyan
     else:
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.INFO)  # Keep INFO level if --debug is not set
 
     # --- Acquire Lock File ---
     if not acquire_lock():
@@ -181,10 +250,11 @@ def main():
                 # Error during loading (e.g., JSON decode)
                 logging.error(
                     f"Failed to load or parse SmugMug config '{SMUGMUG_CONFIG_FILE}'. Please check the file format.")
-                print(f"Error: Failed to load or parse '{SMUGMUG_CONFIG_FILE}'. Is it valid JSON?")
+                print(f"\nError: Failed to load or parse '{SMUGMUG_CONFIG_FILE}'. Is it valid JSON?")
                 sys.exit(1)
         except FileNotFoundError:
             # Config file missing, generate default and exit
+            logging.warning(f"SmugMug config file '{SMUGMUG_CONFIG_FILE}' not found.")
             if not smugmug.generate_default_config():
                 # Failed to generate default (e.g., permission error)
                 logging.critical("Failed to generate the default SmugMug config file.")
@@ -202,17 +272,20 @@ def main():
             # is_authenticated() check is crucial here after potential errors during init
             if not google_photos.is_authenticated():
                 logging.error("Google Photos client initialized but failed to authenticate. Check logs.")
-                print("Error: Could not authenticate with Google Photos. Please check log messages above.")
+                print("\nError: Could not authenticate with Google Photos. Please check log messages above.")
                 sys.exit(1)
+            logging.success("Google Photos client initialized and authenticated.")
 
         except GoogleCredentialsNotFoundError:
             # Specific error message already logged/printed by google_photos_module
             logging.info("Exiting due to missing Google Photos credentials file.")
+            # Message printed by module, exit needed here.
             sys.exit(1)
         except Exception as e:
             # Catch other potential errors during Google Photos init/auth
-            logging.critical(f"An unexpected error occurred during Google Photos initialization: {e}", exc_info=True)
-            print(f"An critical unexpected error occurred during Google Photos setup: {e}")
+            logging.critical(f"An critical unexpected error occurred during Google Photos initialization: {e}",
+                             exc_info=True)
+            print(f"\nAn critical unexpected error occurred during Google Photos setup: {e}")
             sys.exit(1)
 
         # --- SmugMug Authentication & Configuration Check ---
@@ -220,10 +293,10 @@ def main():
         if not smugmug.check_config_and_authenticate():
             logging.error("SmugMug configuration check or authentication failed.")
             # Specific messages should have been logged/printed by check_config_and_authenticate
-            # Ensure user knows to check the config file and logs.
             print(
                 f"\nError: SmugMug setup failed. Please check '{SMUGMUG_CONFIG_FILE}' and log messages, then run again.")
             sys.exit(1)
+        logging.success("SmugMug client initialized and authenticated.")
 
         # --- Determine Final Album/Folder Configuration ---
         # Start with values potentially set during check_config_and_authenticate
@@ -257,9 +330,11 @@ def main():
             sys.exit(1)
 
         # Use get_or_create_album_in_path which handles folder creation and album get/create
+        logging.info(
+            f"Ensuring SmugMug album '{smugmug_album_name}' exists in path '{smugmug_folder_path_str or 'Root'}'.")
         if not smugmug.get_or_create_album_in_path(smugmug_album_name, smugmug_folder_path_str):
             logging.critical(
-                f"Failed to find or create the target SmugMug album '{smugmug_album_name}' in path '{smugmug_folder_path_str or 'root'}'. Exiting.")
+                f"Failed to find or create the target SmugMug album '{smugmug_album_name}' in path '{smugmug_folder_path_str or 'Root'}'. Exiting.")
             print(
                 f"\nError: Could not ensure SmugMug album '{smugmug_album_name}' exists. Check logs and SmugMug permissions.")
             sys.exit(1)
@@ -267,7 +342,8 @@ def main():
         # At this point, smugmug.album_key and smugmug.album_api_uri should be set correctly
         target_album_key = smugmug.album_key
         target_album_api_uri = smugmug.album_api_uri
-        logging.info(f"Confirmed target SmugMug album. Key: {target_album_key}, URI: {target_album_api_uri}")
+        logging.success(
+            f"Confirmed target SmugMug album. Name: '{smugmug.album_name}', Key: {target_album_key}, URI: {target_album_api_uri}")
 
         # --- Process HEIC Flag ---
         # Read final value from config (might have been added by check_config_and_authenticate)
@@ -278,8 +354,7 @@ def main():
             logging.warning("SmugMug converts HEIC files (including Live Photo video) into static JPGs.")
             logging.warning("The 'live' photo aspect will be lost on SmugMug.")
             logging.warning("Duplicate checking for HEIC files is DISABLED.")
-            print(
-                "\nWARNING: Processing HEIC files. SmugMug converts them to JPGs, losing the 'live' aspect. Duplicate checking for HEIC is disabled.")
+            # No need for print statement here, warning logs cover it
 
         # --- Get Media Items from Google Photos ---
         logging.info("Fetching media items from Google Photos...")
@@ -287,6 +362,7 @@ def main():
         total_items = len(photos)
         if total_items == 0:
             logging.info("No media items found in the specified Google Photos location. Nothing to transfer.")
+            logging.success("Script finished successfully (no items to transfer).")
             sys.exit(0)  # Successful exit, nothing to do
 
         logging.info(f"Found {total_items} items in Google Photos.")
@@ -298,17 +374,21 @@ def main():
 
         logging.info(
             f"Starting transfer process... (Dry Run: {args.dry_run}, Ignore Photos: {args.ignore_photos}, Ignore Videos: {args.ignore_videos})")
+        print("-" * 60)  # Console separator
 
         # --- Main Processing Loop ---
-        for item in photos:
+        start_time = time.time()
+        for item_index, item in enumerate(photos):
             processed_count += 1
             filename = item.get('filename')
             media_item_id = item['id']
             mime_type = item.get('mimeType', '')
             product_url = item.get('productUrl', '#')  # URL to view on Google Photos
 
+            # Basic item validation
             if not filename or not mime_type:
-                logging.warning(f"Skipping item {media_item_id} ({product_url}) due to missing filename or mimeType.")
+                logging.warning(
+                    f"Skipping item {item_index + 1}/{total_items} (ID: {media_item_id}, URL: {product_url}) due to missing filename or mimeType.")
                 skipped_count += 1
                 error_count += 1
                 continue
@@ -322,23 +402,25 @@ def main():
             # Skip based on flags
             if is_heic and not process_heic_enabled:
                 logging.info(
-                    f"Skipping {processed_count}/{total_items}: HEIC file '{filename}' ({media_item_id}) as processing is disabled.")
+                    f"Skipping {item_index + 1}/{total_items}: HEIC file '{filename}' (ID: {media_item_id}) as processing is disabled.")
                 skipped_count += 1
                 continue
             if args.ignore_photos and not is_video:
                 logging.info(
-                    f"Skipping {processed_count}/{total_items}: Photo '{filename}' ({media_item_id}) due to --ignore-photos flag.")
+                    f"Skipping {item_index + 1}/{total_items}: Photo '{filename}' (ID: {media_item_id}) due to --ignore-photos flag.")
                 skipped_count += 1
                 continue
             if args.ignore_videos and is_video:
                 logging.info(
-                    f"Skipping {processed_count}/{total_items}: Video '{filename}' ({media_item_id}) due to --ignore-videos flag.")
+                    f"Skipping {item_index + 1}/{total_items}: Video '{filename}' (ID: {media_item_id}) due to --ignore-videos flag.")
                 skipped_count += 1
                 continue
 
             logging.info(
-                f"Processing {processed_count}/{total_items} - {item_type}: '{filename}' ({media_item_id}){' (HEIC)' if is_heic else ''}")
+                f"Processing {item_index + 1}/{total_items} - {item_type}: '{filename}' (ID: {media_item_id}){' (HEIC)' if is_heic else ''}")
             logging.debug(f"  MimeType: {mime_type}, Google URL: {product_url}")
+            print(
+                f"-> Processing {item_index + 1}/{total_items}: {filename} ({item_type})")  # Progress indicator for console
 
             # --- Existence Check on SmugMug ---
             exists_on_smugmug = False
@@ -351,15 +433,11 @@ def main():
             else:
                 # Perform duplicate check for non-HEIC files
                 logging.debug(f"  Checking existence on SmugMug for '{filename}'...")
+                check_start_time = time.time()
                 if is_video:
                     # Check videos by filename only
                     exists_on_smugmug = smugmug.check_media_exists(target_album_key, filename, mime_type)
-                    if exists_on_smugmug:
-                        log_reason = "filename match"
-                        logging.info(f"  FOUND on SmugMug ({log_reason}).")
-                        duplicate_count += 1
-                    else:
-                        logging.info("  Not found on SmugMug by filename. Will proceed.")
+                    log_reason = "filename match" if exists_on_smugmug else "filename not found"
                 else:
                     # Check images by MD5 hash - requires download first
                     logging.debug(f"  Downloading image '{filename}' for MD5 check...")
@@ -375,7 +453,6 @@ def main():
                     google_file_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
                     if not google_file_hash:
                         logging.error(f"  Skipping image '{filename}' due to MD5 hash calculation error.")
-                        # Clean up the downloaded temp file
                         if os.path.exists(temp_file_path):
                             try:
                                 os.remove(temp_file_path)
@@ -389,22 +466,26 @@ def main():
                     # Check SmugMug for image existence by MD5 hash
                     exists_on_smugmug = smugmug.check_media_exists(target_album_key, filename, mime_type,
                                                                    file_hash=google_file_hash)
-                    if exists_on_smugmug:
-                        log_reason = f"matching MD5 hash: {google_file_hash}"
-                        logging.info(f"  FOUND on SmugMug ({log_reason}).")
-                        duplicate_count += 1
-                        # Clean up downloaded file *now* if it already exists
-                        if os.path.exists(temp_file_path):
-                            try:
-                                os.remove(temp_file_path)
-                                logging.debug(f"  Removed temp file {temp_file_path} for duplicate item.")
-                                temp_file_path = None  # Clear path variable
-                            except Exception as e:
-                                logging.warning(
-                                    f"  Could not remove temp file {temp_file_path} after duplicate check: {e}")
-                    else:
-                        logging.info(f"  Not found on SmugMug by hash ({google_file_hash}). Will proceed.")
-                        # Keep temp_file_path as we need it for upload
+                    log_reason = f"matching MD5 hash: {google_file_hash}" if exists_on_smugmug else f"MD5 hash {google_file_hash} not found"
+
+                check_duration = time.time() - check_start_time
+                logging.debug(f"  Existence check took {check_duration:.2f} seconds.")
+
+                if exists_on_smugmug:
+                    logging.info(f"  FOUND on SmugMug ({log_reason}).")
+                    print(f"   Exists on SmugMug ({'Filename' if is_video else 'MD5 Hash'}). Skipping.")
+                    duplicate_count += 1
+                    # Clean up downloaded file *now* if it already exists (only images were downloaded)
+                    if temp_file_path and os.path.exists(temp_file_path):
+                        try:
+                            os.remove(temp_file_path)
+                            logging.debug(f"  Removed temp file {temp_file_path} for duplicate item.")
+                            temp_file_path = None  # Clear path variable
+                        except Exception as e:
+                            logging.warning(f"  Could not remove temp file {temp_file_path} after duplicate check: {e}")
+                else:
+                    logging.info(f"  Not found on SmugMug ({log_reason}). Will proceed.")
+                    # Keep temp_file_path if it was downloaded for image hash check
 
             # --- Process Based on Existence ---
             if exists_on_smugmug:
@@ -412,33 +493,31 @@ def main():
                 if args.delete_from_google:
                     if args.dry_run:
                         logging.info(
-                            f"  [DRY RUN] Would simulate removal of '{filename}' ({media_item_id}) from Google Photos (as it exists on SmugMug).")
+                            f"  [DRY RUN] Would simulate removal of '{filename}' (ID: {media_item_id}) from Google Photos (as it exists on SmugMug).")
                         # google_photos.remove_photo(media_item_id, dry_run=True) # Simulate
                     else:
                         # Actual deletion is not supported by API
                         logging.warning(
-                            f"  Skipping deletion of '{filename}' ({media_item_id}) from Google Photos - API does not support.")
-                        # If API supported it, would prompt here:
-                        # print(f"Media '{filename}' already exists on SmugMug. Confirm deletion from Google Photos? (yes/no): ", end="")
-                        # confirmation = input().lower()
-                        # if confirmation == 'yes': ... google_photos.remove_photo ...
+                            f"  Skipping deletion of '{filename}' (ID: {media_item_id}) from Google Photos - API does not support.")
                 # Continue to next item in the loop
                 continue
 
             # --- Item Does Not Exist on SmugMug (or is HEIC) ---
-            # Need to download if not already downloaded (videos, HEIC, or images if download failed earlier somehow)
+            # Need to download if not already downloaded
             if not temp_file_path or not os.path.exists(temp_file_path):
-                # This condition covers videos (not downloaded yet) and HEIC files
-                # It also covers images if the initial download for hashing failed but we decided to proceed (unlikely)
                 logging.debug(f"  Downloading {'video' if is_video else 'HEIC/image'} '{filename}' for upload...")
+                dl_start_time = time.time()
                 temp_file_path, _, _, _, downloaded_mime_type = google_photos.download_photo(item)
+                dl_duration = time.time() - dl_start_time
 
                 if not temp_file_path:
                     logging.error(f"  Skipping '{filename}' due to download error during upload phase.")
+                    print(f"   ERROR downloading '{filename}'. Skipping.")
                     skipped_count += 1
                     error_count += 1
                     continue  # Skip to next item
                 else:
+                    logging.debug(f"  Download took {dl_duration:.2f} seconds.")
                     # Use the mime type reported by the download if available, otherwise stick to original
                     if downloaded_mime_type: mime_type = downloaded_mime_type
 
@@ -446,7 +525,8 @@ def main():
             if args.dry_run:
                 logging.info(
                     f"  [DRY RUN] Would upload '{filename}' ({item_type}) from {temp_file_path} to SmugMug album URI: {target_album_api_uri}")
-                # In dry run, clean up the temp file now
+                print(f"   [DRY RUN] Would upload '{filename}'.")
+                # In dry run, clean up the temp file now (upload_media usually does this)
                 if temp_file_path and os.path.exists(temp_file_path):
                     try:
                         os.remove(temp_file_path)
@@ -455,34 +535,64 @@ def main():
                         logging.warning(f"  [DRY RUN] Could not remove temporary file {temp_file_path}: {e}")
             else:
                 # Perform the actual upload
-                logging.info(f"  Uploading '{filename}' ({item_type}) to SmugMug...")
+                logging.info(f"  Uploading '{filename}' ({item_type}, {mime_type}) to SmugMug...")
+                print(f"   Uploading '{filename}' to SmugMug...")
+                upload_start_time = time.time()
+                # upload_media now handles its own temp file cleanup
                 if smugmug.upload_media(target_album_api_uri, temp_file_path, filename, mime_type):
-                    logging.info(f"  Successfully initiated transfer of '{filename}' to SmugMug.")
+                    upload_duration = time.time() - upload_start_time
+                    # Use SUCCESS level for successful uploads
+                    logging.success(f"  Successfully uploaded '{filename}' to SmugMug (took {upload_duration:.2f}s).")
+                    print(f"   Successfully uploaded '{filename}'.")
                     uploaded_count += 1
                     # Deletion after successful upload (simulated)
                     if args.delete_from_google:
                         logging.warning(
-                            f"  Skipping deletion of '{filename}' ({media_item_id}) from Google Photos after upload - API does not support.")
-                        # If API supported it:
-                        # print(f"Media '{filename}' uploaded. Confirm deletion from Google Photos? (yes/no): ", end="") etc.
+                            f"  Skipping deletion of '{filename}' (ID: {media_item_id}) from Google Photos after upload - API does not support.")
                 else:
-                    logging.error(f"  Failed to transfer '{filename}' to SmugMug.")
+                    upload_duration = time.time() - upload_start_time
+                    logging.error(
+                        f"  Failed to transfer '{filename}' to SmugMug (took {upload_duration:.2f}s). Check logs for details.")
+                    print(f"   ERROR uploading '{filename}'. See log for details.")
                     error_count += 1
                     # Temp file is cleaned up inside upload_media's finally block
 
         # --- End of Loop ---
+        end_time = time.time()
+        total_duration = end_time - start_time
         logging.info("-" * 50)
         logging.info("Transfer Process Summary:")
         logging.info(f"  Total items retrieved from Google Photos: {total_items}")
         logging.info(f"  Items processed: {processed_count}")
-        logging.info(f"  Successfully uploaded: {uploaded_count}")
-        logging.info(f"  Found as duplicates on SmugMug: {duplicate_count}")
-        logging.info(f"  Skipped by ignore flags/HEIC setting: {skipped_count}")
-        logging.info(f"  Errors encountered (download/upload/hash): {error_count}")
-        logging.info(f"  Dry Run mode: {args.dry_run}")
-        logging.info(
-            f"  Deletion from Google Photos requested: {args.delete_from_google} (Simulated - API Unsupported)")
+        logging.success(f"  Successfully uploaded: {uploaded_count}")  # Green
+        logging.info(f"  Found as duplicates on SmugMug: {duplicate_count}")  # White
+        logging.info(f"  Skipped by flags/settings: {skipped_count}")  # White
+        if error_count > 0:
+            logging.error(f"  Errors encountered (download/upload/hash): {error_count}")  # Red
+        else:
+            logging.info(f"  Errors encountered: {error_count}")  # White if 0 errors
+        logging.info(f"  Dry Run mode: {args.dry_run}")  # White
+        logging.info(f"  Deletion requested: {args.delete_from_google} (Simulated - API Unsupported)")  # White
+        logging.info(f"  Total execution time: {total_duration:.2f} seconds")  # White
         logging.info("-" * 50)
+        if error_count == 0 and processed_count == total_items:
+            logging.success("Script finished successfully.")  # Green
+        elif error_count > 0:
+            logging.warning(f"Script finished with {error_count} errors. Please review logs.")  # Yellow
+        else:
+            logging.warning("Script finished, but some items may have been skipped unexpectedly.")  # Yellow
+
+        print("\n" + "=" * 60)
+        print("Transfer Summary:")
+        print(f"- Items Processed: {processed_count}/{total_items}")
+        print(f"- Uploaded: {uploaded_count}")
+        print(f"- Duplicates Found: {duplicate_count}")
+        print(f"- Skipped (Flags/HEIC): {skipped_count}")
+        print(f"- Errors: {error_count}")
+        print(f"- Total Time: {total_duration:.2f} seconds")
+        print(f"- Log file: {LOG_FILE}")
+        print("=" * 60)
+
 
     except KeyboardInterrupt:
         logging.warning("Keyboard interrupt detected. Shutting down gracefully...")
@@ -491,7 +601,7 @@ def main():
     except Exception as e:
         # Catch any unexpected errors in the main block
         logging.critical(f"An critical unexpected error occurred in the main processing loop: {e}", exc_info=True)
-        print(f"\nAn critical unexpected error occurred: {e}")
+        print(f"\nAn critical unexpected error occurred: {e}. Check the log file '{LOG_FILE}' for details.")
     finally:
         # Ensure cleanup is always called, passing the google_photos object
         cleanup(google_photos)

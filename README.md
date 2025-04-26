@@ -1,142 +1,116 @@
 # gp2sm
-# Google Photos to SmugMug Transfer Tool
+# Google Photos to SmugMug Transfer Tool (v1.4)
 
-A Python tool for transferring media (photos and videos) from Google Photos to SmugMug.
-
-## Features
-
-- Transfer photos and videos from Google Photos to SmugMug
-- Check for duplicate files based on filename (for videos) or MD5 hash (for photos)
-- Optional deletion of media from Google Photos after transfer
-- Support for processing specific Google Photos albums
-- Dry run mode to test without actually transferring or deleting files
-- Selective transfer of only photos or only videos
-
-## Prerequisites
-
-- Python 3.6 or later
-- Google Photos API access
-- SmugMug API access
-
-## Installation
-
-1. Clone this repository or download the source code
-2. Install required dependencies:
-This Python script (version 1.0) transfers photos and videos from your Google Photos™ library to a specified SmugMug® album. It includes features to handle authentication, check for duplicates, and optionally delete items from Google Photos™ after confirming their existence on SmugMug®.
+A Python tool for transferring media (photos and videos) from Google Photos to SmugMug, featuring duplicate checking, HEIC handling options, automatic configuration file generation, and colorized logging.
 
 ## Important Notes
 
-*   This project is not affiliated with, endorsed by, or officially supported by Google™ or SmugMug®.
-*   Google Photos™ is a trademark of Google LLC.
-*   SmugMug® is a registered trademark of SmugMug, Inc.
-
-## License
-
-This project is released into the public domain under The Unlicense. See the [LICENSE](LICENSE) file for details.
+* This project is not affiliated with, endorsed by, or officially supported by Google™ or SmugMug®.
+* Google Photos™ is a trademark of Google LLC.
+* SmugMug® is a registered trademark of SmugMug, Inc.
 
 ## Features
 
-*   **Google Photos Integration:** Authenticates with Google Photos using OAuth 2.0 and fetches media items.
-*   **SmugMug Integration:** Authenticates with SmugMug using OAuth 1.0a and uploads media to a specified album. Supports specifying albums by name or ID, and can automatically create albums and folders if they don't exist.
-*   **Handles Photos and Videos:** Correctly downloads and uploads both image and video file types.
-*   **Duplicate Checking:**
-    *   Checks for existing **images** on SmugMug using MD5 hash comparison to prevent exact duplicates.
-    *   Checks for existing **videos** on SmugMug using filename comparison (as SmugMug re-encodes videos, making hash comparison unreliable).
-*   **Specific Album Support:** Can optionally process only photos from a specific Google Photos album using its ID.
-*   **Optional Deletion:** Provides an option (`--delete-from-google`) to prompt for deletion of media from Google Photos *if* it's confirmed to already exist on SmugMug.
-*   **Configuration Files:** Uses simple JSON files for API credentials and settings.
-*   **Token Storage:** Securely stores and reuses OAuth tokens locally (`google_photos_token.json`, `smugmug_config.json`) to avoid repeated logins.
+* Transfer photos and videos from Google Photos to SmugMug.
+* Duplicate Checking:
+    * Checks for existing **images** on SmugMug using MD5 hash comparison.
+    * Checks for existing **videos** on SmugMug using filename comparison.
+* HEIC File Handling: Ignores Apple HEIC files by default, with an option to process them (converting them to JPGs on SmugMug, disabling duplicate checks for them).
+* Google Photos Album Support: Optionally process only media items from a specific Google Photos album ID.
+* SmugMug Folder/Album Management:
+    * Specify target album by name or by key/URI.
+    * Optionally specify a target folder path (e.g., "Folder/SubFolder").
+    * Automatically creates folders and/or albums if they don't exist.
+* Configuration Assistance:
+    * Generates a default `smugmug_config.json` if it's missing.
+    * Adds missing required fields with placeholders to an existing `smugmug_config.json` if incomplete.
+    * Provides clear instructions if the Google API credentials file (`google_api_keys.json`) is missing.
+* Logging:
+    * Colorized console output for different message levels (INFO, SUCCESS, WARNING, ERROR, DEBUG).
+    * Detailed file logging to `gp2sm_transfer.log` (with log rotation).
+* Dry Run Mode: Simulate the transfer process without uploading or modifying files.
+* Selective Transfer: Options to ignore photos or ignore videos during transfer.
+* Lock File: Prevents multiple instances of the script from running simultaneously.
+* Token Storage: Securely stores and reuses OAuth tokens locally (`google_photos_token.json`, `smugmug_config.json`) to minimize re-authentication.
 
 ## Prerequisites
 
-*   Python 3.6 or higher
-*   `pip` (Python package installer)
+* Python 3.7 or higher (due to `colorlog` potentially requiring newer features)
+* `pip` (Python package installer)
 
 ## Setup
 
-1.  **Clone or Download:** Get the script files (`main.py`, `requirements.txt`, etc.).
+1.  **Clone or Download:** Get the script files (`main.py`, `google_photos_module.py`, `smugmug_module.py`, `requirements.txt`, etc.).
 2.  **Install Dependencies:** Open a terminal or command prompt in the script's directory and run:
     ```bash
     pip install -r requirements.txt
     ```
 3.  **Configure Google Photos API:**
-    *   Follow the instructions in the Google Cloud Console to create an **OAuth 2.0 Client ID for Desktop application**. See: [Google Cloud Console](https://console.cloud.google.com/)
-    *   Enable the **Google Photos Library API** for your project.
-    *   Download the client secrets JSON file.
-    *   Rename the downloaded file to `google_photos_credentials.json` and place it in the same directory as the script.
+    * Follow the instructions in the Google Cloud Console to create an **OAuth 2.0 Client ID for Desktop application**. See: [Google Cloud Console](https://console.cloud.google.com/)
+    * Enable the **Google Photos Library API** for your project.
+    * Download the client secrets JSON file.
+    * **IMPORTANT:** Rename the downloaded file to exactly `google_api_keys.json` and place it in the same directory as the script.
+    * If you run the script and this file is missing, it will print detailed instructions to the console and log.
 4.  **Configure SmugMug API:**
-    *   Register an application on the SmugMug Developer Portal to get your API Key and Secret. See: [SmugMug Developer Apply](https://api.smugmug.com/api/developer/apply)
-    *   Copy `smugmug_config.json.example` to `smugmug_config.json`.
-    *   Fill in your `api_key` and `api_secret` in `smugmug_config.json`.
-    *   You have two options for specifying the target SmugMug album:
-        *   **Option 1:** Specify the album name in the `album_name` field in `smugmug_config.json`. The script will either select an existing album with that name or create a new one if it doesn't exist.
-        *   **Option 2:** Find the **Album Key** for your target SmugMug album (this is usually part of the album's URL) and update `album_key` and `album_api_uri` accordingly in `smugmug_config.json`.
-    *   Optionally, specify a folder name in the `folder_name` field to place the album in a specific folder. If the folder doesn't exist, it will be created.
-    *   Leave `oauth_token` and `oauth_token_secret` as placeholders initially; the script will populate these after the first successful authorization.
+    * Register an application on the SmugMug Developer Portal to get your API Key and Secret. See: [SmugMug Developer Apply](https://api.smugmug.com/api/developer/apply)
+    * **Option 1 (Recommended):** Run the script once (`python main.py`). If `smugmug_config.json` doesn't exist, the script will create a default one for you and exit.
+    * **Option 2 (Manual):** Copy `smugmug_config.json.example.txt` to `smugmug_config.json`.
+    * Edit `smugmug_config.json`:
+        * Fill in your obtained `api_key` and `api_secret`.
+        * Choose **ONE** method to specify the target album:
+            * Set `album_name` to your desired album name (e.g., "Google Photos Import"). Leave `album_key` and `album_api_uri` as placeholders.
+            * **OR**, find the **Album Key** for an *existing* SmugMug album (usually in the album's URL) and update `album_key` and `album_api_uri`. Set `album_name` to its placeholder value (`"YOUR_SMUGMUG_ALBUM_NAME"`).
+        * Optionally, set `folder_name` to a folder path (e.g., `"My Photos/Google Imports"`). Folders will be created if they don't exist.
+        * Leave `oauth_token` and `oauth_token_secret` as placeholders; the script will handle authentication and save them automatically.
+        * Optionally, set `process_heic` to `true` if you want to process HEIC files (see warnings below).
 
 ## Running the Script
 
 1.  **Navigate:** Open your terminal or command prompt to the directory containing `main.py`.
 2.  **Run:** Execute the script using:
     ```bash
-    python main.py
+    python main.py [OPTIONS]
     ```
+    *(See Command-Line Arguments below for available `[OPTIONS]`)*
 3.  **First-Time Authorization:**
-    *   **Google Photos:** The script will likely open a web browser asking you to log in to your Google account and grant permission for the script to access your photos. After granting permission, the necessary tokens will be saved to `google_photos_token.json`.
-    *   **SmugMug:** The script will print a URL. Open this URL in your browser, log in to SmugMug, and authorize the application. SmugMug will provide a verifier code. Copy this code and paste it back into the terminal when prompted. The script will then save the access tokens to `smugmug_config.json`.
-4.  **Subsequent Runs:** The script will use the saved tokens and should run without requiring browser interaction unless the tokens expire or are revoked.
+    * **Google Photos:** The script will open a web browser asking you to log in to your Google account and grant permission for the script to access your photos. Follow the prompts. After granting permission, tokens will be saved to `google_photos_token.json`.
+    * **SmugMug:** The script will print a URL. Open this URL in your browser, log in to SmugMug, and authorize the application. SmugMug will provide a verifier code (usually 6 digits). Copy this code and paste it back into the terminal when prompted. The script will then save the access tokens into `smugmug_config.json`.
+4.  **Configuration Validation:** The script checks `smugmug_config.json` for required fields. If essential fields (like API keys or album specification) are missing or still have placeholder values, the script will update the file with the necessary placeholders/comments and exit, prompting you to edit the file.
+5.  **Subsequent Runs:** The script will use the saved tokens and configuration, running the transfer process. It should only require browser interaction if tokens expire or are revoked.
+6.  **Logging:** Check the console for colorized status messages and review the `gp2sm_transfer.log` file for detailed logs.
+7.  **Lock File:** A `gp2sm.lock` file is created while the script runs to prevent multiple instances. If the script crashes, you may need to delete this file manually before running again.
 
 ### Command-Line Arguments
 
-*   `--google-photos-album-id <ALBUM_ID>`: (Optional) Process only media items from the specified Google Photos album ID. If omitted, processes the entire library.
-    ```bash
-    python main.py --google-photos-album-id YOUR_GOOGLE_ALBUM_ID_HERE
-    ```
-*   `--delete-from-google`: (Optional) If a media item is found to already exist on SmugMug (based on hash for images, filename for videos), prompt the user for confirmation before attempting to delete it from Google Photos. **Use with caution!**
-    ```bash
-    python main.py --delete-from-google
-    ```
-*   `--smugmug-album <ALBUM_NAME>`: (Optional) Specify the name of the SmugMug album to use. If the album doesn't exist, it will be created. This overrides the `album_name`, `album_key`, and `album_api_uri` settings in the config file.
-    ```bash
-    python main.py --smugmug-album "My Album Name"
-    ```
-*   `--smugmug-folder <FOLDER_NAME>`: (Optional) Specify the name of the SmugMug folder to place the album in. If the folder doesn't exist, it will be created. This overrides the `folder_name` setting in the config file.
-    ```bash
-    python main.py --smugmug-album "My Album Name" --smugmug-folder "My Folder Name"
-    ```
-*   `--dry-run`: (Optional) Perform a dry run: download and check existence, but do not upload to SmugMug or delete from Google Photos.
-    ```bash
-    python main.py --dry-run
-    ```
-*   `--ignore-photos`: (Optional) Skip processing media items identified as photos (images).
-    ```bash
-    python main.py --ignore-photos
-    ```
-*   `--ignore-videos`: (Optional) Skip processing media items identified as videos.
-    ```bash
-    python main.py --ignore-videos
-    ```
-* `--process-heic`: (Optional) Process HEIC files (Apple Live Photos). By default, these are ignored. **Warning:** SmugMug converts HEIC files into static JPGs, losing the 'live' video component. Duplicate checking for HEIC files is impossible and therefore disabled when this flag is used.
-    ```bash
-    python main.py --process-heic
-    ```
+* `--google-photos-album-id <ALBUM_ID>`: (Optional) Process only media items from the specified Google Photos album ID. If omitted, processes the entire library.
+* `--delete-from-google`: (Optional) Simulate deleting items from Google Photos after successful upload/check. **Warning:** The Google Photos API *does not currently support deletion*, so this flag only logs what *would* be deleted. No actual deletion occurs.
+* `--smugmug-album <ALBUM_NAME>`: (Optional) Specify the name of the target SmugMug album. Overrides the `album_name`, `album_key`, and `album_api_uri` settings in the config file. If the album doesn't exist in the target location, it will be created.
+* `--smugmug-folder <FOLDER_PATH>`: (Optional) Specify the SmugMug folder path (e.g., `"Vacations/Europe 2024"`) to place the album in. Overrides the `folder_name` setting in the config file. Folders in the path will be created if they don't exist.
+* `--dry-run`: (Optional) Perform a dry run: check existence, log actions, but do not upload to SmugMug or simulate deletion. Downloads may still occur for MD5 checking.
+* `--ignore-photos`: (Optional) Skip processing media items identified as photos (images).
+* `--ignore-videos`: (Optional) Skip processing media items identified as videos.
+* `--process-heic`: (Optional) Process HEIC files (Apple Live Photos). Default is to ignore them. See "HEIC File Handling" below for important implications.
+* `--debug`: (Optional) Enable debug logging, providing more verbose output to both the console and the log file.
+* `--version`: Show the script's version number and exit.
+* `-h`, `--help`: Show the help message and exit.
 
 ## How Duplicate Checking Works
 
-*   **Images:** The script downloads the image from Google Photos, calculates its MD5 hash, and then checks if any image in the target SmugMug album has a matching `ArchivedMD5` value.
-*   **Videos:** Because SmugMug re-encodes videos upon upload, their MD5 hash changes. Therefore, the script checks for existing videos by comparing the `FileName` from Google Photos against the filenames of items already in the target SmugMug album. This check happens *before* downloading the video to save bandwidth if it already exists.
+* **Images:** The script downloads the image from Google Photos, calculates its MD5 hash, and then checks if any image in the target SmugMug album has a matching `ArchivedMD5` value. This prevents uploading exact duplicates.
+* **Videos:** Because SmugMug re-encodes videos upon upload, their MD5 hash changes. Therefore, the script checks for existing videos by comparing the `FileName` from Google Photos (case-insensitive) against the filenames of items already in the target SmugMug album. This check happens *before* downloading the video to save bandwidth if a filename match is found.
+* **HEIC Files:** If `--process-heic` is enabled, **no duplicate checking** is performed for these files due to SmugMug's conversion process.
 
 ## HEIC File Handling (Apple Live Photos)
 
 * Apple Live Photos typically consist of a `.jpg` image and a `.mov` or `.heic` file containing the short video portion.
 * Google Photos preserves both parts.
-* SmugMug accepts `.heic` uploads but converts them into static `.jpg` images, changing the file extension and content. The 'live' video aspect is lost.
-* Because of this conversion, it's impossible to reliably check for duplicates of `.heic` files on SmugMug based on filename or hash.
+* SmugMug accepts `.heic` uploads but **converts them into static `.jpg` images**, changing the file extension and content. The 'live' video aspect is lost.
+* Because of this conversion, it's impossible to reliably check for duplicates of `.heic` files on SmugMug based on filename or hash after they have been uploaded and converted.
 * **By default, this script IGNORES `.heic` files.**
 * You can enable processing of `.heic` files using the `--process-heic` command-line flag or by setting `"process_heic": true` in `smugmug_config.json`.
-* If you enable HEIC processing, be aware that:
+* **If you enable HEIC processing, be aware that:**
     * The live video portion will be lost on SmugMug.
-    * Duplicate checking for `.heic` files is completely skipped. You may end up with duplicate *converted* JPGs on SmugMug if you run the script multiple times with this option enabled.
+    * Duplicate checking for `.heic` files is completely skipped. You **may end up with duplicate *converted* JPGs** on SmugMug if you run the script multiple times with this option enabled.
 
 ## License
 
