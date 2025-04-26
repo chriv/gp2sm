@@ -57,13 +57,18 @@ def main():
         logging.error("Failed to load SmugMug configuration. Exiting.")
         return
 
+    # TODO: Clean up temp_downloads
+    # TODO: Fix Google Photos Album selection (programmatically get Album ID from name)
+    # TODO: Get MD5 hashes from Google Drive API BEFORE downloading files and compare with SmugMug then (save bandwidth both ways)
+    # TODO: Ignore HEIC files by default (override in config and/or command line)
+    # TODO: Warn users about HEIC files being converted to JPEGS (and flattened) by SmugMug
+    # TODO: Don't duplicate check HEIC files at all if being processed (no possible way)
+    # TODO: Verify top-level folder creation works
+    # TODO: Clean up configuration checks
+    # TODO: There appear to be local variables with the same purpose as attributes in the SmugMug class. Fix this.
     # TODO: Update documentation
     # TODO: Update examples
     # TODO: Update attribution
-    # TODO: Clean up configuration checks
-    # TODO: Clean up temp_downloads
-    # TODO: Get MD5 hashes from Google BEFORE downloading files and compare with SmugMug then (save bandwidth both ways)
-    # TODO: Verify top-level folder creation works
     # TODO: PEP 8 compliance
     # TODO: Clean up imports (again)
 
