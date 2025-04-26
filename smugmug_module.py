@@ -8,10 +8,10 @@
 #   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
 #
 
+# Standard library imports
 import hashlib
 import json
 import logging
-# Standard library imports
 import os
 import sys
 
@@ -88,7 +88,8 @@ class SmugMug:
         logging.warning(f"SmugMug config file '{self.config_file}' not found. Generating default.")
         try:
             with open(self.config_file, 'w') as f:
-                json.dump(DEFAULT_SMUGMUG_CONFIG, f, indent=2, sort_keys=False) # Use sort_keys=False to preserve order
+                # Use sort_keys=False to preserve the order defined in DEFAULT_SMUGMUG_CONFIG
+                json.dump(DEFAULT_SMUGMUG_CONFIG, f, indent=2, sort_keys=False)
             logging.info(f"Default SmugMug config file created at '{self.config_file}'.")
             logging.info("Please edit this file to add your API Key and Secret, and configure your target album.")
             print(f"\nDefault SmugMug config file created at '{self.config_file}'.")
@@ -108,22 +109,16 @@ class SmugMug:
             return False
 
         try:
-            # Ensure comments are preserved or re-added if missing during save
-            # This is simplified; a more robust way would merge with default
-            for key, value in DEFAULT_SMUGMUG_CONFIG.items():
-                if key.startswith("_comment_") and key not in self.config:
-                    self.config[key] = value
-                elif key not in self.config: # Add missing keys with default values
-                     self.config[key] = value
+            # Ensure comments and default values are present before saving
+            temp_config = DEFAULT_SMUGMUG_CONFIG.copy() # Start with defaults
+            temp_config.update(self.config) # Update with current values
+            self.config = temp_config # Replace self.config with merged version
 
-            # Sort keys for consistent output, but put comments near their keys
-            # This is tricky, a simple sort might not be ideal. Manual ordering or
-            # loading default first then updating might be better.
-            # For now, basic save with indent.
             with open(self.config_file, 'w') as f:
-                json.dump(self.config, f, indent=2) # sort_keys=False might be better here too
-                logging.info(f"SmugMug configuration saved to {self.config_file}")
-                return True
+                 # Use sort_keys=False to preserve the order defined in DEFAULT_SMUGMUG_CONFIG
+                json.dump(self.config, f, indent=2, sort_keys=False)
+            logging.info(f"SmugMug configuration saved to {self.config_file}")
+            return True
         except IOError as e:
             logging.error(f"Error saving SmugMug configuration to {self.config_file}: {e}")
             print(f"Error: Could not save updated SmugMug config to '{self.config_file}'. Check permissions.")
@@ -135,10 +130,12 @@ class SmugMug:
     def obtain_oauth_tokens(self, api_key, api_secret):
         """Obtains SmugMug OAuth tokens using the OAuth 1.0a flow."""
         request_token_url = 'https://secure.smugmug.com/services/oauth/1.0a/getRequestToken'
-        authorize_url = 'https://secure.smugmug.com/services/oauth/1.0a/authorize?Access=Full&Permissions=Modify' # Request full access
+        # Request full access and modify permissions
+        authorize_url = 'https://secure.smugmug.com/services/oauth/1.0a/authorize?Access=Full&Permissions=Modify'
         access_token_url = 'https://secure.smugmug.com/services/oauth/1.0a/getAccessToken'
 
-        smugmug = OAuth1Session(api_key, client_secret=api_secret, callback_uri='oob') # 'oob' for desktop app flow
+        # 'oob' (Out-Of-Band) is standard for desktop/CLI applications
+        smugmug = OAuth1Session(api_key, client_secret=api_secret, callback_uri='oob')
         logging.info("Fetching request token from SmugMug...")
         try:
             # Step 1: Fetch request token
@@ -147,10 +144,12 @@ class SmugMug:
                 # Step 2: Generate authorization URL
                 auth_url = smugmug.authorization_url(authorize_url)
                 print("-" * 60)
+                print("SmugMug Authorization Required:")
                 print("Please open the following URL in your browser to authorize this script:")
                 print(auth_url)
+                print("After authorizing, SmugMug will display a 6-digit code.")
                 print("-" * 60)
-                verifier = input("Enter the 6-digit verifier code you received after authorizing: ").strip()
+                verifier = input("Enter the 6-digit verifier code here: ").strip()
 
                 # Step 3: Fetch access token using the verifier
                 logging.info("Fetching access token from SmugMug...")
@@ -158,19 +157,23 @@ class SmugMug:
                 if token_response:
                     oauth_token = token_response.get('oauth_token')
                     oauth_token_secret = token_response.get('oauth_token_secret')
-                    logging.info("Successfully obtained SmugMug access tokens.")
-                    return oauth_token, oauth_token_secret
+                    if oauth_token and oauth_token_secret:
+                         logging.info("Successfully obtained SmugMug access tokens.")
+                         return oauth_token, oauth_token_secret
+                    else:
+                         logging.error("OAuth token response did not contain expected token/secret.")
+                         return None, None
                 else:
-                    logging.error("Failed to fetch access token from SmugMug. Response was empty or invalid.")
+                    logging.error("Failed to fetch access token from SmugMug. Response was empty or invalid (maybe incorrect verifier code?).")
                     return None, None
             else:
                 logging.error("Failed to fetch request token from SmugMug. Check API key/secret or network.")
                 return None, None
         except ValueError as ve:
-             logging.error(f"Error parsing SmugMug response (potentially invalid verifier?): {ve}")
+             logging.error(f"Error during SmugMug OAuth flow (potentially invalid verifier code?): {ve}")
              return None, None
         except Exception as e:
-            logging.error(f"An error occurred during SmugMug OAuth flow: {e}")
+            logging.error(f"An error occurred during SmugMug OAuth flow: {e}", exc_info=True)
             return None, None
 
     def check_config_and_authenticate(self):
@@ -182,9 +185,7 @@ class SmugMug:
             logging.error("SmugMug configuration is not loaded. Cannot authenticate.")
             return False
 
-        # --- Check Essential API Keys ---
-        missing_keys = []
-        config_updated = False
+        # --- Define Placeholders (used for checking if values are defaults) ---
         placeholders = {
             "api_key": "YOUR_SMUGMUG_API_KEY",
             "api_secret": "YOUR_SMUGMUG_API_SECRET",
@@ -194,12 +195,14 @@ class SmugMug:
             "album_key": "TARGET_SMUGMUG_ALBUM_KEY",
             "album_api_uri": "/api/v2/album/TARGET_SMUGMUG_ALBUM_KEY",
             "folder_name": "YOUR_SMUGMUG_FOLDER_NAME"
-            # process_heic default is False, not a typical placeholder
         }
 
-        # Check API Key/Secret first
+        # --- Check Essential API Keys ---
+        missing_keys = []
+        config_updated = False
         for key in ["api_key", "api_secret"]:
             value = self.config.get(key)
+            # Check if key is missing, empty string, or still the placeholder value
             if not value or value == placeholders.get(key):
                 missing_keys.append(key)
                 if key not in self.config: # Add missing key with placeholder
@@ -225,28 +228,26 @@ class SmugMug:
         oauth_token = self.config.get('oauth_token')
         oauth_token_secret = self.config.get('oauth_token_secret')
 
+        # Check if tokens are missing, empty, or still the placeholder
         if not oauth_token or not oauth_token_secret or oauth_token == placeholders['oauth_token']:
             logging.info("SmugMug OAuth tokens not found or are placeholders in config. Initiating authorization flow...")
             new_oauth_token, new_oauth_token_secret = self.obtain_oauth_tokens(api_key, api_secret)
             if new_oauth_token and new_oauth_token_secret:
                 self.config['oauth_token'] = new_oauth_token
                 self.config['oauth_token_secret'] = new_oauth_token_secret
-                # Need to save the config now with the new tokens
-                config_updated = True
+                # Update local variables for immediate use
                 oauth_token = new_oauth_token
                 oauth_token_secret = new_oauth_token_secret
-                # Save immediately after getting tokens
+                # Save the newly obtained tokens to the config file
                 if not self.save_config():
                      logging.error("Failed to save SmugMug config after obtaining OAuth tokens.")
-                     # Proceed with the obtained tokens for this session, but warn user
                      print("\nWarning: Failed to save updated SmugMug tokens to config file. You may need to authorize again next time.")
                 else:
                      logging.info("Successfully obtained and saved SmugMug OAuth tokens.")
-
+                     config_updated = True # Mark as updated (though already saved)
             else:
                 logging.error("Failed to obtain SmugMug OAuth tokens. Please check logs/API keys and try again.")
                 print("\nError: Failed to obtain SmugMug authorization. Please ensure API key/secret are correct and try again.")
-                # Don't save config here as token fetch failed
                 return False
         else:
              logging.debug("Found existing SmugMug OAuth tokens in config.")
@@ -259,15 +260,14 @@ class SmugMug:
              # Verify authentication with a lightweight API call
              _, user_data = self.get_user_endpoint() # This implicitly checks authentication
              if not user_data:
-                  raise Exception("Failed to verify SmugMug authentication via user endpoint.")
+                  raise Exception("Failed to verify SmugMug authentication via user endpoint (returned None).")
              logging.info(f"SmugMug authentication successful for user: {self.username}")
 
         except Exception as auth_err:
-             logging.error(f"SmugMug authentication failed: {auth_err}")
-             # If auth fails even with tokens, likely invalid tokens
-             # Clear them to force re-auth next time? Or just report error.
+             logging.error(f"SmugMug authentication failed: {auth_err}", exc_info=True)
              print("\nError: SmugMug authentication failed. Tokens might be invalid or expired.")
-             print("--> Clearing potentially invalid tokens from config. Please run again to re-authorize.")
+             print(f"--> Attempting to clear potentially invalid tokens from '{self.config_file}'. Please run again to re-authorize.")
+             # Clear potentially invalid tokens
              self.config['oauth_token'] = placeholders['oauth_token']
              self.config['oauth_token_secret'] = placeholders['oauth_token_secret']
              self.save_config() # Save cleared tokens
@@ -279,29 +279,34 @@ class SmugMug:
         album_name_cfg = self.config.get('album_name')
         album_key_cfg = self.config.get('album_key')
         album_api_uri_cfg = self.config.get('album_api_uri')
-        folder_name_cfg = self.config.get('folder_name') # Also load folder name
+        folder_name_cfg = self.config.get('folder_name')
 
-        # Standardize None or placeholder values for checks
+        # Standardize: treat empty strings or placeholder values as None for logic checks
         album_name = album_name_cfg if album_name_cfg and album_name_cfg != placeholders['album_name'] else None
         album_key = album_key_cfg if album_key_cfg and album_key_cfg != placeholders['album_key'] else None
+        album_api_uri = album_api_uri_cfg if album_api_uri_cfg and album_api_uri_cfg != placeholders['album_api_uri'] else None
+        folder_name = folder_name_cfg if folder_name_cfg and folder_name_cfg != placeholders['folder_name'] else None
+
         # Derive URI from key if URI is missing/placeholder but key is valid
-        if album_key and (not album_api_uri_cfg or album_api_uri_cfg == placeholders['album_api_uri']):
+        if album_key and not album_api_uri:
             album_api_uri = f'/api/v2/album/{album_key}'
             logging.info(f"Derived album_api_uri from valid album_key: {album_api_uri}")
-        else:
-            album_api_uri = album_api_uri_cfg if album_api_uri_cfg and album_api_uri_cfg != placeholders['album_api_uri'] else None
-
-        folder_name = folder_name_cfg if folder_name_cfg and folder_name_cfg != placeholders['folder_name'] else None
+            # Update config if derived - mark for saving
+            if self.config.get('album_api_uri') != album_api_uri:
+                 self.config['album_api_uri'] = album_api_uri
+                 config_updated = True
 
         has_valid_album_name = bool(album_name)
         has_valid_album_key_uri = bool(album_key) and bool(album_api_uri)
 
+        # Check if at least one valid album specification method exists
         if not has_valid_album_name and not has_valid_album_key_uri:
             logging.error(f"Missing album configuration in '{self.config_file}'.")
             logging.error("Please specify either a valid 'album_name' OR both 'album_key' and 'album_api_uri'.")
             print(f"\nError: Missing SmugMug album configuration in '{self.config_file}'.")
             print("--> Please edit the file and provide either 'album_name' OR 'album_key' & 'album_api_uri'.")
-            # Add missing placeholders if needed
+
+            # Add missing placeholders if needed, mark for saving
             needs_save = False
             if "album_name" not in self.config:
                 self.config["album_name"] = placeholders["album_name"]
@@ -326,21 +331,21 @@ class SmugMug:
                 self.save_config()
             return False
 
-        # --- Set internal attributes based on valid config ---
-        # Priority: album_name > album_key/uri
+        # --- Set internal attributes based on valid config (Priority: album_name > album_key/uri) ---
         if has_valid_album_name:
             self.album_name = album_name
             self.album_key = None
             self.album_api_uri = None
             logging.info(f"Using SmugMug album name from config: '{self.album_name}'")
         elif has_valid_album_key_uri:
+            # Use the potentially derived URI if name wasn't valid
             self.album_name = None
             self.album_key = album_key
-            self.album_api_uri = album_api_uri # Use the potentially derived URI
+            self.album_api_uri = album_api_uri
             logging.info(f"Using SmugMug album key from config: '{self.album_key}' (URI: {self.album_api_uri})")
         else:
              # Should be caught above, but as a failsafe:
-             logging.error("Critical error: No valid SmugMug album config found.")
+             logging.critical("Critical internal error: No valid SmugMug album config found.")
              return False
 
         self.folder_name = folder_name # Set folder name attribute
@@ -354,15 +359,13 @@ class SmugMug:
             self.config["_comment_heic"] = DEFAULT_SMUGMUG_CONFIG["_comment_heic"]
             config_updated = True # Mark for saving if not already marked
 
-        # Final save if any updates were made (like adding process_heic)
-        if config_updated and not self.save_config():
-              logging.warning("Failed to save SmugMug config after adding missing optional keys.")
+        # Final save if any updates were made (like deriving URI or adding process_heic)
+        if config_updated:
+              if not self.save_config():
+                   logging.warning("Failed to save SmugMug config after adding missing/derived keys.")
 
         return True # All checks passed, authenticated
 
-
-    # Methods like check_media_exists, upload_media, get_user_endpoint, etc. remain the same
-    # ... (Keep existing methods from get_user_endpoint onwards) ...
 
     def check_media_exists(self, album_key, filename, mime_type, file_hash=None):
         """
@@ -403,16 +406,15 @@ class SmugMug:
             # Navigate through the response to find the AlbumImages URI
             images_uri = album_data.get('Response', {}).get('Album', {}).get('Uris', {}).get('AlbumImages', {}).get('Uri')
             if not images_uri:
-                # Sometimes the URI might be just 'AlbumImages' if requested with ?_expand=...
-                # Handle this potential structure difference if necessary, but direct URI access is standard.
                  logging.error(f"Could not find AlbumImages URI for SmugMug album key {album_key}. Cannot check existence.")
                  logging.debug(f"Album details response: {json.dumps(album_data, indent=2)}")
                  return False
 
-            images_list_url = f"https://api.smugmug.com{images_uri}"
-            next_page_url = images_list_url + "?count=100" # Request larger page size
+            # Construct base URL for listing images, add count for pagination efficiency
+            images_list_url = f"https://api.smugmug.com{images_uri}?count=100"
+            next_page_url = images_list_url # Start with the first page
 
-            logging.debug(f"Starting media existence check in album {album_key} using URI: {images_list_url}")
+            logging.debug(f"Starting media existence check in album {album_key} using URI: {images_uri}")
 
             # Now, iterate through the album images using the found URI
             page_count = 0
@@ -424,7 +426,7 @@ class SmugMug:
                 data = response.json()
 
                 items_in_response = data.get('Response', {}).get('AlbumImage', []) # Ensure it's a list
-                if items_in_response: # Check if the list is not empty
+                if items_in_response:
                     for item in items_in_response:
                         # Ensure item is a dictionary before accessing keys
                         if not isinstance(item, dict):
@@ -432,8 +434,6 @@ class SmugMug:
                              continue
 
                         item_filename = item.get('FileName')
-                        # SmugMug 'Type' field seems unreliable or absent sometimes. Rely on mime type or hash primarily.
-                        # item_type = item.get('Type')
 
                         # Check based on media type
                         if is_video:
@@ -457,11 +457,10 @@ class SmugMug:
                          next_page_url = f"https://api.smugmug.com{next_page_uri}"
                     else:
                          next_page_url = next_page_uri
-                    # Add count parameter to next page URL as well
+                    # Add count parameter to next page URL as well if not already present
                     if "?count=" not in next_page_url:
                         separator = "&" if "?" in next_page_url else "?"
                         next_page_url += f"{separator}count=100"
-
                 else:
                     next_page_url = None # No more pages
 
@@ -470,13 +469,14 @@ class SmugMug:
             return False
 
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error checking for media existence on SmugMug (filename: {filename}): {e}")
+            logging.error(f"Error checking for media existence on SmugMug (filename: {filename}): {e}", exc_info=True)
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
                 logging.error(f"SmugMug API Response Text: {e.response.text}")
-            return False # Assume it doesn't exist on error to potentially allow upload
+            # Consider returning False cautiously - allows retry/upload attempt
+            return False
         except Exception as e:
-            logging.error(f"An unexpected error occurred during SmugMug existence check for '{filename}': {e}")
-            return False # Assume it doesn't exist on error
+            logging.error(f"An unexpected error occurred during SmugMug existence check for '{filename}': {e}", exc_info=True)
+            return False # Assume it doesn't exist on unexpected error
 
     def upload_media(self, album_api_uri, file_path, filename, mime_type):
         """
@@ -504,7 +504,8 @@ class SmugMug:
             file_md5 = self.calculate_file_hash(file_path, hash_algorithm='md5')
             if not file_md5:
                 logging.error(f"Failed to calculate MD5 hash for {filename}. Cannot upload.")
-                return False # Return False, temp file cleaned up in finally
+                # Still need to clean up the temp file in finally block
+                return False
 
             # Read file content for upload
             with open(file_path, 'rb') as media_file:
@@ -520,9 +521,6 @@ class SmugMug:
                 'X-Smug-FileName': filename,
                 'X-Smug-ResponseType': 'JSON',
                 'X-Smug-Version': 'v2',
-                # Consider adding Caption, Keywords etc. if available and desired
-                # 'X-Smug-Caption': 'Your caption here',
-                # 'X-Smug-Keywords': 'keyword1; keyword2',
             }
 
             logging.info(f"Attempting upload for '{filename}' ({mime_type}, {len(media_data)} bytes) to SmugMug album URI: {album_api_uri}")
@@ -546,28 +544,29 @@ class SmugMug:
                 final_url = media_info.get('WebUri') if media_info else 'N/A' # Use WebUri if available
 
                 logging.info(f"Successfully initiated upload for '{filename}'. SmugMug Status URI: {status_url}, Final URL (approx): {final_url}")
-                upload_successful = True
+                upload_successful = True # Mark as successful for finally block logic
                 return True
             else:
                 logging.error(f"Failed to upload '{filename}' to SmugMug. Unexpected response format or status.")
-                logging.error(f"SmugMug Upload Response: {upload_data}")
+                logging.error(f"SmugMug Upload Response: {json.dumps(upload_data, indent=2)}")
                 return False
 
         except requests.exceptions.HTTPError as http_err:
-             logging.error(f"HTTP Error uploading {filename} to SmugMug: {http_err}")
+             logging.error(f"HTTP Error uploading {filename} to SmugMug: {http_err}", exc_info=True)
              if http_err.response is not None:
                   logging.error(f"HTTP Status Code: {http_err.response.status_code}")
                   logging.error(f"SmugMug API Response Text: {http_err.response.text}")
              return False
         except requests.exceptions.RequestException as req_err:
-            logging.error(f"Request Error uploading {filename} to SmugMug: {req_err}")
+            logging.error(f"Request Error uploading {filename} to SmugMug: {req_err}", exc_info=True)
             return False
         except Exception as e:
-            logging.error(f"An unexpected error occurred during upload of '{filename}': {e}")
+            logging.error(f"An unexpected error occurred during upload of '{filename}': {e}", exc_info=True)
             return False
         finally:
-            # Clean up the temporary file regardless of success or failure
-            if os.path.exists(file_path):
+            # Clean up the temporary file ONLY if it exists AND upload was attempted
+            # Avoid removing if it never existed or hash calc failed earlier
+            if file_path and os.path.exists(file_path):
                 try:
                     os.remove(file_path)
                     logging.debug(f"Removed temporary upload file: {file_path}")
@@ -581,7 +580,6 @@ class SmugMug:
         Sets self.username on success.
         """
         if not self.auth_session:
-            # This check might be redundant if called after check_config_and_authenticate, but good practice
             logging.error("Not authenticated with SmugMug. Cannot get user endpoint.")
             return None, None
 
@@ -609,12 +607,12 @@ class SmugMug:
             return username, user_data # Return username and full response dict
 
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error getting user endpoint from SmugMug: {e}")
+            logging.error(f"Error getting user endpoint from SmugMug: {e}", exc_info=True)
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
                 logging.error(f"SmugMug API Response Text: {e.response.text}")
             return None, None
         except Exception as e:
-            logging.error(f"An unexpected error occurred while getting user endpoint from SmugMug: {e}")
+            logging.error(f"An unexpected error occurred while getting user endpoint from SmugMug: {e}", exc_info=True)
             return None, None
 
     def _get_node_uri(self, user_data):
@@ -623,6 +621,7 @@ class SmugMug:
          node_uri = user_data.get('Response', {}).get('User', {}).get('Uris', {}).get('Node', {}).get('Uri')
          if not node_uri:
               logging.error("Could not find root Node URI in user data.")
+              logging.debug(f"User data for Node URI check: {json.dumps(user_data, indent=2)}")
          return node_uri
 
     def list_albums(self, node_uri=None):
@@ -636,19 +635,15 @@ class SmugMug:
 
         if not node_uri:
             # If no node_uri provided, get the user's root node
-            if not self.username: # Ensure username is available
-                 _, user_data = self.get_user_endpoint()
-                 if not user_data: return []
-            else:
-                 # Fetch user_data again if username exists but node_uri is needed
-                 _, user_data = self.get_user_endpoint()
-                 if not user_data: return []
-
+            _, user_data = self.get_user_endpoint()
+            if not user_data: return []
             node_uri = self._get_node_uri(user_data)
             if not node_uri:
                 logging.error("Cannot list albums: Failed to get root node URI.")
                 return []
             logging.debug(f"Listing albums under root node: {node_uri}")
+        else:
+             logging.debug(f"Listing albums under provided node: {node_uri}")
 
         # Construct the URL to list albums under the specified node
         # The endpoint is typically nodeUri!albums
@@ -678,7 +673,7 @@ class SmugMug:
                          albums_url = f"https://api.smugmug.com{next_page_uri}"
                     else:
                          albums_url = next_page_uri
-                    # Add count parameter
+                    # Add count parameter if not already there
                     if "?count=" not in albums_url:
                          separator = "&" if "?" in albums_url else "?"
                          albums_url += f"{separator}count=100"
@@ -686,12 +681,12 @@ class SmugMug:
                     albums_url = None # No more pages
 
             except requests.exceptions.RequestException as e:
-                logging.error(f"Error listing albums from SmugMug node {node_uri}: {e}")
+                logging.error(f"Error listing albums from SmugMug node {node_uri}: {e}", exc_info=True)
                 if hasattr(e, 'response') and hasattr(e.response, 'text'):
                     logging.error(f"SmugMug API Response Text: {e.response.text}")
                 return [] # Return empty on error
             except Exception as e:
-                logging.error(f"An unexpected error occurred while listing albums from node {node_uri}: {e}")
+                logging.error(f"An unexpected error occurred while listing albums from node {node_uri}: {e}", exc_info=True)
                 return []
 
         logging.info(f"Found total of {len(all_albums)} albums under node {node_uri}.")
@@ -708,19 +703,15 @@ class SmugMug:
 
         if not node_uri:
             # Get the user's root node URI if not provided
-            if not self.username: # Ensure username is available
-                 _, user_data = self.get_user_endpoint()
-                 if not user_data: return []
-            else:
-                 # Fetch user_data again if username exists but node_uri is needed
-                 _, user_data = self.get_user_endpoint()
-                 if not user_data: return []
-
+            _, user_data = self.get_user_endpoint()
+            if not user_data: return []
             node_uri = self._get_node_uri(user_data)
             if not node_uri:
                  logging.error("Cannot list folders: Failed to get root node URI.")
                  return []
             logging.debug(f"Listing folders under root node: {node_uri}")
+        else:
+            logging.debug(f"Listing folders under provided node: {node_uri}")
 
         # Get the children of the specified node
         children_url = f"https://api.smugmug.com{node_uri}!children?count=100"
@@ -752,7 +743,7 @@ class SmugMug:
                           children_url = f"https://api.smugmug.com{next_page_uri}"
                       else:
                            children_url = next_page_uri
-                      # Add count parameter
+                      # Add count parameter if not already there
                       if "?count=" not in children_url:
                            separator = "&" if "?" in children_url else "?"
                            children_url += f"{separator}count=100"
@@ -760,12 +751,12 @@ class SmugMug:
                        children_url = None # No more pages
 
              except requests.exceptions.RequestException as e:
-                  logging.error(f"Error listing children from SmugMug node {node_uri}: {e}")
+                  logging.error(f"Error listing children from SmugMug node {node_uri}: {e}", exc_info=True)
                   if hasattr(e, 'response') and hasattr(e.response, 'text'):
                       logging.error(f"SmugMug API Response Text: {e.response.text}")
                   return [] # Return empty on error
              except Exception as e:
-                  logging.error(f"An unexpected error occurred while listing children from node {node_uri}: {e}")
+                  logging.error(f"An unexpected error occurred while listing children from node {node_uri}: {e}", exc_info=True)
                   return []
 
         logging.info(f"Found total of {len(all_folders)} folders under node {node_uri}.")
@@ -779,7 +770,8 @@ class SmugMug:
         logging.debug(f"Attempting to select album '{album_name}' under node URI: {parent_node_uri or 'root'}")
         albums = self.list_albums(node_uri=parent_node_uri) # List albums under the specific node
         if not albums:
-            # Already logged in list_albums if error occurred
+            # Already logged in list_albums if error occurred or no albums found
+            logging.debug(f"No albums found under node {parent_node_uri or 'root'} to select from.")
             return False
 
         # Find the album with the matching name (case-insensitive)
@@ -795,7 +787,7 @@ class SmugMug:
                 album_uri = album.get('Uri') # This is the Album's own API URI
 
                 if not album_key or not album_uri:
-                    logging.error(f"Album '{album_name}' found, but missing AlbumKey or Uri in data: {album}")
+                    logging.error(f"Album '{album_name}' found, but missing AlbumKey or Uri in data: {json.dumps(album, indent=2)}")
                     return False
 
                 # Set instance variables on successful selection
@@ -816,7 +808,8 @@ class SmugMug:
         logging.debug(f"Attempting to select folder '{folder_name}' under node URI: {parent_node_uri or 'root'}")
         folders = self.list_folders(node_uri=parent_node_uri) # List folders under the specific node
         if not folders:
-            # Already logged in list_folders if error occurred
+             # Already logged in list_folders if error occurred or no folders found
+            logging.debug(f"No folders found under node {parent_node_uri or 'root'} to select from.")
             return None
 
         # Find the folder with the matching name (case-insensitive)
@@ -832,7 +825,7 @@ class SmugMug:
                 folder_node_uri = folder.get('Uri') # The 'Uri' key on a folder node *is* its node URI
 
                 if not folder_node_uri:
-                    logging.error(f"Folder '{folder_name}' found, but missing Node Uri in data: {folder}")
+                    logging.error(f"Folder '{folder_name}' found, but missing Node Uri in data: {json.dumps(folder, indent=2)}")
                     return None
 
                 logging.info(f"Selected existing folder '{current_folder_name}' with Node URI {folder_node_uri}")
@@ -856,8 +849,7 @@ class SmugMug:
 
         if not parent_node_uri:
             # Default to creating under the user's root node
-            if not self.username: _, user_data = self.get_user_endpoint()
-            else: _, user_data = self.get_user_endpoint() # Fetch again if needed
+            _, user_data = self.get_user_endpoint()
             if not user_data: return None, None # Failed to get user data
             parent_node_uri = self._get_node_uri(user_data)
             if not parent_node_uri: return None, None # Failed to get root node URI
@@ -873,10 +865,15 @@ class SmugMug:
                 'Accept': 'application/json',
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
-            # Album settings
+            # Album settings - ensure URL name is valid
+            url_name = ''.join(filter(str.isalnum, album_name.title().replace(' ', ''))) # Basic URL name generation
+            if not url_name: # Handle case where name has no alphanumeric chars
+                 url_name = f"Album{hashlib.md5(album_name.encode()).hexdigest()[:8]}" # Generate a fallback
+                 logging.warning(f"Generated fallback UrlName '{url_name}' for album '{album_name}'")
+
             album_data = {
                 'Name': album_name,
-                'UrlName': album_name.title().replace(' ', ''), # Basic URL name generation
+                'UrlName': url_name,
                 'Type': 'Album',
                 'Privacy': 'Private',
                 'LargestSize': 'Original',
@@ -917,7 +914,8 @@ class SmugMug:
                 self.config['album_key'] = album_key
                 self.config['album_api_uri'] = album_uri
                 # Clear album_name from config if key/uri are now set
-                self.config['album_name'] = placeholders['album_name']
+                # *** USE CORRECT REFERENCE HERE ***
+                self.config['album_name'] = DEFAULT_SMUGMUG_CONFIG['album_name']
                 if not self.save_config():
                     logging.warning("Failed to save updated album key/uri to config file after creation.")
             else:
@@ -929,14 +927,13 @@ class SmugMug:
             return album_key, album_uri
 
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error creating album '{album_name}' on SmugMug: {e}")
-            # Log response details if available
+            logging.error(f"Error creating album '{album_name}' on SmugMug: {e}", exc_info=True)
             if hasattr(e, 'response') and e.response is not None:
                 logging.error(f"HTTP Status Code: {e.response.status_code}")
                 logging.error(f"SmugMug API Response Text: {e.response.text}")
             return None, None
         except Exception as e:
-            logging.error(f"An unexpected error occurred while creating album '{album_name}' on SmugMug: {e}")
+            logging.error(f"An unexpected error occurred while creating album '{album_name}' on SmugMug: {e}", exc_info=True)
             return None, None
 
     def validate_and_correct_album_attributes(self, album_uri):
@@ -968,9 +965,9 @@ class SmugMug:
 
             for attr, desired in desired_attributes.items():
                 current = current_data.get(attr)
-                # Handle boolean comparison (SmugMug might return ints 0/1)
-                if isinstance(desired, bool) and isinstance(current, (int, bool)):
-                     if desired != bool(current):
+                # Handle boolean comparison (SmugMug might return ints 0/1 or bools)
+                if isinstance(desired, bool):
+                     if str(current).lower() not in ('true' if desired else 'false', str(int(desired))):
                           logging.warning(f"Discrepancy in '{attr}': Current='{current}', Desired='{desired}'.")
                           patch_payload[attr] = desired
                 elif current != desired:
@@ -988,13 +985,12 @@ class SmugMug:
                 logging.info("Album attributes are already correct.")
 
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error during album attribute validation/correction for {album_uri}: {e}")
-            # Log response details if available
+            logging.error(f"Error during album attribute validation/correction for {album_uri}: {e}", exc_info=True)
             if hasattr(e, 'response') and e.response is not None:
                  logging.error(f"HTTP Status Code: {e.response.status_code}")
                  logging.error(f"SmugMug API Response Text: {e.response.text}")
         except Exception as e:
-            logging.error(f"Unexpected error during album validation/correction: {e}")
+            logging.error(f"Unexpected error during album validation/correction: {e}", exc_info=True)
 
     def get_or_create_folder(self, folder_name, parent_node_uri=None):
         """
@@ -1029,8 +1025,7 @@ class SmugMug:
 
         if not parent_node_uri:
              # Default to creating under the user's root node
-            if not self.username: _, user_data = self.get_user_endpoint()
-            else: _, user_data = self.get_user_endpoint()
+            _, user_data = self.get_user_endpoint()
             if not user_data: return None
             parent_node_uri = self._get_node_uri(user_data)
             if not parent_node_uri: return None
@@ -1046,9 +1041,15 @@ class SmugMug:
                 'Accept': 'application/json',
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
+             # Ensure URL name is valid
+            url_name = ''.join(filter(str.isalnum, folder_name.title().replace(' ', '')))
+            if not url_name:
+                 url_name = f"Folder{hashlib.md5(folder_name.encode()).hexdigest()[:8]}"
+                 logging.warning(f"Generated fallback UrlName '{url_name}' for folder '{folder_name}'")
+
             folder_data = {
                 'Name': folder_name,
-                'UrlName': folder_name.title().replace(' ', ''), # Basic URL name
+                'UrlName': url_name,
                 'Type': 'Folder',
                 'Privacy': 'Private' # Default new folders to private
             }
@@ -1074,13 +1075,13 @@ class SmugMug:
             return new_folder_node_uri
 
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error creating folder '{folder_name}' on SmugMug: {e}")
+            logging.error(f"Error creating folder '{folder_name}' on SmugMug: {e}", exc_info=True)
             if hasattr(e, 'response') and e.response is not None:
                  logging.error(f"HTTP Status Code: {e.response.status_code}")
                  logging.error(f"SmugMug API Response Text: {e.response.text}")
             return None
         except Exception as e:
-            logging.error(f"An unexpected error occurred while creating folder '{folder_name}' on SmugMug: {e}")
+            logging.error(f"An unexpected error occurred while creating folder '{folder_name}' on SmugMug: {e}", exc_info=True)
             return None
 
     def get_or_create_album_in_path(self, album_name, folder_path_str=None):
@@ -1116,10 +1117,13 @@ class SmugMug:
          logging.info(f"Ensuring album '{album_name}' exists under node: {target_parent_node_uri or 'root'}")
          if self.select_album_by_name(album_name, parent_node_uri=target_parent_node_uri):
               logging.info(f"Album '{album_name}' found.")
+              # Make sure attributes are correct even if album already existed
+              self.validate_and_correct_album_attributes(self.album_api_uri)
               return True # Album found
          else:
               logging.info(f"Album '{album_name}' not found, creating...")
               key, uri = self.create_album(album_name, parent_node_uri=target_parent_node_uri)
+              # create_album now includes validation
               if key and uri:
                    logging.info(f"Album '{album_name}' created successfully.")
                    return True # Album created
@@ -1154,5 +1158,5 @@ class SmugMug:
             logging.error(f"File not found for hashing: {file_path}")
             return None
         except Exception as e:
-            logging.error(f"Error calculating {hash_algorithm.upper()} hash for {file_path}: {e}")
+            logging.error(f"Error calculating {hash_algorithm.upper()} hash for {file_path}: {e}", exc_info=True)
             return None
