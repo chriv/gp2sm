@@ -170,59 +170,79 @@ class GooglePhotos:
 
     def refresh_token_if_needed(self, buffer_minutes=10):
         """Checks if the token is close to expiry and refreshes it."""
-        if not self.creds: # Removed not self.creds.valid check here, refresh handles validity
+        if not self.creds:
             logger.debug("Token refresh check skipped: Credentials object is missing.")
-            return True # Nothing to do if no creds object
+            return True
 
-        # If creds exist but aren't valid, AND we have a refresh token, try refreshing immediately
         if not self.creds.valid and self.creds.refresh_token:
-             logger.info("Credentials are not valid, attempting immediate refresh...")
-             buffer_minutes = -1 # Force refresh attempt now
+            logger.info("Credentials are not valid, attempting immediate refresh...")
+            buffer_minutes = -1  # Force refresh attempt now
         elif not self.creds.refresh_token:
-             logger.debug("Token refresh check skipped: No refresh token available.")
-             return self.creds.valid # Return current validity status
+            logger.debug("Token refresh check skipped: No refresh token available.")
+            return self.creds.valid
 
         if not self.creds.expiry:
-             logger.debug("Token refresh check skipped: No expiry information available.")
-             return self.creds.valid # Return current validity status if expiry unknown
+            logger.debug("Token refresh check skipped: No expiry information available.")
+            # If expiry is unknown, we can't check buffer, but return current validity
+            return self.creds.valid
 
-        # Ensure 'now' is timezone-aware (UTC) to compare with expiry
+        # --- FIX STARTS HERE ---
+        # Get the expiry time and ensure it's timezone-aware (assume UTC if naive)
+        expiry_dt = self.creds.expiry
+        if expiry_dt.tzinfo is None:
+            # If expiry is naive, assume it's UTC and make it aware
+            logger.debug("Credentials expiry time was naive, assuming UTC.")
+            expiry_aware_dt = expiry_dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            # If expiry is already aware, use it directly
+            expiry_aware_dt = expiry_dt
+
+        # Get the current time as timezone-aware UTC
         now_utc = datetime.datetime.now(datetime.timezone.utc)
-        # Calculate refresh time (expiry - buffer), or force if buffer_minutes is negative
-        refresh_time = self.creds.expiry - datetime.timedelta(minutes=buffer_minutes if buffer_minutes >= 0 else 0)
 
-        # Attempt refresh if past refresh time OR if forced by buffer_minutes < 0
+        # Calculate the refresh threshold time (also timezone-aware)
+        refresh_time = expiry_aware_dt - datetime.timedelta(minutes=buffer_minutes if buffer_minutes >= 0 else 0)
+        # --- FIX ENDS HERE ---
+
+        # Now compare the two timezone-aware datetime objects
         if now_utc >= refresh_time or buffer_minutes < 0:
+            # (Rest of the refresh logic remains the same as the code you have)
             if buffer_minutes < 0:
                 logger.info("Attempting immediate token refresh...")
             else:
-                logger.info(f"Google Photos token expires soon (at {self.creds.expiry}). Refreshing proactively...")
+                logger.info(f"Google Photos token expires soon (at {expiry_aware_dt}). Refreshing proactively...")
 
             try:
-                self.creds.refresh(Request())
+                # Use the stored Request object if available, else create one
+                request = Request()
+                self.creds.refresh(request)
                 logger.info("Token refreshed successfully.")
                 # Save the updated token
                 logger.info(f"Saving refreshed Google Photos token to: {self.token_file}")
                 try:
                     with open(self.token_file, 'w') as token:
                         token.write(self.creds.to_json())
-                    return True # Refresh successful
+                    return True  # Refresh successful
                 except IOError as e:
                     logger.error(f"Error saving refreshed Google Photos token to {self.token_file}: {e}")
-                    return False # Failed to save refreshed token
+                    return False  # Failed to save refreshed token
             except Exception as e:
-                logger.error(f"Error during token refresh: {e}. Re-authentication might be needed later.")
+                logger.error(f"Error during token refresh: {e}. Re-authentication might be needed later.",
+                             exc_info=True)  # Added exc_info
                 # Consider token invalid after failed refresh
-                self.creds = None # Invalidate creds object
+                self.creds = None  # Invalidate creds object
                 # Attempt to delete potentially invalid token file
                 if os.path.exists(self.token_file):
-                     try: os.remove(self.token_file); logger.info(f"Removed potentially invalid token file after refresh error: {self.token_file}")
-                     except OSError as rm_err: logger.warning(f"Could not remove invalid token file {self.token_file}: {rm_err}")
-                return False # Indicate refresh failed
+                    try:
+                        os.remove(self.token_file); logger.info(
+                            f"Removed potentially invalid token file after refresh error: {self.token_file}")
+                    except OSError as rm_err:
+                        logger.warning(f"Could not remove invalid token file {self.token_file}: {rm_err}")
+                return False  # Indicate refresh failed
         else:
             # Token is valid and not yet time for proactive refresh
-            logger.debug(f"Token refresh check: Token valid until {self.creds.expiry}. No refresh needed yet.")
-            return True # No refresh needed, token is valid
+            logger.debug(f"Token refresh check: Token valid until {expiry_aware_dt}. No refresh needed yet.")
+            return True  # No refresh needed, token is valid
 
     def get_photos(self, album_id=None):
         """Retrieves a list of photos from the Google Photos library, optionally from a specific album."""
