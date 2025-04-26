@@ -3,4 +3,5 @@
 .vscode/
 temp_downloads/
 *.json
+*.log
 smugmugapikeyandsecret.txt

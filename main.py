@@ -274,7 +274,7 @@ def main():
                 logging.error("Google Photos client initialized but failed to authenticate. Check logs.")
                 print("\nError: Could not authenticate with Google Photos. Please check log messages above.")
                 sys.exit(1)
-            logging.success("Google Photos client initialized and authenticated.")
+            logger.success("Google Photos client initialized and authenticated.")
 
         except GoogleCredentialsNotFoundError:
             # Specific error message already logged/printed by google_photos_module
@@ -296,7 +296,7 @@ def main():
             print(
                 f"\nError: SmugMug setup failed. Please check '{SMUGMUG_CONFIG_FILE}' and log messages, then run again.")
             sys.exit(1)
-        logging.success("SmugMug client initialized and authenticated.")
+        logger.success("SmugMug client initialized and authenticated.")
 
         # --- Determine Final Album/Folder Configuration ---
         # Start with values potentially set during check_config_and_authenticate
@@ -342,7 +342,7 @@ def main():
         # At this point, smugmug.album_key and smugmug.album_api_uri should be set correctly
         target_album_key = smugmug.album_key
         target_album_api_uri = smugmug.album_api_uri
-        logging.success(
+        logger.success(
             f"Confirmed target SmugMug album. Name: '{smugmug.album_name}', Key: {target_album_key}, URI: {target_album_api_uri}")
 
         # --- Process HEIC Flag ---
@@ -362,7 +362,7 @@ def main():
         total_items = len(photos)
         if total_items == 0:
             logging.info("No media items found in the specified Google Photos location. Nothing to transfer.")
-            logging.success("Script finished successfully (no items to transfer).")
+            logger.success("Script finished successfully (no items to transfer).")
             sys.exit(0)  # Successful exit, nothing to do
 
         logging.info(f"Found {total_items} items in Google Photos.")
@@ -542,7 +542,7 @@ def main():
                 if smugmug.upload_media(target_album_api_uri, temp_file_path, filename, mime_type):
                     upload_duration = time.time() - upload_start_time
                     # Use SUCCESS level for successful uploads
-                    logging.success(f"  Successfully uploaded '{filename}' to SmugMug (took {upload_duration:.2f}s).")
+                    logger.success(f"  Successfully uploaded '{filename}' to SmugMug (took {upload_duration:.2f}s).")
                     print(f"   Successfully uploaded '{filename}'.")
                     uploaded_count += 1
                     # Deletion after successful upload (simulated)
@@ -564,7 +564,7 @@ def main():
         logging.info("Transfer Process Summary:")
         logging.info(f"  Total items retrieved from Google Photos: {total_items}")
         logging.info(f"  Items processed: {processed_count}")
-        logging.success(f"  Successfully uploaded: {uploaded_count}")  # Green
+        logger.success(f"  Successfully uploaded: {uploaded_count}")  # Green
         logging.info(f"  Found as duplicates on SmugMug: {duplicate_count}")  # White
         logging.info(f"  Skipped by flags/settings: {skipped_count}")  # White
         if error_count > 0:
@@ -576,7 +576,7 @@ def main():
         logging.info(f"  Total execution time: {total_duration:.2f} seconds")  # White
         logging.info("-" * 50)
         if error_count == 0 and processed_count == total_items:
-            logging.success("Script finished successfully.")  # Green
+            logger.success("Script finished successfully.")  # Green
         elif error_count > 0:
             logging.warning(f"Script finished with {error_count} errors. Please review logs.")  # Yellow
         else:

@@ -624,73 +624,100 @@ class SmugMug:
               logging.debug(f"User data for Node URI check: {json.dumps(user_data, indent=2)}")
          return node_uri
 
+    # --- CORRECTED list_albums ---
     def list_albums(self, node_uri=None):
         """
-        Lists all albums under a specific node URI or the user's root node.
+        Lists all albums under a specific node URI (using !children) or the user's root node (!albums).
         Returns a list of album dictionaries if successful, empty list otherwise.
         """
         if not self.auth_session:
             logging.error("Not authenticated with SmugMug. Cannot list albums.")
             return []
 
-        if not node_uri:
-            # If no node_uri provided, get the user's root node
-            _, user_data = self.get_user_endpoint()
-            if not user_data: return []
-            node_uri = self._get_node_uri(user_data)
-            if not node_uri:
-                logging.error("Cannot list albums: Failed to get root node URI.")
-                return []
-            logging.debug(f"Listing albums under root node: {node_uri}")
-        else:
-             logging.debug(f"Listing albums under provided node: {node_uri}")
-
-        # Construct the URL to list albums under the specified node
-        # The endpoint is typically nodeUri!albums
-        albums_url = f"https://api.smugmug.com{node_uri}!albums?count=100" # Add count for pagination
         headers = {'Accept': 'application/json'}
         all_albums = []
         page_count = 0
+        target_uri = "" # The URI we will actually query
+        is_listing_children = False # Flag to indicate if we need to filter results
 
-        while albums_url:
+        if node_uri:
+            # If a specific node_uri is provided, list its children and filter for albums
+            logging.debug(f"Listing children under provided node {node_uri} to find albums.")
+            target_uri = f"https://api.smugmug.com{node_uri}!children?count=100"
+            is_listing_children = True
+        else:
+            # If no node_uri, list albums from the user's root using !albums endpoint
+            if not self.username: # Ensure username is available
+                _, user_data = self.get_user_endpoint()
+                if not user_data: return []
+            if not self.username: # Still no username? Error out.
+                logging.error("Cannot list albums: Failed to get username.")
+                return []
+
+            target_uri = f"https://api.smugmug.com/api/v2/user/{self.username}!albums?count=100"
+            logging.debug(f"Listing albums under user root using {target_uri}")
+            is_listing_children = False
+
+        next_page_url = target_uri # Initialize pagination URL
+
+        while next_page_url:
             page_count += 1
-            logging.debug(f"Fetching albums page {page_count} from: {albums_url}")
+            logging.debug(f"Fetching SmugMug data page {page_count} from: {next_page_url}")
             try:
-                response = self.auth_session.get(albums_url, headers=headers)
+                response = self.auth_session.get(next_page_url, headers=headers)
                 response.raise_for_status()
                 data = response.json()
 
-                albums_in_response = data.get('Response', {}).get('Album', []) # Ensure list
-                if albums_in_response:
-                    all_albums.extend(albums_in_response)
-                    logging.debug(f"Found {len(albums_in_response)} albums on page {page_count}. Total found: {len(all_albums)}")
+                items_in_response = []
+                if is_listing_children:
+                    # Filter nodes of type 'Album' when listing children
+                    nodes = data.get('Response', {}).get('Node', [])
+                    # Extract album details if the node represents an album
+                    for node in nodes:
+                         if isinstance(node, dict) and node.get('Type') == 'Album':
+                              # To be consistent, maybe fetch the actual album details?
+                              # Or extract key info if available directly on node?
+                              # For now, let's just add the node itself if it's an album type.
+                              # The 'Name' should be directly on the node. 'AlbumKey' might be too.
+                              items_in_response.append(node)
+                    logging.debug(f"Found {len(items_in_response)} nodes of type Album on page {page_count}.")
+                else:
+                    # Directly use the 'Album' list when using !albums endpoint
+                    items_in_response = data.get('Response', {}).get('Album', [])
+                    logging.debug(f"Found {len(items_in_response)} albums directly on page {page_count}.")
+
+
+                if items_in_response:
+                    all_albums.extend(items_in_response)
+                    logging.debug(f"Total albums accumulated: {len(all_albums)}")
 
                 # Pagination
                 pages_info = data.get('Response', {}).get('Pages')
                 if pages_info and 'NextPage' in pages_info and pages_info['NextPage']:
                     next_page_uri = pages_info['NextPage']
+                    # Ensure full URL and add count parameter
                     if not next_page_uri.startswith("http"):
-                         albums_url = f"https://api.smugmug.com{next_page_uri}"
+                         next_page_url = f"https://api.smugmug.com{next_page_uri}"
                     else:
-                         albums_url = next_page_uri
-                    # Add count parameter if not already there
-                    if "?count=" not in albums_url:
-                         separator = "&" if "?" in albums_url else "?"
-                         albums_url += f"{separator}count=100"
+                         next_page_url = next_page_uri
+                    if "?count=" not in next_page_url:
+                         separator = "&" if "?" in next_page_url else "?"
+                         next_page_url += f"{separator}count=100"
                 else:
-                    albums_url = None # No more pages
+                    next_page_url = None # No more pages
 
             except requests.exceptions.RequestException as e:
-                logging.error(f"Error listing albums from SmugMug node {node_uri}: {e}", exc_info=True)
+                logging.error(f"Error listing from SmugMug URI {next_page_url}: {e}", exc_info=True)
                 if hasattr(e, 'response') and hasattr(e.response, 'text'):
                     logging.error(f"SmugMug API Response Text: {e.response.text}")
                 return [] # Return empty on error
             except Exception as e:
-                logging.error(f"An unexpected error occurred while listing albums from node {node_uri}: {e}", exc_info=True)
+                logging.error(f"An unexpected error occurred while listing from SmugMug URI {next_page_url}: {e}", exc_info=True)
                 return []
 
-        logging.info(f"Found total of {len(all_albums)} albums under node {node_uri}.")
+        logging.info(f"Found total of {len(all_albums)} albums matching criteria.")
         return all_albums
+    # --- End CORRECTED list_albums ---
 
     def list_folders(self, node_uri=None):
         """
@@ -768,26 +795,29 @@ class SmugMug:
         Returns True if found and sets instance attributes, False otherwise.
         """
         logging.debug(f"Attempting to select album '{album_name}' under node URI: {parent_node_uri or 'root'}")
-        albums = self.list_albums(node_uri=parent_node_uri) # List albums under the specific node
+        # Use the corrected list_albums which handles parent_node_uri correctly
+        albums = self.list_albums(node_uri=parent_node_uri)
         if not albums:
             # Already logged in list_albums if error occurred or no albums found
             logging.debug(f"No albums found under node {parent_node_uri or 'root'} to select from.")
             return False
 
         # Find the album with the matching name (case-insensitive)
-        for album in albums:
-             # Ensure album is a dictionary
-             if not isinstance(album, dict):
-                  logging.warning(f"Found non-dictionary item in albums list: {album}")
+        for album_node in albums: # Now iterating through nodes of Type 'Album'
+             # Ensure album_node is a dictionary
+             if not isinstance(album_node, dict):
+                  logging.warning(f"Found non-dictionary item in albums list: {album_node}")
                   continue
 
-             current_album_name = album.get('Name')
+             current_album_name = album_node.get('Name')
              if current_album_name and album_name and current_album_name.lower() == album_name.lower():
-                album_key = album.get('AlbumKey')
-                album_uri = album.get('Uri') # This is the Album's own API URI
+                # Extract key/uri from the node's Uris structure
+                album_uri = album_node.get('Uris', {}).get('Album', {}).get('Uri')
+                album_key = album_uri.split('/')[-1] if album_uri else None # Parse key from URI
 
                 if not album_key or not album_uri:
-                    logging.error(f"Album '{album_name}' found, but missing AlbumKey or Uri in data: {json.dumps(album, indent=2)}")
+                    logging.error(f"Album node '{album_name}' found, but missing AlbumKey ('{album_key}') or Album URI ('{album_uri}') in node data.")
+                    logging.error(f"Node data: {json.dumps(album_node, indent=2)}")
                     return False
 
                 # Set instance variables on successful selection
@@ -834,6 +864,7 @@ class SmugMug:
         logging.debug(f"Folder '{folder_name}' not found under node URI: {parent_node_uri or 'root'}")
         return None
 
+    # --- CORRECTED create_album ---
     def create_album(self, album_name, parent_node_uri=None):
         """
         Creates a new album under the specified parent node URI (or root node).
@@ -894,11 +925,13 @@ class SmugMug:
                 logging.error(f"Response data: {json.dumps(data, indent=2)}")
                 return None, None
 
-            album_key = new_node.get('AlbumKey')
+            # *** CORRECTED KEY/URI EXTRACTION ***
             album_uri = new_node.get('Uris', {}).get('Album', {}).get('Uri') # Get the Album URI specifically
+            # Parse the AlbumKey from the end of the album_uri
+            album_key = album_uri.split('/')[-1] if album_uri else None
 
             if not album_key or not album_uri:
-                 logging.error(f"Album Node created, but missing AlbumKey ('{album_key}') or Album URI ('{album_uri}').")
+                 logging.error(f"Album Node created, but failed to extract AlbumKey ('{album_key}') or Album URI ('{album_uri}').")
                  logging.error(f"Node data: {json.dumps(new_node, indent=2)}")
                  return None, None
 
@@ -914,8 +947,7 @@ class SmugMug:
                 self.config['album_key'] = album_key
                 self.config['album_api_uri'] = album_uri
                 # Clear album_name from config if key/uri are now set
-                # *** USE CORRECT REFERENCE HERE ***
-                self.config['album_name'] = DEFAULT_SMUGMUG_CONFIG['album_name']
+                self.config['album_name'] = DEFAULT_SMUGMUG_CONFIG['album_name'] # Use global default config
                 if not self.save_config():
                     logging.warning("Failed to save updated album key/uri to config file after creation.")
             else:
@@ -935,6 +967,7 @@ class SmugMug:
         except Exception as e:
             logging.error(f"An unexpected error occurred while creating album '{album_name}' on SmugMug: {e}", exc_info=True)
             return None, None
+    # --- End CORRECTED create_album ---
 
     def validate_and_correct_album_attributes(self, album_uri):
         """Validates and corrects the attributes of an album via PATCH request."""
@@ -967,11 +1000,12 @@ class SmugMug:
                 current = current_data.get(attr)
                 # Handle boolean comparison (SmugMug might return ints 0/1 or bools)
                 if isinstance(desired, bool):
-                     if str(current).lower() not in ('true' if desired else 'false', str(int(desired))):
-                          logging.warning(f"Discrepancy in '{attr}': Current='{current}', Desired='{desired}'.")
+                     # Compare string representations to handle True/False, 'True'/'False', 1/0
+                     if str(current).lower() not in (str(desired).lower(), str(int(desired))):
+                          logging.warning(f"Discrepancy in '{attr}': Current='{current}', Desired='{desired}'. Adding to patch.")
                           patch_payload[attr] = desired
                 elif current != desired:
-                    logging.warning(f"Discrepancy in '{attr}': Current='{current}', Desired='{desired}'.")
+                    logging.warning(f"Discrepancy in '{attr}': Current='{current}', Desired='{desired}'. Adding to patch.")
                     patch_payload[attr] = desired
 
             if patch_payload:
