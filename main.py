@@ -380,38 +380,63 @@ def main():
                 else:
                     # --- Image MD5 Check with Re-fetch Logic ---
                     logger.debug(f"  Downloading image '{filename}' for MD5 check...")
-                    temp_file_path, _, _, _, _, error_code = google_photos.download_photo(item)
+                    # Use original_item from the loop for the first attempt
+                    temp_file_path, _, _, _, _, error_code = google_photos.download_photo(original_item)
 
                     if not temp_file_path and error_code in [401, 403]:
-                        logger.warning(f"  Initial download failed for MD5 check '{filename}' (Code: {error_code}). Attempting to refresh item details...")
+                        logger.warning(
+                            f"  Initial download failed for MD5 check '{filename}' (Code: {error_code}). Attempting to refresh item details...")
                         try:
-                            fresh_item_data = google_photos.get_media_item(media_item_id)
-                            if fresh_item_data:
-                                logger.info(f"  Successfully refreshed item details for '{filename}'. Retrying download once.")
-                                item = fresh_item_data # Update item with fresh data
-                                temp_file_path, _, _, _, _, error_code = google_photos.download_photo(item)
+                            # Use a distinct variable for the fetched data
+                            refetched_item = google_photos.get_media_item(media_item_id)
+                            if refetched_item:
+                                logger.info(
+                                    f"  Successfully refreshed item details for '{filename}'. Retrying download once.")
+                                # Use the distinct refetched_item variable for the retry
+                                temp_file_path, _, _, _, _, error_code = google_photos.download_photo(refetched_item)
                             else:
-                                logger.error(f"  Failed to get fresh item details for '{filename}' during MD5 check. Skipping.")
+                                logger.error(
+                                    f"  Failed to get fresh item details for '{filename}' during MD5 check. Skipping.")
+                                error_code = "Re-fetch Failed"  # Store reason
                         except Exception as e:
-                            logger.error(f"  Error refreshing/retrying download for '{filename}': {e}. Skipping.", exc_info=True)
+                            logger.error(f"  Error refreshing/retrying download for '{filename}': {e}. Skipping.",
+                                         exc_info=True)
+                            error_code = f"Re-fetch Error: {e}"  # Store error context
 
+                    # Check final status AFTER potential retry
                     if not temp_file_path:
-                        logger.error(f"  Skipping image '{filename}' due to download error (Final attempt for MD5 check).")
-                        skipped_count += 1; error_count += 1
-                        continue
+                        # Provide the specific error code if available
+                        logger.error(
+                            f"  Skipping image '{filename}' due to download error (Final attempt for MD5 check; code: {error_code}).")
+                        skipped_count += 1;
+                        error_count += 1
+                        continue  # Skip to next item
 
+                    # If download succeeded (either first or second attempt), calculate hash
+                    # Use user's variable name google_file_hash
                     google_file_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
                     if not google_file_hash:
+                        # Log error and ensure temp file cleanup happens if hash fails
+                        logger.error(f"  Skipping image '{filename}' due to MD5 calculation failure.")
+                        skipped_count += 1;
+                        error_count += 1
                         if temp_file_path and os.path.exists(temp_file_path):
                             try:
                                 os.remove(temp_file_path)
-                                logger.debug(f"  Removed temp file {temp_file_path} for duplicate item.")
-                            except Exception as e:
+                                logger.debug(f"  Removed temp file {temp_file_path} after hash failure.")
+                            except Exception as e:  # Match user's variable 'e'
+                                # Match user's multi-line warning log structure
                                 logger.warning(
-                                    f"  Could not remove temp file {temp_file_path} after duplicate check: {e}")
-                            # Setting temp_file_path to None happens regardless of whether the removal succeeded or failed,
-                            # so it stays outside the try/except but inside the initial 'if'.
-                            temp_file_path = None
+                                    f"  Could not remove temp file {temp_file_path} after hash failure: {e}")
+                            temp_file_path = None  # Ensure path is reset
+                        continue  # Skip item
+
+                    # Log success *before* exiting the block
+                    logger.debug(
+                        f"  Calculated MD5 for '{filename}': {google_file_hash}. Proceeding to SmugMug check...")
+                    # Setting temp_file_path to None happens regardless of whether the removal succeeded or failed,
+                    # so it stays outside the try/except but inside the initial 'if'.
+                    temp_file_path = None
 
                     logger.debug(f"  Calculated MD5 for '{filename}': {google_file_hash}. Checking SmugMug...")
                     exists_on_smugmug = smugmug.check_media_exists(target_album_key, filename, mime_type, file_hash=google_file_hash)
