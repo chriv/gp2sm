@@ -1,10 +1,5 @@
 # Google Photos to SmugMug Transfer Script (v1.9)
-# Updates DB with refreshed Google Photos item details (baseUrl).
-# Refactored conditional styling in SmugMug check block.
-# Removed pre-download check/refresh for missing baseUrl from main.
-# Added explicit logging for MD5 hash calculation.
-# Clarified SmugMug check log messages.
-# Truncated Google ID in logs and added "Starting..." messages.
+# Added configuration snapshot check on resume.
 
 __version__ = "1.9" # Version remains 1.9 as requested
 
@@ -25,7 +20,7 @@ import colorlog
 from google_photos_module import GooglePhotos, GoogleCredentialsNotFoundError
 from smugmug_module import SmugMug, DEFAULT_SMUGMUG_CONFIG
 from database_manager import ( # Import new DB manager and constants
-    DatabaseManager, DB_FILE_DEFAULT, TABLE_NAME,
+    DatabaseManager, DB_FILE_DEFAULT, MEDIA_TABLE_NAME, # Use specific table name
     STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
     STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED, STATUS_UPLOADED_SUCCESS,
     STATUS_DUPLICATE_HASH, STATUS_DUPLICATE_FILENAME, STATUS_SKIPPED_FILTER,
@@ -38,7 +33,6 @@ from database_manager import ( # Import new DB manager and constants
 # --- Constants ---
 LOG_FILE = "gp2sm_transfer.log"
 LOCK_FILE = "gp2sm.lock"
-# Truncate Google ID length in logs for readability
 LOG_ID_TRUNCATE_LEN = 8
 
 # --- Global Variables ---
@@ -171,12 +165,12 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     # Argument parsing
-    parser.add_argument('--google-photos-album-id', help='(Optional) Process only media from this Google Photos Album ID. Used only when populating the database initially.')
+    parser.add_argument('--google-photos-album-id', help='(Optional) Process only media from this Google Photos Album ID. Used only when initially populating the database.')
     parser.add_argument('--ignore-photos', action='store_true', help='Mark photos to be skipped during processing.')
     parser.add_argument('--ignore-videos', action='store_true', help='Mark videos to be skipped during processing.')
     parser.add_argument('--process-heic', action='store_true', help='Process HEIC files (upload as converted JPGs, no duplicate check). Default is false (skip HEIC).')
-    parser.add_argument('--smugmug-album', help='(Optional) Target SmugMug album name. Overrides config file setting. Will be created if it doesn\'t exist.')
-    parser.add_argument('--smugmug-folder', help='(Optional) Target SmugMug folder path (e.g., "Vacations/Europe"). Overrides config file setting.')
+    parser.add_argument('--smugmug-album', help='(Optional) Target SmugMug album name. Overrides the `album_name`, `album_key`, and `album_api_uri` settings in the config file. Will be created if it doesn\'t exist.')
+    parser.add_argument('--smugmug-folder', help='(Optional) Target SmugMug folder path (e.g., "Vacations/Europe"). Overrides the `folder_name` setting in the config file.')
     parser.add_argument('--dry-run', action='store_true', help='Simulate transfer: check existence, log actions, but do not upload or modify DB status beyond checks.')
     parser.add_argument('--delete-from-google', action='store_true', help='(Simulated) Log deletion from Google Photos after successful processing (status UPLOADED_SUCCESS or DUPLICATE_*).')
     parser.add_argument('--debug', action='store_true', help='Enable detailed debug logging.')
@@ -239,56 +233,66 @@ def main():
              print(f"\nError: Failed to load SmugMug configuration from '{smugmug.config_file}'.", file=sys.stderr)
              sys.exit(1)
 
-        # Apply CLI overrides
+        # Apply CLI overrides to potentially loaded config
+        current_smugmug_album_arg = args.smugmug_album
+        current_smugmug_folder_arg = args.smugmug_folder
+        current_google_album_arg = args.google_photos_album_id # Capture CLI Google Album ID
+
         if args.process_heic:
             if smugmug.config: smugmug.config['process_heic'] = True; logger.info("Override: HEIC processing enabled.")
             else: logger.error("Cannot apply HEIC override: SmugMug config not loaded."); sys.exit(1)
-        if args.smugmug_album:
-             logger.info(f"Override: Target SmugMug album name: '{args.smugmug_album}'")
+        if current_smugmug_album_arg:
+             logger.info(f"Override: Target SmugMug album name from CLI: '{current_smugmug_album_arg}'")
              if smugmug.config:
-                 smugmug.config['album_name'] = args.smugmug_album
-                 smugmug.config['album_key'] = DEFAULT_SMUGMUG_CONFIG['album_key']
+                 smugmug.config['album_name'] = current_smugmug_album_arg
+                 smugmug.config['album_key'] = DEFAULT_SMUGMUG_CONFIG['album_key'] # Reset key/uri if name provided
                  smugmug.config['album_api_uri'] = DEFAULT_SMUGMUG_CONFIG['album_api_uri']
              else: logger.error("Cannot apply album override: SmugMug config not loaded."); sys.exit(1)
-        if args.smugmug_folder:
-             logger.info(f"Override: Target SmugMug folder path: '{args.smugmug_folder}'")
-             if smugmug.config: smugmug.config['folder_name'] = args.smugmug_folder
+        if current_smugmug_folder_arg:
+             logger.info(f"Override: Target SmugMug folder path from CLI: '{current_smugmug_folder_arg}'")
+             if smugmug.config:
+                 smugmug.config['folder_name'] = current_smugmug_folder_arg
              else: logger.error("Cannot apply folder override: SmugMug config not loaded."); sys.exit(1)
 
-        # Authenticate SmugMug
+        # Authenticate SmugMug (must happen before ensuring album exists)
         logger.info("Authenticating with SmugMug...")
         if not smugmug.check_config_and_authenticate():
             logger.critical("SmugMug authentication or configuration check failed.")
             sys.exit(1)
         logger.info("SmugMug initialization and authentication successful.")
 
-        # --- Ensure Target SmugMug Album Exists ---
-        target_album_name = smugmug.config.get('album_name') if smugmug.config else None
-        target_folder_path = smugmug.config.get('folder_name') if smugmug.config else None
-        target_album_key = smugmug.config.get('album_key') if smugmug.config else None
+        # --- Determine Target SmugMug Album/Folder from CURRENT config/args ---
+        # This determines the *intended* target for this specific run
+        current_target_album_name = smugmug.config.get('album_name') if smugmug.config else None
+        current_target_folder_path = smugmug.config.get('folder_name') if smugmug.config else None
+        current_target_album_key = smugmug.config.get('album_key') if smugmug.config else None
+        current_target_album_uri = smugmug.config.get('album_api_uri') if smugmug.config else None
 
-        if target_album_name and target_album_name != DEFAULT_SMUGMUG_CONFIG['album_name']:
-             logger.info(f"Ensuring SmugMug album '{target_album_name}' exists in folder '{target_folder_path or 'root'}'...")
-             if not smugmug.get_or_create_album_in_path(target_album_name, target_folder_path):
+        # --- Ensure Target SmugMug Album Exists (based on current config/args) ---
+        # This step finds/creates the album based on the current intent,
+        # and sets the key/uri in the smugmug object for potential use later.
+        if current_target_album_name and current_target_album_name != DEFAULT_SMUGMUG_CONFIG['album_name']:
+             logger.info(f"Ensuring SmugMug album '{current_target_album_name}' exists in folder '{current_target_folder_path or 'root'}' (based on current settings)...")
+             if not smugmug.get_or_create_album_in_path(current_target_album_name, current_target_folder_path):
                   logger.critical("Failed to find or create target SmugMug album by name.")
                   print("\nError: Could not set up the target SmugMug album by name.", file=sys.stderr)
                   sys.exit(1)
-             target_album_key = smugmug.album_key
-        elif target_album_key and target_album_key != DEFAULT_SMUGMUG_CONFIG['album_key']:
-             logger.info(f"Using existing SmugMug album specified by key: {target_album_key}")
-             smugmug.album_key = target_album_key
-             smugmug.album_api_uri = smugmug.config.get('album_api_uri')
-             smugmug.album_name = None
+             # Update current key/uri based on the result of get_or_create
+             current_target_album_key = smugmug.album_key
+             current_target_album_uri = smugmug.album_api_uri
+        elif current_target_album_key and current_target_album_key != DEFAULT_SMUGMUG_CONFIG['album_key']:
+             logger.info(f"Using existing SmugMug album specified by key: {current_target_album_key} (based on current settings)")
+             # Ensure the URI is also set in the smugmug object if using key
+             smugmug.album_key = current_target_album_key
+             smugmug.album_api_uri = current_target_album_uri
+             smugmug.album_name = None # Clear name if using key
         else:
-             logger.critical("No valid target SmugMug album specified in config or via CLI.")
+             logger.critical("No valid target SmugMug album specified in current config or via CLI.")
              print("\nError: Specify target SmugMug album in config or use --smugmug-album.", file=sys.stderr)
              sys.exit(1)
 
-        if not target_album_key:
-             logger.critical("Failed to determine target SmugMug album key.")
-             sys.exit(1)
-        logger.info(f"Confirmed SmugMug Target Key: {target_album_key}, URI: {smugmug.album_api_uri}, Folder: '{target_folder_path or 'root'}'")
-
+        # Log the target determined from *current* settings
+        logger.info(f"Current Settings Target - SmugMug Key: {current_target_album_key}, URI: {current_target_album_uri}, Folder: '{current_target_folder_path or 'root'}'")
 
         # --- Initialize Google Photos ---
         logger.info("Initializing Google Photos module...")
@@ -309,30 +313,117 @@ def main():
              print(f"\nError: Failed to initialize Google Photos: {e}.", file=sys.stderr)
              sys.exit(1)
 
-        # --- Populate Database if Needed ---
+        # --- Populate Database or Check Config Snapshot ---
+        is_initial_run = False
         total_db_items = db_manager.get_item_count()
+        stored_config = db_manager.get_stored_config()
+
         if total_db_items == 0 or args.force_refresh_list:
-            if args.force_refresh_list: logger.warning("Force refresh: Re-fetching list from Google Photos.")
-            else: logger.info("Database empty. Fetching list from Google Photos.")
+            is_initial_run = True
+            if args.force_refresh_list: logger.warning("Force refresh: Re-fetching list from Google Photos and saving config snapshot.")
+            else: logger.info("Database empty. Fetching list from Google Photos and saving config snapshot.")
+
             print("Fetching initial media list from Google Photos...")
-            photos_list = google_photos.get_photos(args.google_photos_album_id)
+            photos_list = google_photos.get_photos(current_google_album_arg) # Use current GP album arg
             logger.info(f"Fetched {len(photos_list)} items from Google Photos.")
+
             if photos_list:
-                 added_count = db_manager.add_item_batch(photos_list, target_album_key)
+                 # Save the config snapshot *before* adding items
+                 if not db_manager.save_initial_config(current_target_album_key, current_target_album_uri, current_target_folder_path, current_google_album_arg):
+                      logger.error("Failed to save initial configuration snapshot to database. Proceeding without snapshot.")
+                      # Continue, but resuming might have issues if config changes later
+
+                 # Add items to DB, using the confirmed *current* SmugMug album key
+                 added_count = db_manager.add_item_batch(photos_list, current_target_album_key)
                  logger.info(f"Populated database with {added_count} new items.")
                  total_db_items = db_manager.get_item_count()
             else:
-                 logger.info("No items found in Google Photos source.")
+                 logger.info("No items found in Google Photos source. Database remains empty.")
                  print("No items found in Google Photos source.")
                  sys.exit(0)
         else:
-            logger.info(f"Database contains {total_db_items} items. Resuming.")
-            print(f"Found {total_db_items} items tracked in the database.")
+            # Resuming from existing DB - Check config consistency
+            logger.info(f"Database contains {total_db_items} items. Checking config consistency...")
+            print(f"Found {total_db_items} items tracked in the database. Checking configuration...")
+
+            if stored_config:
+                # Compare stored config with current config
+                stored_sm_key = stored_config.get('smugmug_album_key')
+                stored_sm_folder = stored_config.get('smugmug_folder_name') # Might be None
+                stored_gp_album = stored_config.get('google_album_id') # Might be None
+
+                # Normalize None/empty strings for comparison
+                current_folder_norm = current_target_folder_path if current_target_folder_path else None
+                stored_folder_norm = stored_sm_folder if stored_sm_folder else None
+                current_gp_album_norm = current_google_album_arg if current_google_album_arg else None
+                stored_gp_album_norm = stored_gp_album if stored_gp_album else None
+
+                mismatch = False
+                if current_target_album_key != stored_sm_key:
+                    logger.warning(f"SmugMug Album Key mismatch! Current='{current_target_album_key}', Stored='{stored_sm_key}'")
+                    mismatch = True
+                if current_folder_norm != stored_folder_norm:
+                    logger.warning(f"SmugMug Folder mismatch! Current='{current_folder_norm or 'Root'}', Stored='{stored_folder_norm or 'Root'}'")
+                    mismatch = True
+                if current_gp_album_norm != stored_gp_album_norm:
+                    logger.warning(f"Google Photos Album ID mismatch! Current='{current_gp_album_norm or 'Library'}', Stored='{stored_gp_album_norm or 'Library'}'")
+                    mismatch = True
+
+                if mismatch:
+                    logger.warning("="*60)
+                    logger.warning("CONFIGURATION MISMATCH DETECTED!")
+                    logger.warning("The current settings (config file/CLI args) differ from the settings stored when this transfer was initiated.")
+                    logger.warning("To ensure consistency, this run will CONTINUE using the STORED settings from the database:")
+                    logger.warning(f"  - SmugMug Album Key: {stored_sm_key}")
+                    logger.warning(f"  - SmugMug Folder:    {stored_folder_norm or 'Root'}")
+                    logger.warning(f"  - Google Album ID:   {stored_gp_album_norm or 'Entire Library'}")
+                    logger.warning("If you want to use the NEW settings, please either:")
+                    logger.warning(f"  1. Delete the database file ('{args.db_file}') and restart.")
+                    logger.warning(f"  2. Run again with the '--force-refresh-list' flag.")
+                    logger.warning("="*60)
+                    print("\n" + "="*60)
+                    print("WARNING: CONFIGURATION MISMATCH DETECTED!")
+                    print("Current settings differ from stored settings for this transfer.")
+                    print(">>> CONTINUING WITH STORED SETTINGS FROM DATABASE <<<")
+                    print(f"    Target SmugMug Album Key: {stored_sm_key}")
+                    print(f"    Target SmugMug Folder:    {stored_folder_norm or 'Root'}")
+                    print(f"    Source Google Album ID:   {stored_gp_album_norm or 'Entire Library'}")
+                    print("\nIf you want to use the NEW settings, stop now (Ctrl+C) and either:")
+                    print(f"  1. Delete the database file: {args.db_file}")
+                    print("  2. Run again with --force-refresh-list")
+                    print("="*60 + "\n")
+                    time.sleep(5) # Give user time to read
+
+                    # *** IMPORTANT: Override the SmugMug object's target with stored values ***
+                    smugmug.album_key = stored_sm_key
+                    smugmug.album_api_uri = stored_config.get('smugmug_album_uri') # Get stored URI too
+                    smugmug.folder_name = stored_folder_norm # Use normalized stored folder
+                    smugmug.album_name = None # Clear name as we are using key/uri now
+                    # Also update the variables used for the initial config save check later
+                    current_target_album_key = stored_sm_key
+                    current_target_album_uri = smugmug.album_api_uri
+                    current_target_folder_path = stored_folder_norm
+                    current_google_album_arg = stored_gp_album_norm
+
+                else:
+                    logger.info("Configuration matches stored snapshot. Proceeding with resume.")
+                    print("Configuration matches stored state. Resuming transfer...")
+            else:
+                # DB exists, but no config snapshot (e.g., from older version)
+                logger.warning("Existing database found, but no stored configuration snapshot.")
+                logger.warning("Proceeding with CURRENT configuration settings.")
+                logger.warning("If configuration has changed since the database was created, results may be inconsistent.")
+                print("\nWARNING: Existing database found without a configuration snapshot.")
+                print(">>> Proceeding with CURRENT configuration settings. <<<")
+                # Optionally, save the current config now as the snapshot
+                if not db_manager.save_initial_config(current_target_album_key, current_target_album_uri, current_target_folder_path, current_google_album_arg):
+                     logger.error("Failed to save current configuration as snapshot.")
+
 
         # --- Reset Errors if Requested ---
         if args.reset_errors:
              db_manager.reset_failed_items()
-             total_db_items = db_manager.get_item_count()
+             total_db_items = db_manager.get_item_count() # Recount after potential reset
 
 
         # --- Get Items to Process from Database ---
@@ -341,7 +432,7 @@ def main():
         total_items_to_process = len(items_to_process)
         logger.info(f"Found {total_items_to_process} items requiring processing.")
         if total_items_to_process == 0:
-             logger.info("No items require processing.")
+             logger.info("No items require processing based on current database state and flags.")
              print("No items require processing.")
              final_stats = db_manager.get_stats()
              logger.info(f"Final Database Stats: {final_stats}")
@@ -372,10 +463,8 @@ def main():
             is_video = mime_type.startswith('video/')
             item_type = "Video" if is_video else "Photo"
 
-            # *** TRUNCATED ID FOR LOGGING ***
             truncated_id = f"{google_id[:LOG_ID_TRUNCATE_LEN]}...{google_id[-LOG_ID_TRUNCATE_LEN:]}" if len(google_id) > LOG_ID_TRUNCATE_LEN * 2 else google_id
             log_identifier = f"Item {current_item_number_in_batch}/{total_items_to_process} (ID: {truncated_id}, File: '{filename}', Type: {item_type}, Status: {current_status})"
-            # *** END TRUNCATED ID ***
 
             logger.info("-" * 50)
             logger.info(f"Processing {log_identifier}")
@@ -416,7 +505,6 @@ def main():
             needs_download_for_hash = not is_video and not is_heic and not current_md5_hash
             if needs_download_for_hash:
                 logger.debug(f"{log_identifier}: MD5 hash needed. Calling download function...")
-                # Pass the dictionary from the DB row
                 temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details_for_download)
 
                 if not temp_file_path:
@@ -424,20 +512,17 @@ def main():
                     db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, error_message="Download failed during hash check")
                     errors_in_run += 1
                     skipped_in_run += 1
-                    continue # Skip to next item
+                    continue
 
-                # Update DB if details were refreshed *during* download
                 if refreshed_details:
                      new_base_url = refreshed_details.get('baseUrl')
                      new_metadata_json = json.dumps(refreshed_details.get('mediaMetadata', {}))
                      db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-                     refreshed_details = None # Reset
+                     refreshed_details = None
 
-                # *** ADDED HASH LOGGING HERE ***
-                logger.info(f"{log_identifier}: Calculating MD5 hash...") # User feedback
-                print("   Calculating MD5 hash...") # Console feedback
+                logger.info(f"{log_identifier}: Calculating MD5 hash...")
+                print("   Calculating MD5 hash...")
                 calculated_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
-                # *** END ADDED HASH LOGGING ***
 
                 if not calculated_hash:
                     logger.error(f"{log_identifier}: MD5 hash calculation failed.")
@@ -471,11 +556,17 @@ def main():
                  if current_status in [STATUS_PENDING, STATUS_HASHED]:
                       exists_on_smugmug = False
                       log_reason = ""
+                      # *** Use the potentially overridden album key from the smugmug object ***
                       target_album_key_for_check = smugmug.album_key
-                      # *** ADDED SMUGMUG CHECK LOGGING ***
+                      if not target_album_key_for_check:
+                           logger.error(f"{log_identifier}: SmugMug target album key is missing in SmugMug object. Cannot check existence.")
+                           # This indicates a potential logic error earlier
+                           db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, error_message="SM album key missing during check")
+                           errors_in_run += 1; skipped_in_run += 1
+                           continue
+
                       logger.info(f"{log_identifier}: Checking SmugMug for duplicates...")
                       print("   Checking SmugMug for duplicates...")
-                      # *** END ADDED SMUGMUG CHECK LOGGING ***
                       logger.debug(f"{log_identifier}: Checking existence on SmugMug album key: {target_album_key_for_check}")
 
                       if is_video:
@@ -533,7 +624,6 @@ def main():
             # --- Download for Upload (if needed) ---
             if not temp_file_path or not os.path.exists(temp_file_path):
                  logger.debug(f"{log_identifier}: File not available locally. Calling download...")
-                 # Pass the potentially updated item_details dictionary
                  temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details_for_download)
 
                  if not temp_file_path:
@@ -543,20 +633,26 @@ def main():
                       skipped_in_run += 1
                       continue
 
-                 # Update DB if details were refreshed *during* this download
                  if refreshed_details:
                       new_base_url = refreshed_details.get('baseUrl')
                       new_metadata_json = json.dumps(refreshed_details.get('mediaMetadata', {}))
                       db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-                      refreshed_details = None # Reset
+                      refreshed_details = None
             else:
                  logger.debug(f"{log_identifier}: Using existing local file for upload: {temp_file_path}")
 
 
             # --- Perform Upload ---
+            # *** Use the potentially overridden album URI from the smugmug object ***
             target_album_uri_for_upload = smugmug.album_api_uri
+            if not target_album_uri_for_upload:
+                 logger.error(f"{log_identifier}: SmugMug target album URI is missing in SmugMug object. Cannot upload.")
+                 db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, error_message="SM album URI missing during upload")
+                 errors_in_run += 1; skipped_in_run += 1
+                 continue
+
             logger.info(f"{log_identifier}: Uploading to SmugMug URI: {target_album_uri_for_upload}...")
-            print(f"   Uploading to SmugMug...") # Console feedback
+            print(f"   Uploading to SmugMug...")
             db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
 
             upload_success = smugmug.upload_media(target_album_uri_for_upload, temp_file_path, filename, mime_type)
