@@ -22,7 +22,7 @@ import signal # Added for signal handling
 import colorlog
 
 # Local module imports
-# Make sure google_photos_module has the fail-fast download_photo
+# Make sure google_photos_module has the fail-fast download_photo & cleanup_temp_dir
 from google_photos_module import GooglePhotos, GoogleCredentialsNotFoundError
 # Make sure smugmug_module has attribute validation fix & removed sys import
 from smugmug_module import SmugMug, DEFAULT_SMUGMUG_CONFIG
@@ -50,6 +50,7 @@ from smugmug_module import SmugMug, DEFAULT_SMUGMUG_CONFIG
 # DONE v1.6: Refactor logging setup
 # DONE v1.6: Enhance console colors
 # DONE v1.6: Refactor cleanup logic
+# DONE v1.6: Change HEIC detection to use filename extension
 # TODO: Add support for Google Photos "Shared Albums" (might require different API scope/logic)
 # TODO: Investigate parallel uploads/downloads? (Complexity vs benefit)
 # TODO: Option to specify start/end date range for Google Photos fetch?
@@ -100,7 +101,7 @@ def setup_logging(debug=False):
     logger = logging.getLogger() # Get root logger
     logger.setLevel(log_level) # Set the minimum level for the logger itself
 
-    # Prevent adding handlers multiple times if setup_logging is called again
+    # Prevent adding handlers multiple times
     if logger.hasHandlers():
         logger.handlers.clear()
 
@@ -190,7 +191,6 @@ def cleanup(google_photos_instance):
     This function should be called in a 'finally' block to ensure it runs.
     """
     global logger
-    # Use logger if available, basic print otherwise
     log_func_info = logger.info if logger else lambda msg: print(f"INFO: {msg}")
     log_func_debug = logger.debug if logger else lambda msg: print(f"DEBUG: {msg}")
     log_func_error = logger.error if logger else lambda msg: print(f"ERROR: {msg}")
@@ -198,15 +198,13 @@ def cleanup(google_photos_instance):
 
     log_func_info("Running cleanup...")
 
-    # Explicitly clean up the temp directory using the GooglePhotos method
     if google_photos_instance and hasattr(google_photos_instance, 'cleanup_temp_dir'):
         try:
             log_func_debug("Calling Google Photos temporary directory cleanup...")
-            google_photos_instance.cleanup_temp_dir() # Call explicit cleanup
+            google_photos_instance.cleanup_temp_dir()
         except Exception as e:
             log_func_error(f"Error during explicit Google Photos temp dir cleanup: {e}", exc_info=True)
 
-    # Attempt to delete the instance (optional)
     if google_photos_instance:
         try:
             del google_photos_instance
@@ -214,25 +212,23 @@ def cleanup(google_photos_instance):
         except Exception as e:
             log_func_warning(f"Error during Google Photos instance deletion: {e}")
 
-    release_lock() # Release lock after other cleanup
+    release_lock()
     log_func_info("Cleanup complete.")
 
 
 # --- Main Function ---
 def main():
-    global logger, shutdown_requested # Declare globals
+    global logger, shutdown_requested
 
-    # Argument Parsing
     parser = argparse.ArgumentParser(description="Transfer Google Photos to SmugMug.")
-    # (Keep existing args)
     parser.add_argument('--google-photos-album-id', help='(Optional) Google Photos Album ID to process.')
-    parser.add_argument('--delete-from-google', action='store_true', help='(Simulated) Log deletion from Google Photos after successful transfer.')
+    parser.add_argument('--delete-from-google', action='store_true', help='(Simulated) Log deletion from Google Photos.')
     parser.add_argument('--smugmug-album', help='(Optional) Target SmugMug album name (overrides config).')
-    parser.add_argument('--smugmug-folder', help='(Optional) Target SmugMug folder path (e.g., "Folder/SubFolder") (overrides config).')
-    parser.add_argument('--dry-run', action='store_true', help='Perform a dry run (check existence, log actions, no uploads/deletions).')
-    parser.add_argument('--ignore-photos', action='store_true', help='Skip processing photos (images).')
+    parser.add_argument('--smugmug-folder', help='(Optional) Target SmugMug folder path (overrides config).')
+    parser.add_argument('--dry-run', action='store_true', help='Perform a dry run.')
+    parser.add_argument('--ignore-photos', action='store_true', help='Skip processing photos.')
     parser.add_argument('--ignore-videos', action='store_true', help='Skip processing videos.')
-    parser.add_argument('--process-heic', action='store_true', help='Attempt to process HEIC files (see README for warnings).')
+    parser.add_argument('--process-heic', action='store_true', help='Attempt to process HEIC files.')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging.')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args()
@@ -241,143 +237,94 @@ def main():
     setup_logging(args.debug)
 
     # Acquire Lock File
-    if not acquire_lock():
-        sys.exit(1)
+    if not acquire_lock(): sys.exit(1)
 
     # Register signal handlers (v1.6)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    if hasattr(signal, 'SIGBREAK'):
-         signal.signal(signal.SIGBREAK, signal_handler)
+    if hasattr(signal, 'SIGBREAK'): signal.signal(signal.SIGBREAK, signal_handler)
 
     # --- Initialization ---
-    google_photos = None
-    smugmug = None
-    start_time = time.time()
-
+    google_photos = None; smugmug = None; start_time = time.time()
     try:
         logger.info(f"--- Starting gp2sm v{__version__} ---")
-        logger.info(f"Dry Run Mode: {args.dry_run}")
-        logger.info(f"Processing HEIC: {args.process_heic}")
-        logger.info(f"Ignoring Photos: {args.ignore_photos}")
-        logger.info(f"Ignoring Videos: {args.ignore_videos}")
-        logger.info(f"Google Album Filter: {args.google_photos_album_id or 'None (Full Library)'}")
-        logger.info(f"Simulated Deletion: {args.delete_from_google}")
+        logger.info(f"Dry Run Mode: {args.dry_run}"); logger.info(f"Processing HEIC: {args.process_heic}")
+        logger.info(f"Ignoring Photos: {args.ignore_photos}"); logger.info(f"Ignoring Videos: {args.ignore_videos}")
+        logger.info(f"Google Album Filter: {args.google_photos_album_id or 'None'}"); logger.info(f"Simulated Deletion: {args.delete_from_google}")
 
-        # Initialize SmugMug
         logger.info(f"Initializing SmugMug using config: smugmug_config.json")
         smugmug = SmugMug(config_file='smugmug_config.json')
-        try:
-            smugmug.load_config()
-        except FileNotFoundError:
-             smugmug.generate_default_config()
-             sys.exit(0)
-        except Exception as e:
-             logger.critical(f"Failed to load or parse SmugMug config: {e}", exc_info=True)
-             print(f"Error: Failed to load SmugMug config. Check '{smugmug.config_file}' and logs.")
-             sys.exit(1)
+        try: smugmug.load_config()
+        except FileNotFoundError: smugmug.generate_default_config(); sys.exit(0)
+        except Exception as e: logger.critical(f"Failed SmugMug load: {e}", exc_info=True); print(f"Error: Failed SmugMug load."); sys.exit(1)
 
-        # Set process_heic (check config exists)
         if args.process_heic:
             if smugmug.config: smugmug.config['process_heic'] = True
-            else: logger.error("Cannot set process_heic: SmugMug config not loaded."); sys.exit(1)
-
-        # Override album/folder (check config exists)
+            else: logger.error("SmugMug config not loaded."); sys.exit(1)
         if args.smugmug_album:
-            logger.info(f"Overriding SmugMug album from command line: '{args.smugmug_album}'")
+            logger.info(f"Overriding SmugMug album: '{args.smugmug_album}'")
             if smugmug.config:
-                smugmug.config['album_name'] = args.smugmug_album
-                smugmug.config['album_key'] = DEFAULT_SMUGMUG_CONFIG['album_key']
-                smugmug.config['album_api_uri'] = DEFAULT_SMUGMUG_CONFIG['album_api_uri']
+                smugmug.config['album_name'] = args.smugmug_album; smugmug.config['album_key'] = DEFAULT_SMUGMUG_CONFIG['album_key']; smugmug.config['album_api_uri'] = DEFAULT_SMUGMUG_CONFIG['album_api_uri']
                 smugmug.album_name = args.smugmug_album; smugmug.album_key = None; smugmug.album_api_uri = None
-            else: logger.error("Cannot override album name: SmugMug config not loaded."); sys.exit(1)
-
+            else: logger.error("SmugMug config not loaded."); sys.exit(1)
         if args.smugmug_folder:
-             logger.info(f"Overriding SmugMug folder from command line: '{args.smugmug_folder}'")
-             if smugmug.config:
-                 smugmug.config['folder_name'] = args.smugmug_folder
-                 smugmug.folder_name = args.smugmug_folder
-             else: logger.error("Cannot override folder name: SmugMug config not loaded."); sys.exit(1)
+             logger.info(f"Overriding SmugMug folder: '{args.smugmug_folder}'")
+             if smugmug.config: smugmug.config['folder_name'] = args.smugmug_folder; smugmug.folder_name = args.smugmug_folder
+             else: logger.error("SmugMug config not loaded."); sys.exit(1)
 
-        # Authenticate SmugMug
         if not smugmug.check_config_and_authenticate(): sys.exit(1)
 
-        # Initialize Google Photos
         logger.info(f"Initializing Google Photos using credentials: google_api_keys.json")
         try:
             google_photos = GooglePhotos(credentials_file='google_api_keys.json', token_file='google_photos_token.json')
-            if not google_photos.is_authenticated():
-                 logger.critical("Google Photos initialization completed, but authentication failed.")
-                 print("\nError: Google Photos authentication failed. Check logs and credentials.")
-                 sys.exit(1)
+            if not google_photos.is_authenticated(): logger.critical("Google Photos auth failed."); print("\nError: GP auth failed."); sys.exit(1)
             logger.info("Google Photos initialized successfully.")
         except GoogleCredentialsNotFoundError as e: sys.exit(1)
-        except Exception as e:
-            logger.critical(f"An critical unexpected error occurred during Google Photos initialization: {e}", exc_info=True)
-            print(f"\nError: Unexpected error during Google Photos setup: {e}")
-            sys.exit(1)
+        except Exception as e: logger.critical(f"GP init error: {e}", exc_info=True); print(f"\nError: GP setup error: {e}"); sys.exit(1)
 
-        # Ensure target SmugMug album exists
         if not smugmug.get_or_create_album_in_path(smugmug.album_name or smugmug.album_key, smugmug.folder_name):
-            logger.critical("Failed to find or create the target SmugMug album. Cannot proceed.")
-            print("\nError: Could not verify or create the target SmugMug album.")
-            sys.exit(1)
-        logger.info(f"Confirmed target SmugMug album. Name: '{smugmug.album_name or '(Using Key)'}', Key: {smugmug.album_key}, URI: {smugmug.album_api_uri}")
+            logger.critical("Failed target SmugMug album setup."); print("\nError: Could not setup SmugMug album."); sys.exit(1)
+        logger.info(f"Confirmed target SmugMug album. Name: '{smugmug.album_name or '(Key)'}', Key: {smugmug.album_key}, URI: {smugmug.album_api_uri}")
 
-
-        # --- Fetch Google Photos Items ---
         logger.info("Fetching media items from Google Photos...")
         photos = google_photos.get_photos(args.google_photos_album_id)
         total_items = len(photos)
         logger.info(f"Found {total_items} total items in Google Photos.")
+        if total_items == 0: logger.info("No items found."); print("No items found."); sys.exit(0)
 
-        if total_items == 0:
-            logger.info("No items found in Google Photos library/album. Nothing to process."); print("No items found.")
-            sys.exit(0)
-
-        # --- Process Items ---
         processed_count = 0; uploaded_count = 0; duplicate_count = 0; skipped_count = 0; error_count = 0
-        assume_stale_urls = False # Flag for stateful heuristic
+        assume_stale_urls = False # <-- Stateful heuristic flag
 
         for item_index, original_item in enumerate(photos):
-            # Check for shutdown request (v1.6)
-            if shutdown_requested:
-                 logger.warning("Shutdown requested by signal. Stopping processing loop.")
-                 break
+            if shutdown_requested: logger.warning("Shutdown requested. Stopping."); break # v1.6 check
 
-            # Periodic Token Refresh Check
+            # Periodic Token Refresh
             if (item_index > 0 and (item_index + 1) % TOKEN_REFRESH_CHECK_INTERVAL == 0):
-                logger.debug(f"Performing periodic Google Photos token check (item {item_index + 1})...")
+                logger.debug(f"Periodic GP token check (item {item_index + 1})...")
                 if not google_photos.refresh_token_if_needed():
-                     logger.warning("Periodic token refresh failed. Attempting re-authentication...")
+                     logger.warning("Periodic refresh failed. Re-authenticating...")
                      if not google_photos.authenticate():
-                          logger.critical("Re-authentication failed. Stopping script.")
-                          print("\nError: Google Photos session invalid & could not re-authenticate.")
-                          shutdown_requested = True; break # Trigger cleanup and exit loop
-                     else:
-                          logger.info("Re-authentication successful.")
+                          logger.critical("Re-auth failed. Stopping."); print("\nError: GP session invalid."); shutdown_requested = True; break
+                     else: logger.info("Re-auth successful.")
 
             processed_count += 1
-            if not isinstance(original_item, dict): logger.error(f"Skipping item {item_index+1}/{total_items} - Invalid data"); error_count += 1; continue
-
+            if not isinstance(original_item, dict): logger.error(f"Skip item {item_index+1} - Invalid data"); error_count += 1; continue
             media_item_id = original_item.get('id'); filename = original_item.get('filename'); mime_type = original_item.get('mimeType')
-            if not media_item_id: logger.error(f"Skipping item {item_index+1}/{total_items} - Missing ID"); error_count += 1; continue
+            if not media_item_id: logger.error(f"Skip item {item_index+1} - Missing ID"); error_count += 1; continue
 
-            is_video = mime_type and mime_type.startswith('video/')
-            item_type = "Video" if is_video else "Photo"
-            logger.info("-" * 50)
-            logger.info(f"Processing {item_index + 1}/{total_items} - {item_type}: '{filename}' (ID: {media_item_id})")
+            is_video = mime_type and mime_type.startswith('video/'); item_type = "Video" if is_video else "Photo"
+            logger.info("-" * 50); logger.info(f"Processing {item_index + 1}/{total_items} - {item_type}: '{filename}' (ID: {media_item_id})")
             print("-" * 30); print(f"-> Processing {item_index + 1}/{total_items}: {filename} ({item_type})")
 
-            if not filename or not mime_type: logger.warning(f"Skipping item {item_index + 1}/{total_items} (ID: {media_item_id}) due to missing filename/mimeType."); skipped_count += 1; error_count += 1; continue
+            if not filename or not mime_type: logger.warning(f"Skip item {item_index + 1} (ID: {media_item_id}) missing filename/mimeType."); skipped_count += 1; error_count += 1; continue
             _, file_extension = os.path.splitext(filename)
 
-            if args.ignore_photos and not is_video: logger.info(f"Skipping photo '{filename}' (--ignore-photos)."); skipped_count += 1; continue
-            if args.ignore_videos and is_video: logger.info(f"Skipping video '{filename}' (--ignore-videos)."); skipped_count += 1; continue
+            if args.ignore_photos and not is_video: logger.info(f"Skip photo '{filename}' (--ignore-photos)."); skipped_count += 1; continue
+            if args.ignore_videos and is_video: logger.info(f"Skip video '{filename}' (--ignore-videos)."); skipped_count += 1; continue
 
-            is_heic = filename and filename.lower().endswith('.heic')
-            temp_file_path = None; google_file_hash = None
-            should_process_heic = False # Default
+            # --- HEIC Handling (Using filename extension) ---
+            is_heic = filename and filename.lower().endswith('.heic') # v1.6 change
+            temp_file_path = None; google_file_hash = None; should_process_heic = False
             if is_heic:
                 process_heic_config = False
                 if smugmug.config: process_heic_config = smugmug.config.get('process_heic', False)
@@ -385,126 +332,157 @@ def main():
                 if not should_process_heic: logger.info(f"Skipping HEIC file '{filename}'."); skipped_count += 1; continue
                 else: logger.warning(f"Processing HEIC file '{filename}'. NOTE: Converted to JPG by SmugMug. Duplicate check skipped.")
 
+            # ==============================================================
             # --- Download & MD5 Logic Block (v1.6 - stateful heuristic) ---
-            download_required = (not is_video and not is_heic) or (is_heic and should_process_heic) or (not args.dry_run and not (is_video or (is_heic and should_process_heic))) # Need download if image for MD5, or if HEIC/Video for upload
+            # ==============================================================
+            download_required_for_md5 = (not is_video and not is_heic) # Only for standard images
             current_item_data = original_item
-            error_code = None # Initialize error code
+            error_code = None; download_attempted = False
 
-            # Check if we need to proactively refresh
-            if download_required and assume_stale_urls and media_item_id:
-                 logger.info(f"  Proactively refreshing item details for '{filename}' due to previous 401/403.")
+            # --- Stateful Heuristic Check ---
+            if download_required_for_md5 and assume_stale_urls and media_item_id:
+                 logger.info(f"  Proactively refreshing item details for '{filename}' (MD5 check).")
                  try:
                       proactively_refreshed_item = google_photos.get_media_item(media_item_id)
                       if proactively_refreshed_item:
-                           logger.debug(f"  Proactive refresh successful for '{filename}'. Using fresh data.")
+                           logger.debug(f"  Proactive refresh successful for MD5 check '{filename}'.")
                            current_item_data = proactively_refreshed_item
-                           assume_stale_urls = False # Reset flag
-                      else:
-                           logger.warning(f"  Proactive refresh failed for '{filename}'. Will attempt with original data.")
-                           assume_stale_urls = False # Reset flag anyway? Yes, maybe it was transient.
-                 except Exception as proactive_refetch_err:
-                      logger.warning(f"  Error during proactive refresh for '{filename}': {proactive_refetch_err}. Will attempt with original data.")
-                      assume_stale_urls = False # Reset flag
+                           assume_stale_urls = False
+                      else: logger.warning(f"  Proactive refresh failed for MD5 check '{filename}'."); assume_stale_urls = False
+                 except Exception as proactive_refetch_err: logger.warning(f"  Error during proactive refresh (MD5): {proactive_refetch_err}"); assume_stale_urls = False
 
-            # Attempt download if required
-            if download_required:
-                 logger.debug(f"  Attempting download for '{filename}' {'using proactively refreshed data.' if current_item_data != original_item else 'using original data.'}")
+            # --- Download Attempt (for MD5) ---
+            if download_required_for_md5:
+                 logger.debug(f"  Attempting download for MD5 check '{filename}' {'using fresh data.' if current_item_data != original_item else 'using original data.'}")
+                 download_attempted = True
                  temp_file_path, _, _, _, _, error_code = google_photos.download_photo(current_item_data)
 
-                 # Reactive Re-fetch Logic (if first attempt failed with 401/403)
+                 # --- Reactive Re-fetch on 401/403 ---
                  if not temp_file_path and error_code in [401, 403]:
-                      logger.warning(f"  Download attempt failed for '{filename}' (Code: {error_code}). Attempting reactive refresh...")
-                      assume_stale_urls = True # Set flag: URLs from original batch are likely bad
+                      logger.warning(f"  Download attempt failed for MD5 check (Code: {error_code}). Refreshing...")
+                      original_error_code = error_code
+                      assume_stale_urls = True # Mark future URLs as likely stale
                       try:
                            refetched_item_reactive = google_photos.get_media_item(media_item_id)
                            if refetched_item_reactive:
-                                logger.info(f"  Successfully refreshed item details for '{filename}'. Retrying download once.")
-                                current_item_data = refetched_item_reactive # Update with latest data
-                                temp_file_path, _, _, _, _, error_code = google_photos.download_photo(current_item_data)
-                                if temp_file_path: logger.info(f"  Download succeeded on reactive retry for '{filename}'."); assume_stale_urls = False # Reset flag on success
-                                else: logger.error(f"  Download FAILED on reactive retry for '{filename}' (Code: {error_code}).") # Flag remains True
-                           else:
-                                logger.error(f"  Failed to get fresh item details for '{filename}' during reactive refresh. Skipping.")
-                                error_code = "Re-fetch Failed"
-                      except Exception as e:
-                           logger.error(f"  Error during reactive refresh/retry for '{filename}': {e}. Skipping.", exc_info=True)
-                           error_code = f"Re-fetch Error: {e}"
+                                logger.info(f"  Successfully refreshed item details. Retrying download once (MD5).")
+                                current_item_data = refetched_item_reactive # Update data to use
+                                temp_file_path, _, _, _, _, retry_error_code = google_photos.download_photo(current_item_data)
+                                error_code = retry_error_code # Update error code with retry result
+                                if temp_file_path: logger.info(f"  Download succeeded on reactive retry (MD5)."); assume_stale_urls = False # Success resets flag
+                                else: logger.error(f"  Download FAILED on reactive retry (MD5; Code: {error_code}).") # Flag stays True
+                           else: logger.error(f"  Failed reactive re-fetch (MD5). Skipping."); error_code = "Re-fetch Failed"
+                      except Exception as e: logger.error(f"  Error reactive re-fetch/retry (MD5): {e}", exc_info=True); error_code = f"Re-fetch Error: {e}"
+                      # Ensure error_code has a value if retry failed
+                      if not temp_file_path and error_code is None: error_code = original_error_code or "Unknown Retry Failure"
                  elif temp_file_path:
-                      assume_stale_urls = False # Reset flag if download succeeded without 401/403
+                      assume_stale_urls = False # Reset flag if initial download worked
 
-                 # If still no file after all attempts and download was required for subsequent steps
-                 if not temp_file_path and ((not is_video and not is_heic) or not args.dry_run):
-                      logger.error(f"  Skipping item '{filename}' due to download failure (Final code: {error_code}).")
-                      skipped_count += 1; error_count += 1
-                      continue # Skip this item completely
-
-            # Calculate MD5 if needed (standard image) and download succeeded
-            if not is_video and not is_heic:
+            # --- Calculate MD5 if applicable and successful ---
+            if not is_video and not is_heic: # Standard images
                 if temp_file_path and os.path.exists(temp_file_path):
-                    logger.debug(f"Calculating MD5 hash for downloaded file: {temp_file_path}")
+                    logger.debug(f"Calculating MD5 hash for {temp_file_path}")
                     google_file_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
                     if not google_file_hash:
-                        logger.error(f"  Skipping image '{filename}' due to MD5 calculation failure.")
+                        logger.error(f"  Skipping image '{filename}' - MD5 calc failed.")
                         skipped_count += 1; error_count += 1
                         if os.path.exists(temp_file_path):
-                            try: os.remove(temp_file_path); logger.debug(f"  Removed temp file {temp_file_path} after hash failure.")
-                            except Exception as e: logger.warning(f"  Could not remove temp file {temp_file_path} after hash failure: {e}")
+                            try: os.remove(temp_file_path); logger.debug(f"  Removed temp file after hash failure.")
+                            except Exception as e: logger.warning(f"  Could not remove temp file after hash failure: {e}")
                         temp_file_path = None
-                        continue
-                    logger.debug(f"  Calculated MD5 for '{filename}': {google_file_hash}.")
-                else:
-                    # If download failed but was needed for MD5, we skipped earlier
-                    pass # Should have already continued
+                        continue # Skip item
+                    logger.debug(f"  Calculated MD5: {google_file_hash}.")
+                elif download_attempted: # Download was tried but failed
+                    logger.error(f"  Skipping image '{filename}' as download failed (Code: {error_code}).")
+                    skipped_count += 1; error_count += 1
+                    continue # Skip item
 
+            # ==============================================================
+            # --- End Download & MD5 Logic Block ---
+            # ==============================================================
 
-            # --- Check existence on SmugMug ---
-            exists_on_smugmug = False; log_reason = ""
-            target_album_key = smugmug.album_key
-            if not target_album_key: logger.error(f"Target SmugMug key missing for '{filename}'. Skip existence check."); error_count += 1; continue
+            # --- Check SmugMug Existence ---
+            exists_on_smugmug = False; log_reason = ""; target_album_key = smugmug.album_key
+            if not target_album_key: logger.error(f"SmugMug key missing for '{filename}'. Skip check."); error_count += 1; continue
 
-            if is_video:
-                log_reason = "filename match"; exists_on_smugmug = smugmug.check_media_exists(target_album_key, filename, mime_type)
-            elif is_heic and should_process_heic:
-                log_reason = "HEIC (skipped)"; exists_on_smugmug = False; logger.debug("Skipping SmugMug check (processing HEIC).")
+            if is_video: log_reason = "filename"; exists_on_smugmug = smugmug.check_media_exists(target_album_key, filename, mime_type)
+            elif is_heic and should_process_heic: log_reason = "HEIC (skipped)"; exists_on_smugmug = False; logger.debug("Skipping SmugMug check (processing HEIC).")
             elif not is_video and not is_heic: # Standard image
                 log_reason = "MD5 hash"
                 if google_file_hash: exists_on_smugmug = smugmug.check_media_exists(target_album_key, filename, mime_type, file_hash=google_file_hash)
-                else: logger.warning(f"MD5 missing for image '{filename}', cannot check SmugMug existence."); skipped_count += 1; error_count += 1; continue # Skip if hash missing
+                else: logger.warning(f"MD5 missing for image '{filename}', cannot check SmugMug."); skipped_count += 1; error_count += 1; continue # Skip if hash missing
 
-            # Handle Duplicates
+            # --- Handle Duplicates ---
             if exists_on_smugmug:
-                logger.info(f"  FOUND on SmugMug ({log_reason})."); print(f"   Exists on SmugMug ({log_reason}). Skipping.")
+                logger.info(f"  FOUND on SmugMug ({log_reason})."); print(f"   Exists ({log_reason}). Skipping.")
                 duplicate_count += 1
                 if temp_file_path and os.path.exists(temp_file_path): # Cleanup if downloaded
-                    try: os.remove(temp_file_path); logger.debug(f"  Removed temp file {temp_file_path} for duplicate.")
-                    except Exception as e: logger.warning(f"  Could not remove temp file {temp_file_path} after duplicate check: {e}")
+                    try: os.remove(temp_file_path); logger.debug(f"  Removed temp file for duplicate.")
+                    except Exception as e: logger.warning(f"  Could not remove temp file after duplicate check: {e}")
                     temp_file_path = None
                 if args.delete_from_google: google_photos.remove_photo(media_item_id, dry_run=args.dry_run)
                 continue
-            else:
-                 logger.info(f"  Not found on SmugMug ({log_reason}). Will proceed.")
-
+            else: logger.info(f"  Not found on SmugMug ({log_reason}). Proceeding.")
 
             # --- Prepare for Upload ---
             if args.dry_run:
-                logger.info(f"  [DRY RUN] Would attempt upload for '{filename}'.")
-                if temp_file_path and os.path.exists(temp_file_path): # Cleanup if downloaded
+                logger.info(f"  [DRY RUN] Would upload '{filename}'.")
+                if temp_file_path and os.path.exists(temp_file_path):
                      try: os.remove(temp_file_path); logger.debug("  [DRY RUN] Removed temp file.")
-                     except Exception as e_rem: logger.warning(f"  [DRY RUN] Could not remove temp file {temp_file_path}: {e_rem}")
+                     except Exception as e_rem: logger.warning(f"  [DRY RUN] Could not remove temp file: {e_rem}")
                 temp_file_path = None
                 uploaded_count += 1
                 if args.delete_from_google: google_photos.remove_photo(media_item_id, dry_run=True)
                 continue
 
-            # --- Download for Upload (if not already downloaded) ---
-            # The logic block above should have already downloaded if needed.
-            # If temp_file_path is still None here, it means download failed or wasn't required for MD5/HEIC.
+            # --- Download for Upload (if not already available) ---
             if not temp_file_path or not os.path.exists(temp_file_path):
-                 # This indicates an item that needs upload but failed download earlier.
-                 # The earlier 'continue' should have caught this. Log error if reached.
-                 logger.error(f"Logic error or prior download failure: Temp file for '{filename}' needed for upload but missing. Skipping.")
-                 error_count += 1
-                 continue
+                 logger.debug(f"Downloading '{filename}' specifically for upload...")
+                 # Re-apply stateful heuristic logic here too
+                 current_item_data_upload = original_item
+                 error_code_upload = None
+                 download_attempted_upload = False
+
+                 if assume_stale_urls and media_item_id:
+                      logger.info(f"  Proactively refreshing '{filename}' (upload phase).")
+                      try:
+                           proactively_refreshed_item_upload = google_photos.get_media_item(media_item_id)
+                           if proactively_refreshed_item_upload:
+                                logger.debug(f"  Proactive refresh successful (upload phase).")
+                                current_item_data_upload = proactively_refreshed_item_upload
+                                assume_stale_urls = False
+                           else: logger.warning(f"  Proactive refresh failed (upload phase)."); assume_stale_urls = False
+                      except Exception as proactive_refetch_err_upload: logger.warning(f"  Error proactive refresh (upload): {proactive_refetch_err_upload}"); assume_stale_urls = False
+
+                 logger.debug(f"  Attempting download for upload '{filename}' {'using fresh data.' if current_item_data_upload != original_item else 'using original data.'}")
+                 download_attempted_upload = True
+                 temp_file_path, _, _, _, _, error_code_upload = google_photos.download_photo(current_item_data_upload)
+
+                 # Reactive Re-fetch on 401/403 for upload download
+                 if not temp_file_path and error_code_upload in [401, 403]:
+                      logger.warning(f"  Download attempt failed for upload (Code: {error_code_upload}). Refreshing...")
+                      original_error_code_upload = error_code_upload
+                      assume_stale_urls = True
+                      try:
+                           refetched_item_reactive_upload = google_photos.get_media_item(media_item_id)
+                           if refetched_item_reactive_upload:
+                                logger.info(f"  Refreshed item details. Retrying download once (upload).")
+                                current_item_data_upload = refetched_item_reactive_upload
+                                temp_file_path, _, _, _, _, retry_error_code_upload = google_photos.download_photo(current_item_data_upload)
+                                error_code_upload = retry_error_code_upload
+                                if temp_file_path: logger.info(f"  Download succeeded on reactive retry (upload)."); assume_stale_urls = False
+                                else: logger.error(f"  Download FAILED on reactive retry (upload; Code: {error_code_upload}).")
+                           else: logger.error(f"  Failed reactive re-fetch (upload). Skipping."); error_code_upload = "Re-fetch Failed"
+                      except Exception as e: logger.error(f"  Error reactive re-fetch/retry (upload): {e}", exc_info=True); error_code_upload = f"Re-fetch Error: {e}"
+                      if not temp_file_path and error_code_upload is None: error_code_upload = original_error_code_upload or "Unknown Retry Failure"
+                 elif temp_file_path:
+                     assume_stale_urls = False
+
+                 # Final check before upload
+                 if not temp_file_path or not os.path.exists(temp_file_path):
+                      logger.error(f"Cannot upload '{filename}': Download failed before upload step (Code: {error_code_upload}).")
+                      error_count += 1
+                      continue
 
             # --- Perform Upload ---
             logger.info(f"  Uploading '{filename}' to SmugMug album '{smugmug.album_name or smugmug.album_key}'...")
@@ -514,59 +492,32 @@ def main():
                 logger.info(f"  Successfully uploaded '{filename}' to SmugMug.")
                 uploaded_count += 1
                 if args.delete_from_google: google_photos.remove_photo(media_item_id, dry_run=args.dry_run)
-            else:
-                logger.error(f"  Upload FAILED for '{filename}'.")
-                error_count += 1
-
-            # Optional brief pause
-            # time.sleep(0.1)
+            else: logger.error(f"  Upload FAILED for '{filename}'."); error_count += 1
 
         # --- End of Loop ---
         logger.info("--- Processing Complete ---")
 
         # --- Final Summary ---
         total_duration = time.time() - start_time
-        logger.info("-" * 50)
-        logger.info("Final Transfer Summary:")
-        logger.info(f"  Items Processed: {processed_count}/{total_items}")
-        logger.info(f"  Items Uploaded (or Dry Run success): {uploaded_count}")
-        logger.info(f"  Duplicates Found on SmugMug: {duplicate_count}")
-        logger.info(f"  Items Skipped (Flags/HEIC/Other): {skipped_count}")
-        logger.info(f"  Errors Encountered: {error_count}")
-        logger.info(f"  Simulated Deletion Requested: {args.delete_from_google} (Simulated - API Unsupported)")
-        logger.info(f"  Total execution time: {total_duration:.2f} seconds")
-        logger.info("-" * 50)
-        # Final status logging
-        items_attempted = total_items - skipped_count
-        successful_outcomes = uploaded_count + duplicate_count
-        if error_count == 0 and items_attempted == successful_outcomes:
-             logger.info("Script finished successfully.")
-        elif error_count > 0:
-             logger.warning(f"Script finished with {error_count} errors. Please review logs.")
-        else:
-             logger.warning("Script finished, but item counts suggest some discrepancies. Please review logs.")
+        logger.info("-" * 50); logger.info("Final Transfer Summary:")
+        logger.info(f"  Items Processed: {processed_count}/{total_items}"); logger.info(f"  Items Uploaded (or Dry Run success): {uploaded_count}")
+        logger.info(f"  Duplicates Found on SmugMug: {duplicate_count}"); logger.info(f"  Items Skipped (Flags/HEIC/Other): {skipped_count}")
+        logger.info(f"  Errors Encountered: {error_count}"); logger.info(f"  Simulated Deletion Requested: {args.delete_from_google} (Simulated)")
+        logger.info(f"  Total execution time: {total_duration:.2f} seconds"); logger.info("-" * 50)
+        items_attempted = total_items - skipped_count; successful_outcomes = uploaded_count + duplicate_count
+        if error_count == 0 and items_attempted == successful_outcomes: logger.info("Script finished successfully.")
+        elif error_count > 0: logger.warning(f"Script finished with {error_count} errors. Please review logs.")
+        else: logger.warning("Script finished, but item counts suggest discrepancies.")
 
-        print("\n" + "=" * 60)
-        print("Transfer Summary:")
-        print(f"- Items Processed: {processed_count}/{total_items}")
-        print(f"- Uploaded: {uploaded_count}")
-        print(f"- Duplicates Found: {duplicate_count}")
-        print(f"- Skipped (Flags/HEIC): {skipped_count}")
-        print(f"- Errors: {error_count}")
-        print(f"- Total Time: {total_duration:.2f} seconds")
-        print(f"- Log file: {LOG_FILE}")
-        print("=" * 60)
+        print("\n" + "=" * 60); print("Transfer Summary:")
+        print(f"- Items Processed: {processed_count}/{total_items}"); print(f"- Uploaded: {uploaded_count}")
+        print(f"- Duplicates Found: {duplicate_count}"); print(f"- Skipped (Flags/HEIC): {skipped_count}")
+        print(f"- Errors: {error_count}"); print(f"- Total Time: {total_duration:.2f} seconds"); print(f"- Log file: {LOG_FILE}"); print("=" * 60)
 
     except KeyboardInterrupt:
-        if not shutdown_requested: # Log only if not already handled by signal
-             logger.warning("Keyboard interrupt detected outside signal handler. Shutting down gracefully...")
-             print("\nKeyboard interrupt received. Cleaning up...")
-             shutdown_requested = True # Ensure flag is set
-    except Exception as e:
-        logger.critical(f"A critical unexpected error occurred in main: {e}", exc_info=True)
-        print(f"\nA critical unexpected error occurred: {e}. Check log file '{LOG_FILE}'.")
-    finally:
-        cleanup(google_photos)
+        if not shutdown_requested: logger.warning("Keyboard interrupt detected."); print("\nKeyboard interrupt. Cleaning up."); shutdown_requested = True
+    except Exception as e: logger.critical(f"A critical unexpected error occurred in main: {e}", exc_info=True); print(f"\nCritical error: {e}. Check log '{LOG_FILE}'.")
+    finally: cleanup(google_photos)
 
 if __name__ == "__main__":
     main()
