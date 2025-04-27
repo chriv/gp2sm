@@ -13,7 +13,6 @@ import hashlib
 import json
 import logging
 import os
-import sys
 
 # Third-party imports
 import requests

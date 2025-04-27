@@ -11,10 +11,8 @@ __version__ = "1.6"  # Version includes signal handling, logging improvements
 
 # Standard library imports
 import argparse
-import json                 # Needed for JSON checks
 import logging
 import os
-import shutil
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -69,20 +67,31 @@ def signal_handler(sig, frame):
     """Handles termination signals for graceful shutdown."""
     global shutdown_requested, logger
     if not shutdown_requested: # Prevent multiple shutdown messages
+        # *** Initialize signal_name before the try block ***
+        # Use the signal number as a sensible default
+        signal_name = f"Signal {sig}"
         try:
+             # Attempt to get the more descriptive signal name
              signal_name = signal.Signals(sig).name
         except ValueError:
-             signal_name = f"Signal {sig}"
+             # If the signal number isn't recognized, signal_name keeps the default value
+             pass # No action needed here, default is already set
 
         # Use logger if available, otherwise print
+        # Define log_func/print_func based on logger existence
         log_func = logger.warning if logger else lambda msg: print(f"WARNING: {msg}")
         print_func = print
 
+        # Now log using the guaranteed-to-be-defined signal_name
         log_func(f"Received signal {signal_name}. Initiating graceful shutdown...")
         print_func(f"\nSignal {signal_name} received. Cleaning up...")
         shutdown_requested = True
     else:
-        if logger: logger.debug(f"Shutdown already requested. Received signal {signal_name} ({sig}) again.")
+        # In the 'else' block, signal_name might not be defined if the FIRST
+        # signal received caused an error in the lookup.
+        # It's simpler and safer just to log the signal number here.
+        if logger:
+            logger.debug(f"Shutdown already requested. Received signal {sig} again.")
 
 # --- Logging Setup (v1.6 Refactor) ---
 def setup_logging(debug=False):
