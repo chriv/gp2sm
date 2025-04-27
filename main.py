@@ -1,5 +1,7 @@
 # Google Photos to SmugMug Transfer Script (v1.9)
 # Added configuration snapshot check on resume.
+# Fixed ImportError for table name constant.
+# Renames database file on successful completion.
 
 __version__ = "1.9" # Version remains 1.9 as requested
 
@@ -10,6 +12,7 @@ import os
 import sys
 import time
 import json # For parsing metadata from DB
+import datetime # For timestamp in filename
 from logging.handlers import RotatingFileHandler
 import signal # For signal handling
 
@@ -20,7 +23,7 @@ import colorlog
 from google_photos_module import GooglePhotos, GoogleCredentialsNotFoundError
 from smugmug_module import SmugMug, DEFAULT_SMUGMUG_CONFIG
 from database_manager import ( # Import new DB manager and constants
-    DatabaseManager, DB_FILE_DEFAULT, MEDIA_TABLE_NAME, # Use specific table name
+    DatabaseManager, DB_FILE_DEFAULT, MEDIA_TABLE_NAME,
     STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
     STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED, STATUS_UPLOADED_SUCCESS,
     STATUS_DUPLICATE_HASH, STATUS_DUPLICATE_FILENAME, STATUS_SKIPPED_FILTER,
@@ -195,6 +198,8 @@ def main():
     smugmug = None
     google_photos = None
     db_manager = None
+    # Flag to track if cleanup/rename was handled in the main try block
+    cleanup_handled_in_try = False
 
     start_time = time.time()
 
@@ -262,36 +267,30 @@ def main():
         logger.info("SmugMug initialization and authentication successful.")
 
         # --- Determine Target SmugMug Album/Folder from CURRENT config/args ---
-        # This determines the *intended* target for this specific run
         current_target_album_name = smugmug.config.get('album_name') if smugmug.config else None
         current_target_folder_path = smugmug.config.get('folder_name') if smugmug.config else None
         current_target_album_key = smugmug.config.get('album_key') if smugmug.config else None
         current_target_album_uri = smugmug.config.get('album_api_uri') if smugmug.config else None
 
         # --- Ensure Target SmugMug Album Exists (based on current config/args) ---
-        # This step finds/creates the album based on the current intent,
-        # and sets the key/uri in the smugmug object for potential use later.
         if current_target_album_name and current_target_album_name != DEFAULT_SMUGMUG_CONFIG['album_name']:
              logger.info(f"Ensuring SmugMug album '{current_target_album_name}' exists in folder '{current_target_folder_path or 'root'}' (based on current settings)...")
              if not smugmug.get_or_create_album_in_path(current_target_album_name, current_target_folder_path):
                   logger.critical("Failed to find or create target SmugMug album by name.")
                   print("\nError: Could not set up the target SmugMug album by name.", file=sys.stderr)
                   sys.exit(1)
-             # Update current key/uri based on the result of get_or_create
              current_target_album_key = smugmug.album_key
              current_target_album_uri = smugmug.album_api_uri
         elif current_target_album_key and current_target_album_key != DEFAULT_SMUGMUG_CONFIG['album_key']:
              logger.info(f"Using existing SmugMug album specified by key: {current_target_album_key} (based on current settings)")
-             # Ensure the URI is also set in the smugmug object if using key
              smugmug.album_key = current_target_album_key
              smugmug.album_api_uri = current_target_album_uri
-             smugmug.album_name = None # Clear name if using key
+             smugmug.album_name = None
         else:
              logger.critical("No valid target SmugMug album specified in current config or via CLI.")
              print("\nError: Specify target SmugMug album in config or use --smugmug-album.", file=sys.stderr)
              sys.exit(1)
 
-        # Log the target determined from *current* settings
         logger.info(f"Current Settings Target - SmugMug Key: {current_target_album_key}, URI: {current_target_album_uri}, Folder: '{current_target_folder_path or 'root'}'")
 
         # --- Initialize Google Photos ---
@@ -324,16 +323,13 @@ def main():
             else: logger.info("Database empty. Fetching list from Google Photos and saving config snapshot.")
 
             print("Fetching initial media list from Google Photos...")
-            photos_list = google_photos.get_photos(current_google_album_arg) # Use current GP album arg
+            photos_list = google_photos.get_photos(current_google_album_arg)
             logger.info(f"Fetched {len(photos_list)} items from Google Photos.")
 
             if photos_list:
-                 # Save the config snapshot *before* adding items
                  if not db_manager.save_initial_config(current_target_album_key, current_target_album_uri, current_target_folder_path, current_google_album_arg):
                       logger.error("Failed to save initial configuration snapshot to database. Proceeding without snapshot.")
-                      # Continue, but resuming might have issues if config changes later
 
-                 # Add items to DB, using the confirmed *current* SmugMug album key
                  added_count = db_manager.add_item_batch(photos_list, current_target_album_key)
                  logger.info(f"Populated database with {added_count} new items.")
                  total_db_items = db_manager.get_item_count()
@@ -347,12 +343,10 @@ def main():
             print(f"Found {total_db_items} items tracked in the database. Checking configuration...")
 
             if stored_config:
-                # Compare stored config with current config
                 stored_sm_key = stored_config.get('smugmug_album_key')
-                stored_sm_folder = stored_config.get('smugmug_folder_name') # Might be None
-                stored_gp_album = stored_config.get('google_album_id') # Might be None
+                stored_sm_folder = stored_config.get('smugmug_folder_name')
+                stored_gp_album = stored_config.get('google_album_id')
 
-                # Normalize None/empty strings for comparison
                 current_folder_norm = current_target_folder_path if current_target_folder_path else None
                 stored_folder_norm = stored_sm_folder if stored_sm_folder else None
                 current_gp_album_norm = current_google_album_arg if current_google_album_arg else None
@@ -372,34 +366,31 @@ def main():
                 if mismatch:
                     logger.warning("="*60)
                     logger.warning("CONFIGURATION MISMATCH DETECTED!")
-                    logger.warning("The current settings (config file/CLI args) differ from the settings stored when this transfer was initiated.")
-                    logger.warning("To ensure consistency, this run will CONTINUE using the STORED settings from the database:")
+                    logger.warning("Current settings differ from stored settings for this transfer.")
+                    logger.warning("CONTINUING WITH STORED settings from the database:")
                     logger.warning(f"  - SmugMug Album Key: {stored_sm_key}")
                     logger.warning(f"  - SmugMug Folder:    {stored_folder_norm or 'Root'}")
                     logger.warning(f"  - Google Album ID:   {stored_gp_album_norm or 'Entire Library'}")
-                    logger.warning("If you want to use the NEW settings, please either:")
-                    logger.warning(f"  1. Delete the database file ('{args.db_file}') and restart.")
-                    logger.warning(f"  2. Run again with the '--force-refresh-list' flag.")
+                    logger.warning("To use NEW settings, stop (Ctrl+C) and either:")
+                    logger.warning(f"  1. Delete database: '{args.db_file}'")
+                    logger.warning(f"  2. Run with '--force-refresh-list'")
                     logger.warning("="*60)
                     print("\n" + "="*60)
                     print("WARNING: CONFIGURATION MISMATCH DETECTED!")
-                    print("Current settings differ from stored settings for this transfer.")
                     print(">>> CONTINUING WITH STORED SETTINGS FROM DATABASE <<<")
                     print(f"    Target SmugMug Album Key: {stored_sm_key}")
                     print(f"    Target SmugMug Folder:    {stored_folder_norm or 'Root'}")
                     print(f"    Source Google Album ID:   {stored_gp_album_norm or 'Entire Library'}")
-                    print("\nIf you want to use the NEW settings, stop now (Ctrl+C) and either:")
-                    print(f"  1. Delete the database file: {args.db_file}")
+                    print("\nTo use NEW settings, stop now (Ctrl+C) and either:")
+                    print(f"  1. Delete database file: {args.db_file}")
                     print("  2. Run again with --force-refresh-list")
                     print("="*60 + "\n")
-                    time.sleep(5) # Give user time to read
+                    time.sleep(5)
 
-                    # *** IMPORTANT: Override the SmugMug object's target with stored values ***
                     smugmug.album_key = stored_sm_key
-                    smugmug.album_api_uri = stored_config.get('smugmug_album_uri') # Get stored URI too
-                    smugmug.folder_name = stored_folder_norm # Use normalized stored folder
-                    smugmug.album_name = None # Clear name as we are using key/uri now
-                    # Also update the variables used for the initial config save check later
+                    smugmug.album_api_uri = stored_config.get('smugmug_album_uri')
+                    smugmug.folder_name = stored_folder_norm
+                    smugmug.album_name = None
                     current_target_album_key = stored_sm_key
                     current_target_album_uri = smugmug.album_api_uri
                     current_target_folder_path = stored_folder_norm
@@ -409,13 +400,10 @@ def main():
                     logger.info("Configuration matches stored snapshot. Proceeding with resume.")
                     print("Configuration matches stored state. Resuming transfer...")
             else:
-                # DB exists, but no config snapshot (e.g., from older version)
                 logger.warning("Existing database found, but no stored configuration snapshot.")
                 logger.warning("Proceeding with CURRENT configuration settings.")
-                logger.warning("If configuration has changed since the database was created, results may be inconsistent.")
                 print("\nWARNING: Existing database found without a configuration snapshot.")
                 print(">>> Proceeding with CURRENT configuration settings. <<<")
-                # Optionally, save the current config now as the snapshot
                 if not db_manager.save_initial_config(current_target_album_key, current_target_album_uri, current_target_folder_path, current_google_album_arg):
                      logger.error("Failed to save current configuration as snapshot.")
 
@@ -423,7 +411,7 @@ def main():
         # --- Reset Errors if Requested ---
         if args.reset_errors:
              db_manager.reset_failed_items()
-             total_db_items = db_manager.get_item_count() # Recount after potential reset
+             total_db_items = db_manager.get_item_count()
 
 
         # --- Get Items to Process from Database ---
@@ -431,251 +419,248 @@ def main():
         items_to_process = db_manager.get_items_to_process(retry_errors=args.retry_errors)
         total_items_to_process = len(items_to_process)
         logger.info(f"Found {total_items_to_process} items requiring processing.")
-        if total_items_to_process == 0:
+        if total_items_to_process == 0 and not is_initial_run: # Check if it was just an initial run
              logger.info("No items require processing based on current database state and flags.")
              print("No items require processing.")
-             final_stats = db_manager.get_stats()
-             logger.info(f"Final Database Stats: {final_stats}")
-             print("\nFinal Stats:")
-             for status, count in sorted(final_stats.items()):
-                  if count > 0: print(f"- {status}: {count}")
-             sys.exit(0)
+             # Proceed to final summary and potential rename
+        elif total_items_to_process == 0 and is_initial_run:
+             logger.info("Initial run completed, but no items needed processing (e.g., all filtered).")
+             print("Initial run completed, no items required processing.")
+             # Proceed to final summary and potential rename
 
 
         # --- Process Items from DB ---
         processed_in_run = 0; uploaded_in_run = 0; duplicates_in_run = 0; skipped_in_run = 0; errors_in_run = 0
 
-        for item_index, item_row in enumerate(items_to_process):
-            current_item_number_in_batch = item_index + 1
-            if shutdown_requested:
-                logger.warning(f"Shutdown requested. Stopping processing loop.")
-                break
+        # Only loop if there are items to process
+        if total_items_to_process > 0:
+            for item_index, item_row in enumerate(items_to_process):
+                current_item_number_in_batch = item_index + 1
+                if shutdown_requested:
+                    logger.warning(f"Shutdown requested. Stopping processing loop.")
+                    break
 
-            # Extract data from DB row
-            google_id = item_row['google_id']
-            filename = item_row['filename']
-            mime_type = item_row['mime_type']
-            current_status = item_row['status']
-            db_md5_hash = item_row['md5_hash']
-            # Create a mutable dictionary for the current item's details
-            item_details_for_download = dict(item_row)
+                google_id = item_row['google_id']
+                filename = item_row['filename']
+                mime_type = item_row['mime_type']
+                current_status = item_row['status']
+                db_md5_hash = item_row['md5_hash']
+                item_details_for_download = dict(item_row)
 
-            is_video = mime_type.startswith('video/')
-            item_type = "Video" if is_video else "Photo"
+                is_video = mime_type.startswith('video/')
+                item_type = "Video" if is_video else "Photo"
 
-            truncated_id = f"{google_id[:LOG_ID_TRUNCATE_LEN]}...{google_id[-LOG_ID_TRUNCATE_LEN:]}" if len(google_id) > LOG_ID_TRUNCATE_LEN * 2 else google_id
-            log_identifier = f"Item {current_item_number_in_batch}/{total_items_to_process} (ID: {truncated_id}, File: '{filename}', Type: {item_type}, Status: {current_status})"
+                truncated_id = f"{google_id[:LOG_ID_TRUNCATE_LEN]}...{google_id[-LOG_ID_TRUNCATE_LEN:]}" if len(google_id) > LOG_ID_TRUNCATE_LEN * 2 else google_id
+                log_identifier = f"Item {current_item_number_in_batch}/{total_items_to_process} (ID: {truncated_id}, File: '{filename}', Type: {item_type}, Status: {current_status})"
 
-            logger.info("-" * 50)
-            logger.info(f"Processing {log_identifier}")
-            print("-" * 30)
-            print(f"-> Processing {current_item_number_in_batch}/{total_items_to_process}: {filename} ({item_type}) [Status: {current_status}]")
+                logger.info("-" * 50)
+                logger.info(f"Processing {log_identifier}")
+                print("-" * 30)
+                print(f"-> Processing {current_item_number_in_batch}/{total_items_to_process}: {filename} ({item_type}) [Status: {current_status}]")
 
-            processed_in_run += 1
-            temp_file_path = None
-            current_md5_hash = db_md5_hash
-            refreshed_details = None # Reset for each item
+                processed_in_run += 1
+                temp_file_path = None
+                current_md5_hash = db_md5_hash
+                refreshed_details = None
 
-            # --- Apply Filters ---
-            if args.ignore_photos and not is_video:
-                 logger.info(f"{log_identifier}: Marked to skip (Photo).")
-                 db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, error_message="Skipped via --ignore-photos")
-                 skipped_in_run += 1
-                 continue
-            if args.ignore_videos and is_video:
-                 logger.info(f"{log_identifier}: Marked to skip (Video).")
-                 db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, error_message="Skipped via --ignore-videos")
-                 skipped_in_run += 1
-                 continue
+                # --- Apply Filters ---
+                if args.ignore_photos and not is_video:
+                     logger.info(f"{log_identifier}: Marked to skip (Photo).")
+                     db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, error_message="Skipped via --ignore-photos")
+                     skipped_in_run += 1
+                     continue
+                if args.ignore_videos and is_video:
+                     logger.info(f"{log_identifier}: Marked to skip (Video).")
+                     db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, error_message="Skipped via --ignore-videos")
+                     skipped_in_run += 1
+                     continue
 
-            # --- HEIC Handling ---
-            is_heic = filename.lower().endswith('.heic')
-            should_process_heic = args.process_heic or (smugmug.config and smugmug.config.get('process_heic', False))
-            if is_heic:
-                if not should_process_heic:
-                    logger.info(f"{log_identifier}: Marked to skip (HEIC).")
-                    db_manager.update_item_status(google_id, STATUS_SKIPPED_HEIC, error_message="HEIC processing not enabled")
-                    skipped_in_run += 1
-                    continue
+                # --- HEIC Handling ---
+                is_heic = filename.lower().endswith('.heic')
+                should_process_heic = args.process_heic or (smugmug.config and smugmug.config.get('process_heic', False))
+                if is_heic:
+                    if not should_process_heic:
+                        logger.info(f"{log_identifier}: Marked to skip (HEIC).")
+                        db_manager.update_item_status(google_id, STATUS_SKIPPED_HEIC, error_message="HEIC processing not enabled")
+                        skipped_in_run += 1
+                        continue
+                    else:
+                        logger.warning(f"{log_identifier}: Processing HEIC (no duplicate check).")
+
+
+                # --- Download & MD5 Check (if needed) ---
+                needs_download_for_hash = not is_video and not is_heic and not current_md5_hash
+                if needs_download_for_hash:
+                    logger.debug(f"{log_identifier}: MD5 hash needed. Calling download function...")
+                    temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details_for_download)
+
+                    if not temp_file_path:
+                        logger.error(f"{log_identifier}: Download failed for MD5 check.")
+                        db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, error_message="Download failed during hash check")
+                        errors_in_run += 1
+                        skipped_in_run += 1
+                        continue
+
+                    if refreshed_details:
+                         new_base_url = refreshed_details.get('baseUrl')
+                         new_metadata_json = json.dumps(refreshed_details.get('mediaMetadata', {}))
+                         db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
+                         refreshed_details = None
+
+                    logger.info(f"{log_identifier}: Calculating MD5 hash...")
+                    print("   Calculating MD5 hash...")
+                    calculated_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
+
+                    if not calculated_hash:
+                        logger.error(f"{log_identifier}: MD5 hash calculation failed.")
+                        db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, error_message="MD5 calculation failed")
+                        errors_in_run += 1
+                        skipped_in_run += 1
+                        if os.path.exists(temp_file_path):
+                             try: os.remove(temp_file_path)
+                             except Exception as e: logger.warning(f"Could not remove temp file {temp_file_path}: {e}")
+                        continue
+
+                    logger.debug(f"{log_identifier}: Calculated MD5: {calculated_hash}. Updating DB.")
+                    current_md5_hash = calculated_hash
+                    db_manager.update_item_status(google_id, STATUS_HASHED, md5_hash=current_md5_hash)
+                elif not is_video and not is_heic:
+                     logger.debug(f"{log_identifier}: MD5 hash already in DB: {current_md5_hash}")
+
+
+                # --- Check SmugMug Existence ---
+                if current_status in [STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH, STATUS_UPLOADED_SUCCESS]:
+                     logger.debug(f"{log_identifier}: Skipping SM check (terminal status '{current_status}').")
+                     processed_in_run -= 1
+                     continue
+                elif is_heic and should_process_heic:
+                     logger.debug(f"{log_identifier}: Skipping SM check (HEIC processing enabled).")
+                     exists_on_smugmug = False
+                     log_reason = "HEIC (skipped check)"
+                     if current_status not in [STATUS_SMUGMUG_CHECKED_NOT_FOUND, STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED]:
+                          db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, error_message="HEIC check skipped")
                 else:
-                    logger.warning(f"{log_identifier}: Processing HEIC (no duplicate check).")
+                     if current_status in [STATUS_PENDING, STATUS_HASHED]:
+                          exists_on_smugmug = False
+                          log_reason = ""
+                          target_album_key_for_check = smugmug.album_key
+                          if not target_album_key_for_check:
+                               logger.error(f"{log_identifier}: SmugMug target album key missing. Cannot check existence.")
+                               db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, error_message="SM album key missing during check")
+                               errors_in_run += 1; skipped_in_run += 1
+                               continue
+
+                          logger.info(f"{log_identifier}: Checking SmugMug for duplicates...")
+                          print("   Checking SmugMug for duplicates...")
+                          logger.debug(f"{log_identifier}: Checking existence on SmugMug album key: {target_album_key_for_check}")
+
+                          if is_video:
+                               log_reason = "filename match"
+                               exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type)
+                          elif not is_video and not is_heic:
+                               log_reason = "MD5 hash match"
+                               if current_md5_hash:
+                                    exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type, file_hash=current_md5_hash)
+                               else:
+                                    logger.error(f"{log_identifier}: Cannot check SmugMug, MD5 hash missing.")
+                                    db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, error_message="MD5 missing for SM check")
+                                    errors_in_run += 1
+                                    skipped_in_run += 1
+                                    if temp_file_path and os.path.exists(temp_file_path):
+                                         try: os.remove(temp_file_path)
+                                         except Exception as e: logger.warning(f"Could not remove temp file {temp_file_path}: {e}")
+                                    continue
+
+                          if exists_on_smugmug:
+                               duplicate_status = STATUS_DUPLICATE_FILENAME if is_video else STATUS_DUPLICATE_HASH
+                               logger.info(f"{log_identifier}: Found on SmugMug (checked via {log_reason}). Marking duplicate.")
+                               print(f"   Exists on SmugMug ({log_reason}). Skipping.")
+                               db_manager.update_item_status(google_id, duplicate_status, error_message=f"Duplicate check via {log_reason}")
+                               duplicates_in_run += 1
+                               if temp_file_path and os.path.exists(temp_file_path):
+                                    try: os.remove(temp_file_path)
+                                    except Exception as e: logger.warning(f"Could not remove temp file {temp_file_path}: {e}")
+                               if args.delete_from_google:
+                                    google_photos.remove_photo(google_id, dry_run=args.dry_run)
+                               continue
+                          else:
+                               logger.info(f"{log_identifier}: Checked SmugMug via {log_reason}: Not found.")
+                               db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, error_message=f"SM check via {log_reason} - not found")
+                     else:
+                          logger.debug(f"{log_identifier}: Skipping SM check (status is '{current_status}').")
 
 
-            # --- Download & MD5 Check (if needed) ---
-            needs_download_for_hash = not is_video and not is_heic and not current_md5_hash
-            if needs_download_for_hash:
-                logger.debug(f"{log_identifier}: MD5 hash needed. Calling download function...")
-                temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details_for_download)
-
-                if not temp_file_path:
-                    logger.error(f"{log_identifier}: Download failed for MD5 check.")
-                    db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, error_message="Download failed during hash check")
-                    errors_in_run += 1
-                    skipped_in_run += 1
+                # --- Prepare for Upload ---
+                if args.dry_run:
+                    logger.info(f"{log_identifier}: [DRY RUN] Would upload.")
+                    print("   [DRY RUN] Skipping upload.")
+                    uploaded_in_run += 1
+                    if temp_file_path and os.path.exists(temp_file_path):
+                         try:
+                              os.remove(temp_file_path)
+                              logger.debug("  [DRY RUN] Removed temp file.")
+                         except Exception as e:
+                              logger.warning(f"  [DRY RUN] Could not remove temp file {temp_file_path}: {e}")
+                    if args.delete_from_google:
+                         google_photos.remove_photo(google_id, dry_run=True)
                     continue
 
-                if refreshed_details:
-                     new_base_url = refreshed_details.get('baseUrl')
-                     new_metadata_json = json.dumps(refreshed_details.get('mediaMetadata', {}))
-                     db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-                     refreshed_details = None
 
-                logger.info(f"{log_identifier}: Calculating MD5 hash...")
-                print("   Calculating MD5 hash...")
-                calculated_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
+                # --- Download for Upload (if needed) ---
+                if not temp_file_path or not os.path.exists(temp_file_path):
+                     logger.debug(f"{log_identifier}: File not available locally. Calling download...")
+                     temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details_for_download)
 
-                if not calculated_hash:
-                    logger.error(f"{log_identifier}: MD5 hash calculation failed.")
-                    db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, error_message="MD5 calculation failed")
+                     if not temp_file_path:
+                          logger.error(f"{log_identifier}: Download failed before upload.")
+                          db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, error_message="Download failed before upload")
+                          errors_in_run += 1
+                          skipped_in_run += 1
+                          continue
+
+                     if refreshed_details:
+                          new_base_url = refreshed_details.get('baseUrl')
+                          new_metadata_json = json.dumps(refreshed_details.get('mediaMetadata', {}))
+                          db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
+                          refreshed_details = None
+                else:
+                     logger.debug(f"{log_identifier}: Using existing local file for upload: {temp_file_path}")
+
+
+                # --- Perform Upload ---
+                target_album_uri_for_upload = smugmug.album_api_uri
+                if not target_album_uri_for_upload:
+                     logger.error(f"{log_identifier}: SmugMug target album URI missing. Cannot upload.")
+                     db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, error_message="SM album URI missing during upload")
+                     errors_in_run += 1; skipped_in_run += 1
+                     continue
+
+                logger.info(f"{log_identifier}: Uploading to SmugMug URI: {target_album_uri_for_upload}...")
+                print(f"   Uploading to SmugMug...")
+                db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
+
+                upload_success = smugmug.upload_media(target_album_uri_for_upload, temp_file_path, filename, mime_type)
+
+                if upload_success:
+                    logger.info(f"{log_identifier}: Upload successful.")
+                    print("   Upload successful.")
+                    db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS)
+                    uploaded_in_run += 1
+                    if args.delete_from_google:
+                         google_photos.remove_photo(google_id, dry_run=args.dry_run)
+                else:
+                    logger.error(f"{log_identifier}: Upload failed.")
+                    print("   Upload FAILED.")
+                    last_sm_error = "Upload failed (check SmugMug logs)"
+                    db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, error_message=last_sm_error)
                     errors_in_run += 1
-                    skipped_in_run += 1
-                    if os.path.exists(temp_file_path):
-                         try: os.remove(temp_file_path)
-                         except Exception as e: logger.warning(f"Could not remove temp file {temp_file_path}: {e}")
-                    continue
-
-                logger.debug(f"{log_identifier}: Calculated MD5: {calculated_hash}. Updating DB.")
-                current_md5_hash = calculated_hash
-                db_manager.update_item_status(google_id, STATUS_HASHED, md5_hash=current_md5_hash)
-            elif not is_video and not is_heic:
-                 logger.debug(f"{log_identifier}: MD5 hash already in DB: {current_md5_hash}")
-
-
-            # --- Check SmugMug Existence ---
-            if current_status in [STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH, STATUS_UPLOADED_SUCCESS]:
-                 logger.debug(f"{log_identifier}: Skipping SM check (terminal status '{current_status}').")
-                 processed_in_run -= 1
-                 continue
-            elif is_heic and should_process_heic:
-                 logger.debug(f"{log_identifier}: Skipping SM check (HEIC processing enabled).")
-                 exists_on_smugmug = False
-                 log_reason = "HEIC (skipped check)"
-                 if current_status not in [STATUS_SMUGMUG_CHECKED_NOT_FOUND, STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED]:
-                      db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, error_message="HEIC check skipped")
-            else:
-                 if current_status in [STATUS_PENDING, STATUS_HASHED]:
-                      exists_on_smugmug = False
-                      log_reason = ""
-                      # *** Use the potentially overridden album key from the smugmug object ***
-                      target_album_key_for_check = smugmug.album_key
-                      if not target_album_key_for_check:
-                           logger.error(f"{log_identifier}: SmugMug target album key is missing in SmugMug object. Cannot check existence.")
-                           # This indicates a potential logic error earlier
-                           db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, error_message="SM album key missing during check")
-                           errors_in_run += 1; skipped_in_run += 1
-                           continue
-
-                      logger.info(f"{log_identifier}: Checking SmugMug for duplicates...")
-                      print("   Checking SmugMug for duplicates...")
-                      logger.debug(f"{log_identifier}: Checking existence on SmugMug album key: {target_album_key_for_check}")
-
-                      if is_video:
-                           log_reason = "filename match"
-                           exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type)
-                      elif not is_video and not is_heic: # Standard image check
-                           log_reason = "MD5 hash match"
-                           if current_md5_hash:
-                                exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type, file_hash=current_md5_hash)
-                           else:
-                                logger.error(f"{log_identifier}: Cannot check SmugMug, MD5 hash missing.")
-                                db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, error_message="MD5 missing for SM check")
-                                errors_in_run += 1
-                                skipped_in_run += 1
-                                if temp_file_path and os.path.exists(temp_file_path):
-                                     try: os.remove(temp_file_path)
-                                     except Exception as e: logger.warning(f"Could not remove temp file {temp_file_path}: {e}")
-                                continue
-
-                      if exists_on_smugmug:
-                           duplicate_status = STATUS_DUPLICATE_FILENAME if is_video else STATUS_DUPLICATE_HASH
-                           logger.info(f"{log_identifier}: Found on SmugMug (checked via {log_reason}). Marking duplicate.")
-                           print(f"   Exists on SmugMug ({log_reason}). Skipping.")
-                           db_manager.update_item_status(google_id, duplicate_status, error_message=f"Duplicate check via {log_reason}")
-                           duplicates_in_run += 1
-                           if temp_file_path and os.path.exists(temp_file_path):
-                                try: os.remove(temp_file_path)
-                                except Exception as e: logger.warning(f"Could not remove temp file {temp_file_path}: {e}")
-                           if args.delete_from_google:
-                                google_photos.remove_photo(google_id, dry_run=args.dry_run)
-                           continue
-                      else:
-                           logger.info(f"{log_identifier}: Checked SmugMug via {log_reason}: Not found.")
-                           db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, error_message=f"SM check via {log_reason} - not found")
-                 else:
-                      logger.debug(f"{log_identifier}: Skipping SM check (status is '{current_status}').")
-
-
-            # --- Prepare for Upload ---
-            if args.dry_run:
-                logger.info(f"{log_identifier}: [DRY RUN] Would upload.")
-                print("   [DRY RUN] Skipping upload.")
-                uploaded_in_run += 1
-                if temp_file_path and os.path.exists(temp_file_path):
-                     try:
-                          os.remove(temp_file_path)
-                          logger.debug("  [DRY RUN] Removed temp file.")
-                     except Exception as e:
-                          logger.warning(f"  [DRY RUN] Could not remove temp file {temp_file_path}: {e}")
-                if args.delete_from_google:
-                     google_photos.remove_photo(google_id, dry_run=True)
-                continue
-
-
-            # --- Download for Upload (if needed) ---
-            if not temp_file_path or not os.path.exists(temp_file_path):
-                 logger.debug(f"{log_identifier}: File not available locally. Calling download...")
-                 temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details_for_download)
-
-                 if not temp_file_path:
-                      logger.error(f"{log_identifier}: Download failed before upload.")
-                      db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, error_message="Download failed before upload")
-                      errors_in_run += 1
-                      skipped_in_run += 1
-                      continue
-
-                 if refreshed_details:
-                      new_base_url = refreshed_details.get('baseUrl')
-                      new_metadata_json = json.dumps(refreshed_details.get('mediaMetadata', {}))
-                      db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-                      refreshed_details = None
-            else:
-                 logger.debug(f"{log_identifier}: Using existing local file for upload: {temp_file_path}")
-
-
-            # --- Perform Upload ---
-            # *** Use the potentially overridden album URI from the smugmug object ***
-            target_album_uri_for_upload = smugmug.album_api_uri
-            if not target_album_uri_for_upload:
-                 logger.error(f"{log_identifier}: SmugMug target album URI is missing in SmugMug object. Cannot upload.")
-                 db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, error_message="SM album URI missing during upload")
-                 errors_in_run += 1; skipped_in_run += 1
-                 continue
-
-            logger.info(f"{log_identifier}: Uploading to SmugMug URI: {target_album_uri_for_upload}...")
-            print(f"   Uploading to SmugMug...")
-            db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
-
-            upload_success = smugmug.upload_media(target_album_uri_for_upload, temp_file_path, filename, mime_type)
-
-            if upload_success:
-                logger.info(f"{log_identifier}: Upload successful.")
-                print("   Upload successful.")
-                db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS)
-                uploaded_in_run += 1
-                if args.delete_from_google:
-                     google_photos.remove_photo(google_id, dry_run=args.dry_run)
-            else:
-                logger.error(f"{log_identifier}: Upload failed.")
-                print("   Upload FAILED.")
-                last_sm_error = "Upload failed (check SmugMug logs)"
-                db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, error_message=last_sm_error)
-                errors_in_run += 1
 
 
         # --- End of Loop ---
-        logger.info("-" * 50)
-        if not shutdown_requested: logger.info(f"--- Finished processing batch ---")
-        else: logger.warning("--- Processing loop terminated by shutdown request ---")
+        if total_items_to_process > 0: # Only log end of batch if we processed items
+            logger.info("-" * 50)
+            if not shutdown_requested: logger.info(f"--- Finished processing batch ---")
+            else: logger.warning("--- Processing loop terminated by shutdown request ---")
 
 
         # --- Final Summary ---
@@ -702,17 +687,68 @@ def main():
         print(f"- Duplicates Found: {duplicates_in_run}")
         print(f"- Skipped: {skipped_in_run}")
         print(f"- Errors: {errors_in_run}")
-        if shutdown_requested: print("- Status: Terminated by user")
-        elif errors_in_run > 0: print(f"- Status: Completed run with {errors_in_run} errors")
-        else: print("- Status: Completed run successfully")
+
+        # --- Determine Final Status and Handle DB Rename ---
+        run_completed_successfully = (errors_in_run == 0 and not shutdown_requested)
+
+        if run_completed_successfully:
+            print("- Status: Completed run successfully")
+            # Check if all items in the DB are accounted for (terminal status)
+            pending_items = db_manager.get_items_to_process(retry_errors=False) # Check for non-error pending
+            if not pending_items:
+                logger.info("All items processed successfully. Run complete.")
+                print("All items processed successfully.")
+                # --- Rename DB on Success ---
+                logger.info("Attempting to rename completed database file...")
+                # Close DB connection FIRST
+                if db_manager_global:
+                    db_manager_global.close()
+                    logger.info("Closed database connection before renaming.")
+                else:
+                    logger.warning("DB manager instance not found, cannot close before rename.")
+
+                # Construct new name
+                base_db_name, db_ext = os.path.splitext(args.db_file)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_db_filename = f"{base_db_name}_completed_{timestamp}{db_ext}"
+
+                try:
+                    if os.path.exists(args.db_file):
+                        os.rename(args.db_file, new_db_filename)
+                        logger.info(f"Successfully renamed database to: {new_db_filename}")
+                        print(f"Database renamed to: {new_db_filename}")
+                        # Prevent cleanup from trying to close DB again or release lock
+                        cleanup_handled_in_try = True
+                        # Manually release lock as cleanup won't run fully now
+                        release_lock()
+                    else:
+                        logger.warning(f"Database file {args.db_file} not found for renaming (already closed/renamed?).")
+
+                except OSError as e:
+                    logger.error(f"Failed to rename database file from {args.db_file} to {new_db_filename}: {e}", exc_info=True)
+                    print(f"\nERROR: Failed to rename completed database file: {e}")
+                    # Allow normal cleanup to proceed in finally block
+            else:
+                 logger.warning(f"Run completed without errors, but {len(pending_items)} items still require processing. DB not renamed.")
+                 print(f"Run completed without errors, but {len(pending_items)} items still require processing. Rerun to continue.")
+
+        elif shutdown_requested:
+            print("- Status: Terminated by user")
+        else: # errors_in_run > 0
+            print(f"- Status: Completed run with {errors_in_run} errors")
+
         print(f"- Run Time: {total_duration:.2f} sec")
         print("-" * 60)
         print("Overall Database Stats:")
         for status, count in sorted(final_stats.items()):
              if count > 0: print(f"- {status}: {count}")
         print(f"- Detailed Log: {LOG_FILE}")
-        print(f"- Database File: {args.db_file}")
+        if run_completed_successfully and not pending_items:
+             print(f"- Completed Database File: {new_db_filename}")
+        else:
+             print(f"- Database File: {args.db_file}")
         print("=" * 60)
+
 
     except KeyboardInterrupt:
         if not shutdown_requested:
@@ -725,7 +761,11 @@ def main():
         shutdown_requested = True
     finally:
         # --- Cleanup ---
-        cleanup(google_photos_instance_global, db_manager_global)
+        # Only run full cleanup if it wasn't handled successfully in the try block
+        if not cleanup_handled_in_try:
+            cleanup(google_photos_instance_global, db_manager_global)
+
+        # Determine exit code based on errors *in this run*
         exit_code = 1 if errors_in_run > 0 or shutdown_requested else 0
         logger.info(f"Exiting script with code {exit_code}.")
         sys.exit(exit_code)
