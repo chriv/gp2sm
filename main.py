@@ -2,6 +2,9 @@
 # Updates DB with refreshed Google Photos item details (baseUrl).
 # Refactored conditional styling in SmugMug check block.
 # Removed pre-download check/refresh for missing baseUrl from main.
+# Added explicit logging for MD5 hash calculation.
+# Clarified SmugMug check log messages.
+# Truncated Google ID in logs and added "Starting..." messages.
 
 __version__ = "1.9" # Version remains 1.9 as requested
 
@@ -35,6 +38,8 @@ from database_manager import ( # Import new DB manager and constants
 # --- Constants ---
 LOG_FILE = "gp2sm_transfer.log"
 LOCK_FILE = "gp2sm.lock"
+# Truncate Google ID length in logs for readability
+LOG_ID_TRUNCATE_LEN = 8
 
 # --- Global Variables ---
 logger = None
@@ -156,11 +161,6 @@ def cleanup(google_photos_instance, db_manager_instance):
 
     release_lock()
     log_func_info("--- Cleanup complete ---")
-
-
-# --- Helper Function for Pre-Download Check --- REMOVED ---
-# def ensure_item_details_for_download(item_dict, google_photos_instance, db_manager_instance):
-#     ... (Function removed) ...
 
 
 # --- Main Function ---
@@ -367,12 +367,15 @@ def main():
             current_status = item_row['status']
             db_md5_hash = item_row['md5_hash']
             # Create a mutable dictionary for the current item's details
-            # This dictionary will be passed to the download function
             item_details_for_download = dict(item_row)
 
             is_video = mime_type.startswith('video/')
             item_type = "Video" if is_video else "Photo"
-            log_identifier = f"Item {current_item_number_in_batch}/{total_items_to_process} (DB ID: {google_id}, File: '{filename}', Type: {item_type}, Status: {current_status})"
+
+            # *** TRUNCATED ID FOR LOGGING ***
+            truncated_id = f"{google_id[:LOG_ID_TRUNCATE_LEN]}...{google_id[-LOG_ID_TRUNCATE_LEN:]}" if len(google_id) > LOG_ID_TRUNCATE_LEN * 2 else google_id
+            log_identifier = f"Item {current_item_number_in_batch}/{total_items_to_process} (ID: {truncated_id}, File: '{filename}', Type: {item_type}, Status: {current_status})"
+            # *** END TRUNCATED ID ***
 
             logger.info("-" * 50)
             logger.info(f"Processing {log_identifier}")
@@ -430,8 +433,12 @@ def main():
                      db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
                      refreshed_details = None # Reset
 
-                logger.debug(f"{log_identifier}: Calculating MD5 hash...")
+                # *** ADDED HASH LOGGING HERE ***
+                logger.info(f"{log_identifier}: Calculating MD5 hash...") # User feedback
+                print("   Calculating MD5 hash...") # Console feedback
                 calculated_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
+                # *** END ADDED HASH LOGGING ***
+
                 if not calculated_hash:
                     logger.error(f"{log_identifier}: MD5 hash calculation failed.")
                     db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, error_message="MD5 calculation failed")
@@ -450,7 +457,6 @@ def main():
 
 
             # --- Check SmugMug Existence ---
-            # (No changes needed in this block's logic compared to previous main.py)
             if current_status in [STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH, STATUS_UPLOADED_SUCCESS]:
                  logger.debug(f"{log_identifier}: Skipping SM check (terminal status '{current_status}').")
                  processed_in_run -= 1
@@ -466,6 +472,10 @@ def main():
                       exists_on_smugmug = False
                       log_reason = ""
                       target_album_key_for_check = smugmug.album_key
+                      # *** ADDED SMUGMUG CHECK LOGGING ***
+                      logger.info(f"{log_identifier}: Checking SmugMug for duplicates...")
+                      print("   Checking SmugMug for duplicates...")
+                      # *** END ADDED SMUGMUG CHECK LOGGING ***
                       logger.debug(f"{log_identifier}: Checking existence on SmugMug album key: {target_album_key_for_check}")
 
                       if is_video:
@@ -487,7 +497,7 @@ def main():
 
                       if exists_on_smugmug:
                            duplicate_status = STATUS_DUPLICATE_FILENAME if is_video else STATUS_DUPLICATE_HASH
-                           logger.info(f"{log_identifier}: Found on SmugMug ({log_reason}). Marking duplicate.")
+                           logger.info(f"{log_identifier}: Found on SmugMug (checked via {log_reason}). Marking duplicate.")
                            print(f"   Exists on SmugMug ({log_reason}). Skipping.")
                            db_manager.update_item_status(google_id, duplicate_status, error_message=f"Duplicate check via {log_reason}")
                            duplicates_in_run += 1
@@ -498,7 +508,7 @@ def main():
                                 google_photos.remove_photo(google_id, dry_run=args.dry_run)
                            continue
                       else:
-                           logger.info(f"{log_identifier}: Not found on SmugMug ({log_reason}).")
+                           logger.info(f"{log_identifier}: Checked SmugMug via {log_reason}: Not found.")
                            db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, error_message=f"SM check via {log_reason} - not found")
                  else:
                       logger.debug(f"{log_identifier}: Skipping SM check (status is '{current_status}').")
@@ -546,7 +556,7 @@ def main():
             # --- Perform Upload ---
             target_album_uri_for_upload = smugmug.album_api_uri
             logger.info(f"{log_identifier}: Uploading to SmugMug URI: {target_album_uri_for_upload}...")
-            print(f"   Uploading to SmugMug...")
+            print(f"   Uploading to SmugMug...") # Console feedback
             db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
 
             upload_success = smugmug.upload_media(target_album_uri_for_upload, temp_file_path, filename, mime_type)

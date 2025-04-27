@@ -4,4 +4,8 @@
 temp_downloads/
 *.json
 *.log
+*.log.*
+*.db
+*.db-wal
+*.db-shm
 smugmugapikeyandsecret.txt
