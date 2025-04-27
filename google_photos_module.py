@@ -336,8 +336,8 @@ class GooglePhotos:
         Downloads a photo/video item to the temporary directory with retries.
         Returns tuple: (temp_file_path, filename, width, height, mime_type, last_status_code)
         last_status_code is None on success, or the HTTP status code on the last failed attempt.
+        Fail fast on 401/403 errors.
         """
-        # No changes needed here from previous version (v1.5)
         if not self.is_authenticated():
             logger.error("Not authenticated with Google Photos. Cannot download.")
             return None, None, None, None, None, None
@@ -345,7 +345,12 @@ class GooglePhotos:
             logger.error("Temporary directory not initialized. Cannot download.")
             return None, None, None, None, None, None
 
-        media_item_id = item['id']
+        # Ensure item is a dictionary before proceeding
+        if not isinstance(item, dict):
+             logger.error(f"Invalid item data provided to download_photo (expected dict, got {type(item)}): {item}")
+             return None, None, None, None, None, None
+
+        media_item_id = item.get('id', 'UnknownID') # Provide default for logging if ID missing
         filename = item.get('filename', f"unknown_{media_item_id}")
         mime_type = item.get('mimeType', 'application/octet-stream')
         base_url = item.get('baseUrl')
@@ -356,25 +361,17 @@ class GooglePhotos:
             logger.debug(f"Item data with missing baseUrl: {item}")
             return None, None, None, None, None, None
 
-        # --- Added improved baseUrl check ---
-        if not base_url.startswith(("https://lh3.googleusercontent.com/", "https://video.googleusercontent.com/")):
-             logger.warning(f"Download potentially skipped for '{filename}' (ID: {media_item_id}) due to unexpected baseUrl pattern: {base_url}")
-             # Optionally, you could return a specific code or None,None,... depending on desired behavior
-             # For now, let's try it anyway, but log the warning.
+        # --- Removed the check for specific baseUrl patterns, as valid ones might vary ---
+        # logger.warning(f"Download potentially skipped for '{filename}'... ")
 
         download_param = "=dv" if is_video else "=d"
         download_url = base_url + download_param
 
         temp_file_path = None
         try:
-            # Create a unique filename within the temp directory
-            # Use os.path.join for cross-platform compatibility
             safe_filename = "".join(c for c in filename if c.isalnum() or c in ('.', '_', '-')).rstrip()
             if not safe_filename: safe_filename = f"item_{media_item_id}"
-            # No need for mkstemp if we just need a path
             temp_file_path = os.path.join(self.temp_dir, f"dl_{int(time.time()*1000)}_{safe_filename}")
-            # fd, temp_file_path = tempfile.mkstemp(suffix=f"_{safe_filename}", dir=self.temp_dir)
-            # os.close(fd) # Close immediately as we open with 'wb' later
         except Exception as e:
             logger.error(f"Failed to generate temporary file path in {self.temp_dir}: {e}")
             return None, None, None, None, None, None
@@ -387,25 +384,17 @@ class GooglePhotos:
 
         for attempt in range(max_retries):
             try:
-                # Use a session object for potential connection reuse
                 with requests.Session() as s:
-                     # Note: Google download URLs often don't require auth headers once generated
-                     response = s.get(download_url, stream=True, timeout=120) # Increased timeout
+                     response = s.get(download_url, stream=True, timeout=120)
                      last_status_code = response.status_code
                      response.raise_for_status() # Raises HTTPError for 4xx/5xx
 
                      with open(temp_file_path, 'wb') as f:
-                         # Use shutil.copyfileobj for potentially better performance
                          shutil.copyfileobj(response.raw, f, length=16*1024)
-                         # for chunk in response.iter_content(chunk_size=16384): # 16KB chunk size
-                         #    f.write(chunk)
 
                 logger.debug(f"Successfully downloaded '{filename}' on attempt {attempt + 1}")
-                # Extract metadata safely
                 metadata = item.get('mediaMetadata', {})
-                width = metadata.get('width', 0)
-                height = metadata.get('height', 0)
-                # Convert width/height to int if they are strings (API might return strings)
+                width = metadata.get('width', 0); height = metadata.get('height', 0)
                 try: width = int(width)
                 except (ValueError, TypeError): width = 0
                 try: height = int(height)
@@ -414,55 +403,66 @@ class GooglePhotos:
                 return temp_file_path, filename, width, height, mime_type, None # Success
 
             except requests.exceptions.HTTPError as http_err:
-                # Decide if retry makes sense based on status code
-                should_retry = http_err.response.status_code in [401, 403, 429, 500, 503]
-                log_level = logging.WARNING if should_retry and attempt < max_retries - 1 else logging.ERROR
-                logger.log(log_level, f"HTTP Error downloading '{filename}' on attempt {attempt + 1}/{max_retries}: {http_err}")
-                # Log response text only on final error or if debug enabled
-                if log_level == logging.ERROR or logger.isEnabledFor(logging.DEBUG):
-                    if hasattr(http_err, 'response') and http_err.response is not None:
-                        try:
-                             logger.log(log_level, f"  Response Text (first 500 chars): {http_err.response.text[:500]}...")
-                        except Exception: # Handle cases where response.text might not be available/readable
-                             logger.log(log_level, "  Response Text could not be read.")
+                last_status_code = http_err.response.status_code if http_err.response else None
 
-                if should_retry and attempt < max_retries - 1:
+                # --- MODIFIED LOGIC: Fail fast on 401/403 ---
+                if last_status_code in [401, 403]:
+                    log_level = logging.ERROR # Treat as error immediately
+                    logger.log(log_level, f"HTTP Error downloading '{filename}' on attempt {attempt + 1}: {http_err} (Status: {last_status_code}). URL likely invalid/expired.")
+                    # Log response text only on final error or if debug enabled
+                    if logger.isEnabledFor(logging.DEBUG):
+                         if hasattr(http_err, 'response') and http_err.response is not None:
+                              try: logger.debug(f"  Response Text (first 500 chars): {http_err.response.text[:500]}...")
+                              except Exception: logger.debug("  Response Text could not be read.")
+                    break # Exit retry loop immediately for 401/403
+                # --- END MODIFIED LOGIC ---
+
+                # Decide if retry makes sense for *other* status codes
+                should_retry_other = last_status_code in [429, 500, 503] # e.g., Rate limit, server error
+                log_level = logging.WARNING if should_retry_other and attempt < max_retries - 1 else logging.ERROR
+                logger.log(log_level, f"HTTP Error downloading '{filename}' on attempt {attempt + 1}/{max_retries}: {http_err}")
+
+                if log_level == logging.ERROR or logger.isEnabledFor(logging.DEBUG):
+                     if hasattr(http_err, 'response') and http_err.response is not None:
+                          try: logger.log(log_level, f"  Response Text (first 500 chars): {http_err.response.text[:500]}...")
+                          except Exception: logger.log(log_level, "  Response Text could not be read.")
+
+                if should_retry_other and attempt < max_retries - 1:
                     logger.info(f"Retrying download for '{filename}' in {retry_delay_seconds} seconds... (Status: {last_status_code})")
                     time.sleep(retry_delay_seconds)
-                    continue # Go to next attempt
+                    continue # Go to next attempt for retriable errors (non 401/403)
                 else:
-                    # Final attempt failed or non-retriable error
-                    if last_status_code in [401, 403]:
-                        logger.error(f"Download failed for '{filename}' after {attempt + 1} attempts due to HTTPError {last_status_code}. URL may have expired or requires re-fetch.")
-                    else:
-                        logger.error(f"Download failed for '{filename}' after {attempt + 1} attempts due to HTTPError {last_status_code}.")
+                    # Final attempt failed or non-retriable error (excluding 401/403 which broke earlier)
+                    logger.error(f"Download failed for '{filename}' after {attempt + 1} attempts due to HTTPError {last_status_code}.")
                     break # Exit retry loop
 
             except requests.exceptions.RequestException as req_err:
                 # Includes connection errors, timeouts etc. Generally worth retrying.
                 log_level = logging.WARNING if attempt < max_retries - 1 else logging.ERROR
                 logger.log(log_level, f"Request Error downloading '{filename}' on attempt {attempt + 1}/{max_retries}: {req_err}")
-                last_status_code = None # No HTTP status code for these errors
+                last_status_code = None
                 if attempt < max_retries - 1:
                      logger.info(f"Retrying download for '{filename}' in {retry_delay_seconds} seconds...")
                      time.sleep(retry_delay_seconds)
-                     continue # Go to next attempt
+                     continue
                 else:
                      logger.error(f"Download failed for '{filename}' after {attempt + 1} attempts due to RequestException.")
-                     break # Exit retry loop
+                     break
 
             except IOError as io_err:
                  logger.error(f"IO Error writing downloaded file '{filename}' to {temp_file_path}: {io_err}")
-                 last_status_code = None # Not an HTTP error
-                 break # Exit retry loop
+                 last_status_code = None
+                 break
             except Exception as e:
                  logger.error(f"Unexpected Error downloading '{filename}' on attempt {attempt + 1}/{max_retries}: {e}", exc_info=True)
-                 last_status_code = None # Not an HTTP error
-                 break # Exit retry loop
+                 last_status_code = None
+                 break
 
-        # If loop finished without returning success
-        logger.error(f"Failed to download '{filename}' (ID: {media_item_id}) after {max_retries} attempts. Last status code: {last_status_code}")
-        # Clean up the potentially partially downloaded or empty temp file
+        # After loop (if break occurred or retries exhausted)
+        if last_status_code not in [401, 403]: # Avoid redundant final message if we already logged specific 401/403 failure
+             logger.error(f"Failed to download '{filename}' (ID: {media_item_id}) after retries. Last status code: {last_status_code}")
+
+        # Clean up the potentially partially downloaded or empty temp file if it exists
         if temp_file_path and os.path.exists(temp_file_path):
             try:
                 os.remove(temp_file_path)
