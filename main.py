@@ -375,7 +375,7 @@ def main():
             if args.ignore_photos and not is_video: logger.info(f"Skipping photo '{filename}' (--ignore-photos)."); skipped_count += 1; continue
             if args.ignore_videos and is_video: logger.info(f"Skipping video '{filename}' (--ignore-videos)."); skipped_count += 1; continue
 
-            is_heic = mime_type == 'image/heic'
+            is_heic = filename and filename.lower().endswith('.heic')
             temp_file_path = None; google_file_hash = None
             should_process_heic = False # Default
             if is_heic:
