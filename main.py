@@ -1,6 +1,6 @@
 # Google Photos to SmugMug Transfer Script (gp2sm) - v2.0
 # Implements parallel processing using worker threads.
-# - Handles SmugMug album full errors by switching albums live without restart.
+# - Handles SmugMug album full errors by switching albums live without restart (Corrected).
 # - Uses !children for folder/album checks in smugmug_module.
 # - Includes debug logging for SmugMug API responses.
 # - Progress indicator shows overall progress and overall stats.
@@ -58,13 +58,13 @@ shutdown_requested = False
 google_photos_instance_global = None
 db_manager_global = None
 shutdown_event = threading.Event()
-album_switch_lock = threading.Lock()
+album_switch_lock = threading.Lock() # Lock remains for coordinating switch attempts
 # Counters for run-specific summary (used internally for increments)
 uploaded_in_run = 0
 duplicates_in_run = 0
 skipped_in_run = 0
 errors_in_run = 0
-album_switch_triggered = False # Reset at start of run
+# album_switch_triggered removed
 
 # --- Signal Handling ---
 def signal_handler(sig, frame):
@@ -193,7 +193,7 @@ def cleanup(google_photos_instance, db_manager_instance):
     log_func_info("--- Cleanup complete ---")
 
 
-# --- Album Switching Logic (Modified for Live Switch) ---
+# --- Album Switching Logic (Revised - No Global Flag) ---
 def get_next_album_name(current_album_name):
     """Generates the next sequential album name."""
     match = re.search(r" - Part (\d+)$", current_album_name, re.IGNORECASE)
@@ -203,78 +203,98 @@ def get_next_album_name(current_album_name):
         next_part_number = part_number + 1
         return f"{base_name} - Part {next_part_number}"
     else:
+        # If no ' - Part X' found, start with Part 2
         return f"{current_album_name} - Part 2"
 
 def handle_album_full_switch(smugmug_instance, db_manager_instance, initial_album_name, current_folder_name, google_album_id):
     """
     Handles switching to the next SmugMug album when full, updating shared state live.
-    Uses locking to ensure only one worker performs the switch.
-    Returns True if the switch was successfully performed by THIS call,
-    False if switch failed or was already handled by another thread.
+    Uses locking to ensure only one worker performs the switch action for a given album key.
+    Relies on DB config snapshot as the source of truth for the *intended* target.
+    Returns True if the switch was successfully performed by THIS call, False otherwise.
     """
-    global album_switch_triggered, album_switch_lock # Access globals
+    global album_switch_lock # Only need the lock globally
 
     with album_switch_lock:
-        if album_switch_triggered:
-            logger.debug("Album switch already handled by another worker.")
-            return False
+        # 1. Get the *current* target album key from the database config snapshot
+        stored_config = db_manager_instance.get_config_snapshot()
+        if not stored_config:
+            logger.error("Cannot perform album switch: Failed to retrieve stored config from DB.")
+            return False # Indicate switch failed
 
+        db_target_key = stored_config.get('current_album_key')
+        # Use initial_album_name from snapshot for generating next name, fallback to current key
+        db_initial_album_name = stored_config.get('initial_album_name')
+
+        # 2. Get the album key the shared smugmug object is *currently* using
+        shared_target_key = smugmug_instance.album_key
+
+        # 3. Compare DB target with shared object target
+        if db_target_key != shared_target_key:
+            # If they differ, it means another worker already successfully completed
+            # the switch (updated DB and shared object). This worker just needs to retry.
+            logger.debug(f"Album switch from {shared_target_key} to {db_target_key} already completed by another worker.")
+            return False # Indicate switch already done
+
+        # 4. If keys match, THIS worker is the first to handle the full error *for this album*
         logger.warning("="*60)
-        logger.warning("SmugMug album reported as full! Attempting live switch...")
+        logger.warning(f"SmugMug album '{shared_target_key}' reported as full! Attempting live switch...")
 
-        current_album_name = smugmug_instance.album_name
-        if not current_album_name:
-             stored_config = db_manager_instance.get_config_snapshot()
-             if stored_config and stored_config.get('initial_album_name'):
-                  current_album_name = stored_config['initial_album_name']
-             else:
-                  logger.error("Cannot determine current album name for switch.")
-                  return False
+        # Use the name stored in the DB snapshot (initial_album_name) if available,
+        # otherwise use the current album name from the shared instance.
+        current_album_name_for_next = db_initial_album_name or smugmug_instance.album_name or shared_target_key
+        if not current_album_name_for_next:
+             logger.error("Cannot determine current album name/key to generate next sequential name.")
+             return False
 
-        next_album_name = get_next_album_name(current_album_name)
+        next_album_name = get_next_album_name(current_album_name_for_next)
         logger.warning(f"Attempting to find/create next album: '{next_album_name}'")
 
+        # Use a temporary SmugMug object instance for the get_or_create call
         temp_smugmug = SmugMug()
         temp_smugmug.config = smugmug_instance.config
         temp_smugmug.auth_session = smugmug_instance.auth_session
         temp_smugmug.user_uri = smugmug_instance.user_uri
 
+        # Attempt to find or create the next album
         if temp_smugmug.get_or_create_album_in_path(next_album_name, current_folder_name):
             new_album_key = temp_smugmug.album_key
             new_album_uri = temp_smugmug.album_api_uri
             logger.info(f"Successfully found/created next album: '{next_album_name}' (Key: {new_album_key})")
 
+            # Update the database config first (most critical)
+            # Keep the original initial_album_name, update current key/uri
             if not db_manager_instance.save_config_snapshot(
-                initial_album_name=initial_album_name,
-                album_key=new_album_key,
-                album_uri=new_album_uri,
+                initial_album_name=initial_album_name, # Keep original base name
+                album_key=new_album_key,             # NEW key
+                album_uri=new_album_uri,             # NEW uri
                 folder_name=current_folder_name,
                 google_album_id=google_album_id
             ):
                 logger.error("CRITICAL: Failed to update database config snapshot with new album!")
-                return False
+                return False # Indicate switch failed critically
 
+            # Now, update the shared SmugMug instance state
             logger.warning(f"Updating shared SmugMug instance to target new album: {new_album_key}")
             smugmug_instance.album_key = new_album_key
             smugmug_instance.album_api_uri = new_album_uri
-            smugmug_instance.album_name = next_album_name
+            smugmug_instance.album_name = next_album_name # Update name as well
 
-            album_switch_triggered = True
-            logger.warning("Live album switch complete. Workers will now target the new album.")
-            return True
+            logger.warning("Live album switch complete. Subsequent uploads in this run will target the new album.")
+            return True # Indicate switch was performed successfully by this call
         else:
             logger.error(f"Failed to find or create the next album '{next_album_name}'. Cannot switch.")
-            return False
+            return False # Indicate switch failed
 # --- End Album Switching Logic ---
 
 
-# --- Item Processing Worker Function (Modified for Live Switch) ---
+# --- Item Processing Worker Function (Revised Album Full Handling) ---
 def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
     """
     Worker function: Download -> Hash -> Check -> Upload.
     Handles SmugMugAlbumFullError by attempting a live switch.
     """
-    global shutdown_event, album_switch_lock, album_switch_triggered # Access globals
+    global shutdown_event, album_switch_lock # Access globals
 
     google_id = item_details.get('google_id')
     filename = item_details.get('filename')
@@ -437,22 +457,30 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
 
             except SmugMugAlbumFullError as afe:
                  logger.error(f"{log_identifier}: Upload failed - SmugMug Album Full: {afe}")
-                 # Update status FIRST
+                 # Update status FIRST to ERROR_ALBUM_FULL
                  db_manager.update_item_status(google_id, STATUS_ERROR_ALBUM_FULL, f"Album full: {afe}")
                  final_status = STATUS_ERROR_ALBUM_FULL
                  temp_file_path = None # Ensure path is None
 
-                 # Attempt the album switch (function handles locking and checks if already done)
+                 # Attempt the album switch (function handles locking)
                  stored_config = db_manager.get_config_snapshot()
                  initial_base_name = stored_config.get('initial_album_name') if stored_config else "UnknownAlbumBase"
                  current_folder = stored_config.get('current_folder_name') if stored_config else None
                  google_source_id = stored_config.get('google_album_id') if stored_config else None
 
-                 # Call the switch handler
-                 handle_album_full_switch(smugmug, db_manager, initial_base_name, current_folder, google_source_id)
-                 # Regardless of switch success/failure, this item needs retry, so return current status
+                 # Call the switch handler - it returns True only if THIS call performed the switch
+                 switch_performed_by_this_worker = handle_album_full_switch(
+                     smugmug, db_manager, initial_base_name, current_folder, google_source_id
+                 )
+                 # Log whether switch was done now or previously
+                 if switch_performed_by_this_worker:
+                     logger.info(f"{log_identifier}: Successfully initiated album switch.")
+                 else:
+                     logger.info(f"{log_identifier}: Album switch was handled by another worker or failed. Item marked for retry.")
 
-        return google_id, final_status
+                 # Return ERROR_ALBUM_FULL so item is retried later
+
+        return google_id, final_status # Return the final status determined
 
     except Exception as e:
         logger.error(f"Unexpected exception in worker for {google_id} ('{filename}'): {e}\n{traceback.format_exc()}")
@@ -476,7 +504,7 @@ def main():
     """Main execution function."""
     global logger, shutdown_requested, google_photos_instance_global, db_manager_global, shutdown_event
     global uploaded_in_run, duplicates_in_run, skipped_in_run, errors_in_run
-    global album_switch_triggered, album_switch_lock # Include lock
+    global album_switch_lock # Include lock, remove album_switch_triggered
 
     parser = argparse.ArgumentParser(description="Transfer Google Photos to SmugMug.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # Argument definitions remain the same...
@@ -518,7 +546,7 @@ def main():
     uploaded_in_run = 0; duplicates_in_run = 0; skipped_in_run = 0; errors_in_run = 0
     total_db_items = 0 # Initialize total DB items count
     num_submitted = 0 # Initialize submitted count for the run
-    album_switch_triggered = False # Reset flag
+    # album_switch_triggered removed
 
     # --- Initialize Cumulative Counters ---
     initial_uploaded_count = 0
@@ -548,8 +576,10 @@ def main():
                                            initial_stats.get(STATUS_DUPLICATE_FILENAME, 0)
                  initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + \
                                          initial_stats.get(STATUS_SKIPPED_HEIC, 0)
+                 # Include ALBUM_FULL in the initial error count for display consistency
                  initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
-                                       initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) # Include missing data in initial error count
+                                       initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) + \
+                                       initial_stats.get(STATUS_ERROR_ALBUM_FULL, 0)
                  logger.debug(f"Initial DB Stats: Up={initial_uploaded_count}, Dup={initial_duplicate_count}, Skip={initial_skipped_count}, Err={initial_error_count}")
              # --- End total count & initial stats fetch ---
         except Exception as e:
@@ -569,7 +599,9 @@ def main():
                  initial_uploaded_count = initial_stats.get(STATUS_UPLOADED_SUCCESS, 0)
                  initial_duplicate_count = initial_stats.get(STATUS_DUPLICATE_HASH, 0) + initial_stats.get(STATUS_DUPLICATE_FILENAME, 0)
                  initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + initial_stats.get(STATUS_SKIPPED_HEIC, 0)
-                 initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + initial_stats.get(STATUS_ERROR_MISSING_DATA, 0)
+                 initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
+                                       initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) + \
+                                       initial_stats.get(STATUS_ERROR_ALBUM_FULL, 0)
                  logger.debug(f"DB Stats after reset: Up={initial_uploaded_count}, Dup={initial_duplicate_count}, Skip={initial_skipped_count}, Err={initial_error_count}")
 
         # --- Initialize SmugMug ---
@@ -793,6 +825,7 @@ def main():
                         if final_status == STATUS_UPLOADED_SUCCESS: uploaded_in_run += 1
                         elif final_status in [STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH]: duplicates_in_run += 1
                         elif final_status in [STATUS_SKIPPED_FILTER, STATUS_SKIPPED_HEIC]: skipped_in_run += 1
+                        # Count ALBUM_FULL as an error for run summary, but it will be retried
                         elif final_status in ERROR_STATUSES or final_status == STATUS_ERROR_ALBUM_FULL: errors_in_run += 1
 
                         # --- Calculate and Log Overall Progress & Stats ---
@@ -804,6 +837,7 @@ def main():
                         current_total_uploaded = initial_uploaded_count + uploaded_in_run
                         current_total_duplicates = initial_duplicate_count + duplicates_in_run
                         current_total_skipped = initial_skipped_count + skipped_in_run
+                        # Add run errors to initial errors for cumulative display
                         current_total_errors = initial_error_count + errors_in_run
 
                         logger.progress(
@@ -829,6 +863,7 @@ def main():
                             f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} "
                             f"| Last: ERROR retrieving future result"
                         )
+
 
                     if shutdown_event.is_set():
                         logger.warning("Shutdown requested. Breaking from processing results.")
@@ -864,40 +899,45 @@ def main():
         logger.info(f"- Errors:           {errors_in_run}")
 
         final_db_filename = args.db_file
-        # Check for persistent errors (excluding album full if switch happened)
-        final_error_count_excluding_album_full = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s != STATUS_ERROR_ALBUM_FULL) + final_stats.get(STATUS_ERROR_MISSING_DATA, 0)
+        # Check for persistent errors (excluding album full, as it's expected to be retried)
+        final_error_count_for_exit = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s != STATUS_ERROR_ALBUM_FULL) + \
+                                     final_stats.get(STATUS_ERROR_MISSING_DATA, 0)
 
-        run_completed_successfully = (final_error_count_excluding_album_full == 0 and not shutdown_requested)
+        run_completed_successfully = (final_error_count_for_exit == 0 and not shutdown_requested)
+        album_switch_occurred_this_run = (final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) > 0) # Check if album full errors exist
 
-        if run_completed_successfully and not album_switch_triggered:
-            logger.info("- Status: Completed run without persistent errors")
-            remaining_items_count = final_total_db_items - sum(final_stats.get(s, 0) for s in TERMINAL_STATUSES)
-            if remaining_items_count == 0:
-                logger.info("All items processed successfully. Run complete.")
-                logger.info("Attempting to rename completed database file...")
-                if db_manager_global: db_manager_global.close(); logger.info("Closed DB before rename."); db_manager_global = None
-                else: logger.warning("DB manager not found for closing before rename.")
-                base_db_name, db_ext = os.path.splitext(args.db_file)
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_db_filename = f"{base_db_name}_completed_{timestamp}{db_ext}"
-                try:
-                    if os.path.exists(args.db_file):
-                        os.rename(args.db_file, new_db_filename)
-                        logger.info(f"Successfully renamed database to: {new_db_filename}")
-                        final_db_filename = new_db_filename
-                        cleanup_handled_in_try = True
-                        release_lock()
-                    else: logger.warning(f"DB file {args.db_file} not found for renaming.")
-                except OSError as e: logger.error(f"Failed rename DB: {e}", exc_info=True); print(f"\nERROR: Failed rename DB: {e}", file=sys.stderr)
-            else:
-                 logger.warning(f"Run completed without errors, but {remaining_items_count} items remain. DB not renamed.")
-        elif album_switch_triggered:
-             logger.warning("- Status: Album switched during run. Rerun script to process remaining items.")
+        if run_completed_successfully and not album_switch_occurred_this_run:
+             logger.info("- Status: Completed run without persistent errors or album switches")
+             remaining_items_count = final_total_db_items - sum(final_stats.get(s, 0) for s in TERMINAL_STATUSES)
+             if remaining_items_count == 0:
+                 logger.info("All items processed successfully. Run complete.")
+                 logger.info("Attempting to rename completed database file...")
+                 if db_manager_global: db_manager_global.close(); logger.info("Closed DB before rename."); db_manager_global = None
+                 else: logger.warning("DB manager not found for closing before rename.")
+                 base_db_name, db_ext = os.path.splitext(args.db_file)
+                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                 new_db_filename = f"{base_db_name}_completed_{timestamp}{db_ext}"
+                 try:
+                     if os.path.exists(args.db_file):
+                         os.rename(args.db_file, new_db_filename)
+                         logger.info(f"Successfully renamed database to: {new_db_filename}")
+                         final_db_filename = new_db_filename
+                         cleanup_handled_in_try = True
+                         release_lock()
+                     else: logger.warning(f"DB file {args.db_file} not found for renaming.")
+                 except OSError as e: logger.error(f"Failed rename DB: {e}", exc_info=True); print(f"\nERROR: Failed rename DB: {e}", file=sys.stderr)
+             else:
+                  logger.warning(f"Run completed without persistent errors, but {remaining_items_count} items remain. DB not renamed.")
+        elif album_switch_occurred_this_run:
+             # If an album switch happened, even if other errors are 0, prompt for rerun
+             album_full_count = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0)
+             logger.warning(f"- Status: Album switched during run. {album_full_count} items marked 'ERROR_ALBUM_FULL'.")
+             logger.warning(">>> Please re-run the script to continue processing with the new album. <<<")
         elif shutdown_requested:
             logger.warning("- Status: Terminated by user")
         else:
             # Use the final error count excluding album full for the message
-            logger.error(f"- Status: Completed run with {final_error_count_excluding_album_full} persistent errors")
+            logger.error(f"- Status: Completed run with {final_error_count_for_exit} persistent errors")
 
         logger.info(f"- Run Time: {total_duration:.2f} sec")
         logger.info("-" * 60)
@@ -929,9 +969,15 @@ def main():
             cleanup(google_photos_instance_global, db_manager_global)
         else:
             log_func_info("Skipping normal cleanup as DB rename handled it.")
-        # Use final error count excluding album full for exit code
-        final_error_count_for_exit = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s != STATUS_ERROR_ALBUM_FULL) + final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
-        exit_code = 1 if final_error_count_for_exit > 0 or shutdown_requested else 0
+
+        # Adjust exit code: Exit 0 only if run completed successfully AND no album switch happened
+        final_error_count_for_exit = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s != STATUS_ERROR_ALBUM_FULL) + \
+                                     final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
+        album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) > 0 if 'final_stats' in locals() else False
+        exit_code = 0
+        if final_error_count_for_exit > 0 or shutdown_requested or album_switch_occurred_final:
+            exit_code = 1
+
         log_func_info(f"Exiting script with code {exit_code}.")
         logging.shutdown()
         sys.exit(exit_code)
