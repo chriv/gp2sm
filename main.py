@@ -3,7 +3,7 @@
 # - Handles SmugMug album full errors by switching albums live without restart.
 # - Uses !children for folder/album checks in smugmug_module.
 # - Includes debug logging for SmugMug API responses.
-# - Progress indicator shows overall progress against total DB items.
+# - Progress indicator shows overall progress and overall stats.
 #
 # Attribution:
 # - Core logic and structure generated with assistance from Google Gemini AI.
@@ -59,7 +59,7 @@ google_photos_instance_global = None
 db_manager_global = None
 shutdown_event = threading.Event()
 album_switch_lock = threading.Lock()
-# Counters for run-specific summary
+# Counters for run-specific summary (used internally for increments)
 uploaded_in_run = 0
 duplicates_in_run = 0
 skipped_in_run = 0
@@ -520,6 +520,13 @@ def main():
     num_submitted = 0 # Initialize submitted count for the run
     album_switch_triggered = False # Reset flag
 
+    # --- Initialize Cumulative Counters ---
+    initial_uploaded_count = 0
+    initial_duplicate_count = 0
+    initial_skipped_count = 0
+    initial_error_count = 0
+    # --- End Initialize Cumulative Counters ---
+
     try:
         logger.info(f"--- Starting gp2sm v{__version__} ---")
         logger.info(f"Using database file: {args.db_file}")
@@ -531,10 +538,20 @@ def main():
              db_manager = DatabaseManager(db_file=args.db_file)
              db_manager_global = db_manager
              logger.info("DB manager initialized.")
-             # --- Get TOTAL DB items count EARLY ---
+             # --- Get TOTAL DB items count & Initial Stats EARLY ---
              total_db_items = db_manager.get_item_count()
              logger.info(f"Total items currently in database: {total_db_items}")
-             # --- End total count fetch ---
+             initial_stats = db_manager.get_stats()
+             if initial_stats:
+                 initial_uploaded_count = initial_stats.get(STATUS_UPLOADED_SUCCESS, 0)
+                 initial_duplicate_count = initial_stats.get(STATUS_DUPLICATE_HASH, 0) + \
+                                           initial_stats.get(STATUS_DUPLICATE_FILENAME, 0)
+                 initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_HEIC, 0)
+                 initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
+                                       initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) # Include missing data in initial error count
+                 logger.debug(f"Initial DB Stats: Up={initial_uploaded_count}, Dup={initial_duplicate_count}, Skip={initial_skipped_count}, Err={initial_error_count}")
+             # --- End total count & initial stats fetch ---
         except Exception as e:
              logger.critical(f"Failed init DB manager: {e}", exc_info=True)
              print(f"Critical Error: Failed to initialize database manager: {e}", file=sys.stderr)
@@ -545,8 +562,15 @@ def main():
             logger.info("Resetting errored items to PENDING...")
             reset_count = db_manager.reset_failed_items()
             logger.info(f"Reset {reset_count} items.")
-            # Re-fetch total count if reset happened, although it shouldn't change total
+            # Re-fetch total count and initial stats after reset
             total_db_items = db_manager.get_item_count()
+            initial_stats = db_manager.get_stats()
+            if initial_stats:
+                 initial_uploaded_count = initial_stats.get(STATUS_UPLOADED_SUCCESS, 0)
+                 initial_duplicate_count = initial_stats.get(STATUS_DUPLICATE_HASH, 0) + initial_stats.get(STATUS_DUPLICATE_FILENAME, 0)
+                 initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + initial_stats.get(STATUS_SKIPPED_HEIC, 0)
+                 initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + initial_stats.get(STATUS_ERROR_MISSING_DATA, 0)
+                 logger.debug(f"DB Stats after reset: Up={initial_uploaded_count}, Dup={initial_duplicate_count}, Skip={initial_skipped_count}, Err={initial_error_count}")
 
         # --- Initialize SmugMug ---
         try:
@@ -630,6 +654,8 @@ def main():
                      with db_manager.conn: db_manager.conn.execute(f"DELETE FROM {MEDIA_TABLE_NAME}")
                      logger.info("Cleared existing items.")
                      total_db_items = 0 # Reset total count after clearing
+                     # Reset initial stats as well
+                     initial_uploaded_count = 0; initial_duplicate_count = 0; initial_skipped_count = 0; initial_error_count = 0
                  except Exception as del_e: logger.error(f"Failed clear existing items: {del_e}", exc_info=True); print(f"Warning: Failed clear DB: {del_e}", file=sys.stderr)
 
             current_target_album_name = smugmug.album_name
@@ -742,7 +768,6 @@ def main():
             # --- Parallel Processing ---
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers, thread_name_prefix='Worker') as executor:
                 submitted_futures = []
-                # num_submitted already calculated
 
                 logger.info(f"Submitting {num_submitted} items...")
                 for item_details in items_to_process_list:
@@ -751,11 +776,10 @@ def main():
                         break
                     future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args)
                     submitted_futures.append(future)
-                    # No need to increment num_submitted here
 
-                logger.info(f"Submitted {len(submitted_futures)} tasks. Waiting...") # Log actual submitted count
+                logger.info(f"Submitted {len(submitted_futures)} tasks. Waiting...")
                 processed_count_this_run = 0 # Counter for items completed in this run
-                active_futures = submitted_futures # Use the list of actual futures
+                active_futures = submitted_futures
 
                 # Calculate items already completed before this run
                 items_completed_before_run = total_db_items - num_submitted
@@ -771,16 +795,20 @@ def main():
                         elif final_status in [STATUS_SKIPPED_FILTER, STATUS_SKIPPED_HEIC]: skipped_in_run += 1
                         elif final_status in ERROR_STATUSES or final_status == STATUS_ERROR_ALBUM_FULL: errors_in_run += 1
 
-                        # --- Calculate and Log Overall Progress ---
-                        # Numerator: Items completed before + items completed now
+                        # --- Calculate and Log Overall Progress & Stats ---
                         overall_completed_count = items_completed_before_run + processed_count_this_run
-                        # Denominator: Total items ever in DB
                         percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
                         last_id_short = f"{google_id[:8]}..." if google_id else "N/A"
 
+                        # Calculate cumulative totals for logging
+                        current_total_uploaded = initial_uploaded_count + uploaded_in_run
+                        current_total_duplicates = initial_duplicate_count + duplicates_in_run
+                        current_total_skipped = initial_skipped_count + skipped_in_run
+                        current_total_errors = initial_error_count + errors_in_run
+
                         logger.progress(
-                            f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) " # Show overall progress
-                            f"| Run: Up={uploaded_in_run} Dup={duplicates_in_run} Skip={skipped_in_run} Err={errors_in_run} " # Run specifics
+                            f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) "
+                            f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} " # Show overall stats
                             f"| Last: {final_status} (ID: {last_id_short})"
                         )
                         # --- End Overall Progress Logging ---
@@ -791,9 +819,14 @@ def main():
                         # Log overall progress even on error
                         overall_completed_count = items_completed_before_run + processed_count_this_run
                         percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
+                        # Calculate cumulative totals for logging on error
+                        current_total_uploaded = initial_uploaded_count + uploaded_in_run
+                        current_total_duplicates = initial_duplicate_count + duplicates_in_run
+                        current_total_skipped = initial_skipped_count + skipped_in_run
+                        current_total_errors = initial_error_count + errors_in_run
                         logger.error(
                             f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) "
-                            f"| Run: Up={uploaded_in_run} Dup={duplicates_in_run} Skip={skipped_in_run} Err={errors_in_run} "
+                            f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} "
                             f"| Last: ERROR retrieving future result"
                         )
 
@@ -806,8 +839,8 @@ def main():
         # --- Final Summary ---
         total_duration = time.time() - start_time
         logger.info("=" * 60)
-        logger.info("Run Summary:")
-        logger.info(f"  Items Submitted This Run:      {num_submitted}") # Use actual submitted count
+        logger.info("Run Summary (This Execution):") # Clarify summary scope
+        logger.info(f"  Items Submitted This Run:      {num_submitted}")
         logger.info(f"  Items Processed (Completed):   {processed_count_this_run}")
         logger.info(f"  Uploaded this Run:           {uploaded_in_run}")
         logger.info(f"  Marked as Duplicate this Run: {duplicates_in_run}")
@@ -815,9 +848,8 @@ def main():
         logger.info(f"  Errors this Run:             {errors_in_run}")
         logger.info(f"  Total processing time:       {total_duration:.2f} seconds")
         logger.info("-" * 60)
-        logger.info("Overall Database Stats:")
+        logger.info("Overall Database Stats (Cumulative):") # Clarify summary scope
         final_stats = db_manager.get_stats() if db_manager else {}
-        # Recalculate total DB items for final summary consistency
         final_total_db_items = sum(final_stats.values())
         logger.info(f"  Total Items in DB:           {final_total_db_items}")
         for status, count in sorted(final_stats.items()): logger.info(f"  - {status}: {count}")
@@ -832,8 +864,10 @@ def main():
         logger.info(f"- Errors:           {errors_in_run}")
 
         final_db_filename = args.db_file
-        non_album_full_errors = errors_in_run - (final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) if final_stats else 0)
-        run_completed_successfully = (non_album_full_errors == 0 and not shutdown_requested)
+        # Check for persistent errors (excluding album full if switch happened)
+        final_error_count_excluding_album_full = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s != STATUS_ERROR_ALBUM_FULL) + final_stats.get(STATUS_ERROR_MISSING_DATA, 0)
+
+        run_completed_successfully = (final_error_count_excluding_album_full == 0 and not shutdown_requested)
 
         if run_completed_successfully and not album_switch_triggered:
             logger.info("- Status: Completed run without persistent errors")
@@ -862,7 +896,8 @@ def main():
         elif shutdown_requested:
             logger.warning("- Status: Terminated by user")
         else:
-            logger.error(f"- Status: Completed run with {errors_in_run} persistent errors")
+            # Use the final error count excluding album full for the message
+            logger.error(f"- Status: Completed run with {final_error_count_excluding_album_full} persistent errors")
 
         logger.info(f"- Run Time: {total_duration:.2f} sec")
         logger.info("-" * 60)
@@ -894,7 +929,9 @@ def main():
             cleanup(google_photos_instance_global, db_manager_global)
         else:
             log_func_info("Skipping normal cleanup as DB rename handled it.")
-        exit_code = 1 if errors_in_run > 0 or shutdown_requested else 0
+        # Use final error count excluding album full for exit code
+        final_error_count_for_exit = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s != STATUS_ERROR_ALBUM_FULL) + final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
+        exit_code = 1 if final_error_count_for_exit > 0 or shutdown_requested else 0
         log_func_info(f"Exiting script with code {exit_code}.")
         logging.shutdown()
         sys.exit(exit_code)
