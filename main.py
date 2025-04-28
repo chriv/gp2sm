@@ -1,15 +1,11 @@
-# Google Photos to SmugMug Transfer Script (v2.0)
-# - Fixed logic for "temp file missing" error before upload for hashed images.
-# - Simplified colorlog format string to color entire line by level.
-# - Set INFO level color to white.
-# - Removed --retry-errors argument (errors always retried now via db_manager).
-# - Fixed progress calculation to use db_manager.get_item_count_by_status.
-# - Added custom PROGRESS log level with distinct color.
-# - Changed console handler back to sys.stdout.
-# - Replaced ALL print statements with logger calls for progress, summary, and status.
-# - Fixed SyntaxError in worker try/except blocks.
+# Google Photos to SmugMug Transfer Script (gp2sm) - v2.0
 # Implements parallel processing using worker threads,
 # each handling the full lifecycle (Download -> Hash -> Check -> Upload) for one item.
+#
+# Attribution:
+# - Core logic and structure generated with assistance from Google Gemini AI.
+# - SmugMug upload logic inspired by/adapted from SkiTheSlicer's work:
+#   https://github.com/SkiTheSlicer/smugmug-api-v2-upload
 
 __version__ = "2.0" # Version kept as requested
 

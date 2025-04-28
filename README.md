@@ -22,7 +22,7 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * **Configuration Consistency Check:**
     * Stores a snapshot of the initial run's target configuration (SmugMug album/folder, Google source) in the database.
     * On resume, compares current settings against the stored snapshot.
-    * Warns the user if a mismatch is detected and continues using the stored settings to ensure consistency for the in-progress transfer.
+    * Warns the user if a mismatch is detected and continues using the **stored settings** from the database to ensure consistency for the ongoing transfer.
     * Provides instructions on how to override this behavior (`--force-refresh-list` or deleting the DB) if the user intends to change the target.
 * **Duplicate Checking:**
     * Checks for existing images on SmugMug using MD5 hash comparison (hash is calculated once and stored in the database).
@@ -185,6 +185,11 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 ## Lock File
 
 The script creates `gp2sm.lock` while running to prevent accidental simultaneous executions, which could corrupt the database or cause API issues. If the script crashes or is force-quit, you may need to manually delete this file before running again.
+
+## Attribution
+
+* Core logic and structure generated with assistance from Google Gemini AI.
+* SmugMug upload logic inspired by/adapted from SkiTheSlicer's work: [https://github.com/SkiTheSlicer/smugmug-api-v2-upload](https://github.com/SkiTheSlicer/smugmug-api-v2-upload)
 
 ## License
 
