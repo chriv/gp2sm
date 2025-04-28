@@ -17,6 +17,7 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
     * Calculated MD5 hashes for images are stored to avoid re-hashing.
     * Allows the script to be stopped and resumed, picking up where it left off based on the database state.
     * Reduces redundant API calls to fetch the full list on every run after the first.
+* **Automatic Error Retry (v2.0):** Items marked with an error status in previous runs are automatically included for reprocessing in subsequent runs.
 * **Database Preservation:** Upon successful completion of the entire transfer (no errors in the final run and no items left pending), the database file is automatically renamed with a timestamp (e.g., `gp2sm_transfer_state_completed_YYYYMMDD_HHMMSS.db`) to preserve the final state for auditing and prevent accidental resumption.
 * **Configuration Consistency Check:**
     * Stores a snapshot of the initial run's target configuration (SmugMug album/folder, Google source) in the database.
@@ -37,7 +38,7 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
     * Adds missing required fields with placeholders to an existing `smugmug_config.json` if incomplete.
     * Provides clear instructions if the Google API credentials file (`google_api_keys.json`) is missing.
 * **Improved Logging (v2.0):**
-    * Colorized console output for different message levels (INFO, SUCCESS, WARNING, ERROR, DEBUG).
+    * Colorized console output for different message levels (INFO, PROGRESS, WARNING, ERROR, DEBUG).
     * **Includes thread names** in log messages for easier debugging of parallel operations.
     * Detailed file logging to `gp2sm_transfer.log` (with log rotation).
     * Google Photos IDs are truncated in log messages for better readability.
@@ -103,7 +104,7 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
         * It compares the current SmugMug/Google target settings (from config/CLI) with the snapshot stored in the database.
         * If settings differ: A warning is displayed, and the script proceeds using the **stored settings** from the database to ensure consistency for the ongoing transfer. You will be advised to delete the database or use `--force-refresh-list` if you want to use the new settings.
         * If settings match: Processing resumes silently.
-        * It queries the database for items that are not yet in a final state (e.g., `PENDING`, `HASHED`, `ERROR_*` if `--retry-errors` is used).
+        * It queries the database for items that are not yet in a final state (e.g., `PENDING`, `HASHED`, `ERROR_*`).
         * Processing resumes from the items found in the database using parallel workers, skipping the initial list fetch from Google Photos.
     * **Completion:** When the script processes all items in the database without errors during the run and no items remain in a non-terminal state, it will:
         * Log a "All items processed successfully" message.
@@ -133,7 +134,6 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * `--process-heic`: (Optional) Process HEIC files (Apple Live Photos). Default is to ignore them. See "HEIC File Handling" below for important implications.
 * `--db-file <PATH>`: (Optional) Specify the path to the SQLite database file. Defaults to `gp2sm_transfer_state.db` in the current directory.
 * `--force-refresh-list`: (Optional) Ignore existing database content and re-fetch the complete list from Google Photos, populating the database again (including saving a new configuration snapshot). Use if you suspect the DB is out of sync or want to start a new transfer based on current settings. Existing entries won't be deleted, but new items will be added.
-* `--retry-errors`: (Optional) Attempt to re-process items currently marked with an error status (e.g., `ERROR_DOWNLOAD`, `ERROR_UPLOAD_FAILED`) in the database.
 * `--reset-errors`: (Optional) Before starting the processing loop, reset all items currently marked with an error status back to `PENDING` for a fresh retry attempt.
 * `--workers <NUM>`: (Optional) Specify the number of parallel worker threads to use (default: 5).
 * `--debug`: (Optional) Enable debug logging, providing more verbose output to both the console and the log file.
