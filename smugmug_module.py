@@ -629,58 +629,119 @@ class SmugMug:
         logger.debug(f"Media '{filename}' not found in SmugMug album {album_key} via {check_method}.")
         return False
 
-
+    # Replacement for get_or_create_folder in smugmug_module.py
     def get_or_create_folder(self, parent_node_uri, folder_name):
-        """Finds or creates a folder within a parent node (User or Folder)."""
+        """Finds or creates a folder within a parent node (User or Folder) by fetching children."""
         if not parent_node_uri or not folder_name:
-             logger.error("Parent node URI and folder name are required.")
-             return None
-
-        logger.info(f"Checking for folder '{folder_name}' under node {parent_node_uri}...")
-        # Search for the folder by name within the parent node
-        search_params = {
-            'Scope': parent_node_uri,
-            'Type': 'Folder',
-            'Text': folder_name,
-            '_filter': ['Name'], # Filter by Name field
-            '_filterValue': [folder_name] # Value must match Name exactly
-        }
-        _, search_data = self._make_api_request('GET', '/api/v2/node!search', params=search_params) # Use node!search
-
-        if search_data and 'Response' in search_data and 'Node' in search_data['Response']:
-            # Found existing node(s) - Check if it's the exact folder we want
-            for node in search_data['Response']['Node']:
-                 # Ensure it's a folder and the name matches exactly
-                 if node.get('Type') == 'Folder' and node.get('Name') == folder_name:
-                      folder_uri = node.get('Uri') # The Node URI
-                      logger.info(f"Found existing folder '{folder_name}' with Node URI: {folder_uri}")
-                      return folder_uri # Return URI of the first exact match
-
-        # Folder not found, attempt to create it
-        logger.info(f"Folder '{folder_name}' not found. Attempting to create...")
-        # Generate a URL-safe name
-        url_name_base = ''.join(c for c in folder_name if c.isalnum() or c in (' ', '-')).strip().title().replace(' ', '')
-        url_name = url_name_base[:50] if url_name_base else f"Folder{hashlib.md5(folder_name.encode()).hexdigest()[:8]}"
-        if not url_name: url_name = f"Folder{hashlib.md5(folder_name.encode()).hexdigest()[:8]}"
-        if url_name and not url_name[0].isupper(): url_name = url_name[0].upper() + url_name[1:]
-
-        create_payload = {
-            'Name': folder_name,
-            'UrlName': url_name,
-            'Type': 'Folder', # Specify type when creating via parent node
-            'Privacy': 'Private' # Default privacy
-        }
-        # The POST request should target the parent node's !children endpoint
-        create_url = f"{parent_node_uri}!children"
-        _, create_data = self._make_api_request('POST', create_url, json=create_payload)
-
-        if create_data and 'Response' in create_data and 'Node' in create_data['Response']:
-            new_folder_uri = create_data['Response']['Node']['Uri'] # Get the new Node URI
-            logger.info(f"Folder '{folder_name}' created successfully with Node URI: {new_folder_uri}")
-            return new_folder_uri
-        else:
-            logger.error(f"Failed to create folder '{folder_name}' under {parent_node_uri}.")
+            logger.error("Parent node URI and folder name are required.")
             return None
+
+        logger.info(f"Checking for folder '{folder_name}' under node {parent_node_uri} by listing children...")
+
+        # --- Use !children endpoint ---
+        children_uri_base = f"{parent_node_uri}!children"
+        found_folder_uri = None
+        next_page_uri = children_uri_base  # Start with the initial children URI
+
+        while next_page_uri:
+            # Append count=100 for pagination efficiency if not already present in the base or next page URI
+            # Ensure base_url isn't added repeatedly if next_page_uri is already absolute
+            current_request_uri = next_page_uri
+            if self.SMUGMUG_API_BASE_URL not in current_request_uri:
+                current_request_uri = self.SMUGMUG_API_BASE_URL + current_request_uri
+
+            # Add count parameter smartly
+            separator = '&' if '?' in current_request_uri else '?'
+            if 'count=' not in current_request_uri:
+                current_request_uri += f"{separator}count=100"
+
+            # Make the API request using the full URI
+            _, data = self._make_api_request('GET', current_request_uri)  # Pass full URI directly
+
+            if data and 'Response' in data and 'Node' in data['Response']:
+                child_nodes = data['Response']['Node']
+                for node in child_nodes:
+                    # Case-insensitive check for folder name match
+                    if node.get('Type') == 'Folder' and node.get('Name', '').lower() == folder_name.lower():
+                        found_folder_uri = node.get('Uri')
+                        logger.info(f"Found existing folder '{folder_name}' with Node URI: {found_folder_uri}")
+                        # Ensure a valid URI was found before returning
+                        if found_folder_uri:
+                            return found_folder_uri  # Exit loop and return URI
+                        else:
+                            logger.warning(
+                                f"Folder node found for '{folder_name}' but 'Uri' key is missing. Node data: {node}")
+                            # Continue checking other nodes just in case, but this is unexpected
+
+                # Check for pagination using the Pages dictionary from the Response
+                paging = data['Response'].get('Pages')
+                if paging and paging.get('NextPage'):
+                    # SmugMug returns relative URIs in NextPage, handle potential double slashes
+                    next_relative_uri = paging['NextPage']
+                    # Construct absolute URL for next request to avoid issues with base URL in _make_api_request
+                    next_page_uri = self.SMUGMUG_API_BASE_URL + next_relative_uri
+                    logger.debug(f"Paginating children list for folder check, next URI: {next_page_uri}")
+                else:
+                    next_page_uri = None  # No more pages
+            elif data and 'Response' in data and 'Node' not in data['Response']:
+                logger.debug(
+                    f"No 'Node' key in children response for {parent_node_uri}. No children found or empty page.")
+                next_page_uri = None  # No children or empty page
+            else:
+                logger.warning(f"Failed to retrieve children list from {parent_node_uri} for folder check.")
+                next_page_uri = None  # Stop trying if API call fails
+                return None  # Treat API error as potentially fatal for this operation
+
+        # --- Folder Not Found by Listing Children ---
+        if not found_folder_uri:
+            logger.info(f"Folder '{folder_name}' not found by listing children. Attempting to create...")
+            # Generate a URL-safe name
+            url_name_base = ''.join(c for c in folder_name if c.isalnum() or c in (' ', '-')).strip().title().replace(
+                ' ', '')
+            # Ensure UrlName is not empty and has a fallback
+            url_name = url_name_base[
+                       :50] if url_name_base else f"Folder{hashlib.md5(folder_name.encode()).hexdigest()[:8]}"
+            if not url_name: url_name = f"Folder{hashlib.md5(folder_name.encode()).hexdigest()[:8]}"  # Double check for safety
+            # Ensure UrlName starts with an uppercase letter if possible
+            if url_name and url_name[0].islower(): url_name = url_name[0].upper() + url_name[1:]
+
+            create_payload = {
+                'Name': folder_name,
+                'UrlName': url_name,
+                'Type': 'Folder',  # Specify type when creating via parent node
+                'Privacy': 'Private'  # Default privacy
+            }
+            # The POST request still targets the parent node's !children endpoint
+            create_url = f"{parent_node_uri}!children"
+            post_response, create_data = self._make_api_request('POST', create_url, json=create_payload)
+
+            if create_data and 'Response' in create_data and 'Node' in create_data['Response']:
+                new_folder_uri = create_data['Response']['Node'].get('Uri')  # Use .get() for safety
+                if new_folder_uri:
+                    logger.info(f"Folder '{folder_name}' created successfully with Node URI: {new_folder_uri}")
+                    return new_folder_uri
+                else:
+                    logger.error(
+                        f"Folder '{folder_name}' created, but response missing Node 'Uri'. Response: {create_data}")
+                    return None
+            else:
+                # Log specific SmugMug error if available from the response object
+                smugmug_error_details = ""
+                if post_response is not None and 400 <= post_response.status_code < 600:
+                    try:
+                        error_json = post_response.json()
+                        smugmug_error_details = f" (Code: {error_json.get('code', 'N/A')}, Message: {error_json.get('message', 'N/A')})"
+                    except json.JSONDecodeError:
+                        smugmug_error_details = f" (Status Code: {post_response.status_code}, Non-JSON Response: {post_response.text[:100]})"
+                    except Exception:  # Catch any other error during parsing
+                        smugmug_error_details = f" (Status Code: {post_response.status_code}, Error parsing response)"
+
+                logger.error(f"Failed to create folder '{folder_name}' under {parent_node_uri}.{smugmug_error_details}")
+                return None
+
+        # Fallback if something unexpected happened (e.g., found_folder_uri was None but creation wasn't attempted)
+        return None
+
 
     def get_or_create_album_in_path(self, album_name, folder_path_str):
         """
