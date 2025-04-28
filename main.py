@@ -1,4 +1,5 @@
 # Google Photos to SmugMug Transfer Script (v2.0)
+# - Fixed logic for "temp file missing" error before upload for hashed images.
 # - Simplified colorlog format string to color entire line by level.
 # - Set INFO level color to white.
 # - Removed --retry-errors argument (errors always retried now via db_manager).
@@ -270,7 +271,6 @@ def cleanup(google_photos_instance, db_manager_instance):
 
 
 # --- Item Processing Worker Function ---
-# This function remains unchanged as the logic for processing a single item is correct.
 def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
     """
     Worker function executed by each thread. Handles the entire lifecycle
@@ -516,30 +516,24 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
             return google_id, final_status
 
         # --- Proceed with Actual Upload ---
-        # Ensure temp file exists before attempting upload (might need re-download)
+        # *** FIX: Ensure temp file exists before attempting upload ***
+        # If the file wasn't downloaded initially (e.g., image with existing hash)
+        # but the duplicate check passed, we need to download it now.
         if not temp_file_path or not os.path.exists(temp_file_path):
-            # This implies download was needed but failed, or file disappeared.
-            # Attempt re-download only if download was originally needed for this item type.
-            if needs_download:
-                 logger.warning(f"{log_identifier}: Temp file path missing before upload. Attempting download again...")
-                 # Reuse original item_details for re-download attempt
-                 temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details)
-                 # Check if re-download succeeded
-                 if not temp_file_path:
-                      logger.error(f"{log_identifier}: Re-download failed before upload.")
-                      db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Re-download failed before upload attempt")
-                      return google_id, STATUS_ERROR_DOWNLOAD # Exit processing
-                 # Update DB if details refreshed during re-download
-                 if refreshed_details:
-                      new_base_url = refreshed_details.get('baseUrl')
-                      new_metadata = refreshed_details.get('mediaMetadata')
-                      new_metadata_json = json.dumps(new_metadata) if new_metadata else item_details.get('media_metadata_json')
-                      db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-            else:
-                # If download wasn't originally needed, but file is missing now, it's an unexpected error
-                 logger.error(f"{log_identifier}: Temp file path missing unexpectedly before upload. Skipping. Expected path: {temp_file_path}")
-                 db_manager.update_item_status(google_id, STATUS_ERROR_UNKNOWN, "Temp file missing unexpectedly before upload")
-                 return google_id, STATUS_ERROR_UNKNOWN # Exit processing
+            logger.warning(f"{log_identifier}: Temp file path missing before upload. Attempting download now...")
+            # Reuse original item_details for download attempt
+            temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details)
+            # Check if download succeeded
+            if not temp_file_path:
+                logger.error(f"{log_identifier}: Download failed before upload.")
+                db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Download failed before upload attempt")
+                return google_id, STATUS_ERROR_DOWNLOAD # Exit processing
+            # Update DB if details refreshed during download
+            if refreshed_details:
+                new_base_url = refreshed_details.get('baseUrl')
+                new_metadata = refreshed_details.get('mediaMetadata')
+                new_metadata_json = json.dumps(new_metadata) if new_metadata else item_details.get('media_metadata_json')
+                db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
 
 
         # --- Upload Attempt ---
@@ -1123,7 +1117,7 @@ def main():
                         print(f"\nERROR: Failed to rename completed database file: {e}", file=sys.stderr)
                 elif remaining_items_count > 0:
                      # Run completed without errors, but items remain
-                     logger.warning(f"Run completed without errors, but {remaining_items_count} items still require processing. DB not renamed.")
+                     logger.warning(f"Run completed without errors, but {len(remaining_items_count)} items still require processing. DB not renamed.")
                 else: # remaining_items_count is -1 (error getting count)
                      logger.error("Could not determine remaining items count. DB not renamed.")
 
