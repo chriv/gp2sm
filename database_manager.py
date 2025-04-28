@@ -1,7 +1,10 @@
 # database_manager.py (v2.0)
+# - Added STATUS_ERROR_ALBUM_FULL status code.
+# - Added STATUS_ERROR_ALBUM_FULL to ERROR_STATUSES for automatic retry.
+# - Added initial_album_name column to run_config table.
+# - Modified save_config_snapshot to use INSERT OR REPLACE and include initial_album_name.
 # - Added get_item_count_by_status method.
 # - Modified get_items_to_process to always include errors for retry.
-# - Removed retry_errors parameter from get_items_to_process.
 # Handles SQLite database operations for gp2sm transfer state.
 
 import sqlite3
@@ -15,10 +18,9 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 DB_FILE_DEFAULT = "gp2sm_transfer_state.db"
 MEDIA_TABLE_NAME = "media_items"
-CONFIG_TABLE_NAME = "run_config" # New table for config snapshot
+CONFIG_TABLE_NAME = "run_config" # Table for config snapshot
 
 # --- Status Codes ---
-# (Status codes remain the same)
 STATUS_PENDING = "PENDING"
 STATUS_HASHED = "HASHED" # MD5 calculated (for images)
 STATUS_SMUGMUG_CHECKED_NOT_FOUND = "SMUGMUG_CHECKED_NOT_FOUND"
@@ -33,6 +35,7 @@ STATUS_ERROR_DOWNLOAD = "ERROR_DOWNLOAD"
 STATUS_ERROR_HASHING = "ERROR_HASHING"
 STATUS_ERROR_SMUGMUG_API = "ERROR_SMUGMUG_API" # General SM API error during check/upload
 STATUS_ERROR_UPLOAD_FAILED = "ERROR_UPLOAD_FAILED" # Upload POST failed
+STATUS_ERROR_ALBUM_FULL = "ERROR_ALBUM_FULL" # SmugMug album limit reached (NEW)
 STATUS_ERROR_UNKNOWN = "ERROR_UNKNOWN"
 STATUS_ERROR_MISSING_DATA = "ERROR_MISSING_DATA" # Item lacks essential fields
 
@@ -52,6 +55,7 @@ ERROR_STATUSES = [
     STATUS_ERROR_HASHING,
     STATUS_ERROR_SMUGMUG_API,
     STATUS_ERROR_UPLOAD_FAILED,
+    STATUS_ERROR_ALBUM_FULL, # Add new status here for retry
     STATUS_ERROR_UNKNOWN,
     # STATUS_ERROR_MISSING_DATA is excluded here as it's less likely to be auto-resolved
 ]
@@ -65,7 +69,7 @@ class DatabaseManager:
         self.db_file = db_file
         self.conn = None
         self._connect()
-        self._create_tables() # Updated to create both tables
+        self._create_tables() # Create tables if they don't exist
 
     def _connect(self):
         """Establishes a connection to the SQLite database."""
@@ -81,7 +85,7 @@ class DatabaseManager:
             logger.critical(f"Error connecting to database {self.db_file}: {e}", exc_info=True)
             raise
 
-    def _create_tables(self): # Renamed from _create_table
+    def _create_tables(self):
         """Creates the database tables if they don't exist."""
         if not self.conn:
             logger.error("Cannot create tables: No database connection.")
@@ -100,7 +104,7 @@ class DatabaseManager:
                         media_metadata_json TEXT,
                         status TEXT NOT NULL DEFAULT '{STATUS_PENDING}',
                         md5_hash TEXT,
-                        smugmug_album_key TEXT, -- Store the key used *for this item*
+                        smugmug_album_key TEXT, -- Store the key used *for this item* (matches config snapshot)
                         last_error TEXT,
                         last_processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         upload_attempts INTEGER DEFAULT 0
@@ -112,221 +116,141 @@ class DatabaseManager:
                 self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_filename ON {MEDIA_TABLE_NAME} (filename);")
                 logger.debug(f"Ensured indexes exist on '{MEDIA_TABLE_NAME}'.")
 
-                # --- Run Config Table (New) ---
-                # Stores the configuration used when the DB was first populated
+                # --- Run Config Table ---
+                # Stores the configuration used when the DB was first populated or last force-refreshed
+                # Added initial_album_name to track the base name for sequential numbering
                 self.conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {CONFIG_TABLE_NAME} (
                         id INTEGER PRIMARY KEY CHECK (id = 1), -- Enforce only one row
                         initial_run_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        smugmug_album_key TEXT NOT NULL,
-                        smugmug_album_uri TEXT NOT NULL,
-                        smugmug_folder_name TEXT, -- Can be NULL if root
-                        google_album_id TEXT -- Can be NULL if whole library
+                        initial_album_name TEXT,      -- Store the original base album name (NEW)
+                        current_album_key TEXT NOT NULL, -- Renamed from smugmug_album_key
+                        current_album_uri TEXT NOT NULL, -- Renamed from smugmug_album_uri
+                        current_folder_name TEXT,    -- Renamed from smugmug_folder_name
+                        google_album_id TEXT
                     )
                 """)
                 logger.debug(f"Ensured table '{CONFIG_TABLE_NAME}' exists.")
 
-        except sqlite3.Error as e:
-            logger.error(f"Error creating tables: {e}", exc_info=True)
+                # --- Schema Migration (Example: Add initial_album_name if missing) ---
+                # Check if the new column exists and add it if not
+                cursor = self.conn.execute(f"PRAGMA table_info({CONFIG_TABLE_NAME})")
+                columns = [column[1] for column in cursor.fetchall()]
+                if 'initial_album_name' not in columns:
+                    logger.warning(f"Adding missing 'initial_album_name' column to {CONFIG_TABLE_NAME} table.")
+                    self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} ADD COLUMN initial_album_name TEXT")
+                # Rename old columns if they exist (for backward compatibility)
+                if 'smugmug_album_key' in columns and 'current_album_key' not in columns:
+                     logger.warning(f"Renaming 'smugmug_album_key' to 'current_album_key' in {CONFIG_TABLE_NAME}.")
+                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_album_key TO current_album_key")
+                if 'smugmug_album_uri' in columns and 'current_album_uri' not in columns:
+                     logger.warning(f"Renaming 'smugmug_album_uri' to 'current_album_uri' in {CONFIG_TABLE_NAME}.")
+                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_album_uri TO current_album_uri")
+                if 'smugmug_folder_name' in columns and 'current_folder_name' not in columns:
+                     logger.warning(f"Renaming 'smugmug_folder_name' to 'current_folder_name' in {CONFIG_TABLE_NAME}.")
+                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_folder_name TO current_folder_name")
 
-    def save_initial_config(self, sm_album_key, sm_album_uri, sm_folder, gp_album_id):
-        """
-        Saves the initial run configuration snapshot to the database.
-        Only inserts if the config table is empty. Returns True on success/already exists, False on error.
-        """
-        if not self.conn: return False
-        logger.info("Attempting to save initial run configuration snapshot to database...")
-        # Check if config already exists
-        try:
-            cursor = self.conn.execute(f"SELECT COUNT(*) FROM {CONFIG_TABLE_NAME}")
-            count = cursor.fetchone()[0]
-            if count > 0:
-                logger.info("Initial run configuration already exists in the database. Skipping save.")
-                return True # Config already saved
         except sqlite3.Error as e:
-            logger.error(f"Error checking existing run configuration: {e}", exc_info=True)
-            return False # Error checking
+            logger.error(f"Error creating/updating tables: {e}", exc_info=True)
+            raise
 
-        # Insert the initial config
-        sql = f"""
-            INSERT INTO {CONFIG_TABLE_NAME} (
-                id, smugmug_album_key, smugmug_album_uri, smugmug_folder_name, google_album_id
-            ) VALUES (?, ?, ?, ?, ?)
-        """
-        params = (1, sm_album_key, sm_album_uri, sm_folder, gp_album_id)
-        try:
-            with self.conn:
-                self.conn.execute(sql, params)
-            logger.info("Successfully saved initial run configuration snapshot.")
-            logger.info(f"  - SmugMug Album Key: {sm_album_key}")
-            logger.info(f"  - SmugMug Album URI: {sm_album_uri}")
-            logger.info(f"  - SmugMug Folder: {sm_folder or 'Root'}")
-            logger.info(f"  - Google Album ID: {gp_album_id or 'Entire Library'}")
-            return True
-        except sqlite3.IntegrityError:
-            # This might happen in a race condition, although unlikely for this script.
-            # Treat it as success because the config exists.
-            logger.warning("Attempted to save initial config, but it seems to already exist (IntegrityError).")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"Error saving initial run configuration: {e}", exc_info=True)
-            return False
+    def add_item_batch(self, items, target_album_key):
+        """Adds a batch of media items to the database, skipping duplicates."""
+        if not self.conn:
+            logger.error("Cannot add items: No database connection.")
+            return 0
 
-    def get_stored_config(self):
-        """
-        Retrieves the stored initial run configuration snapshot.
-        Returns a dictionary (or None if not found or error).
-        """
-        if not self.conn: return None
-        sql = f"SELECT * FROM {CONFIG_TABLE_NAME} WHERE id = 1"
-        try:
-            cursor = self.conn.execute(sql)
-            row = cursor.fetchone()
-            if row:
-                logger.debug("Retrieved stored run configuration snapshot from database.")
-                return dict(row)
-            else:
-                logger.debug("No stored run configuration snapshot found in database.")
-                return None
-        except sqlite3.Error as e:
-            logger.error(f"Error retrieving stored run configuration: {e}", exc_info=True)
-            return None
-
-    def add_item_batch(self, items, smugmug_album_key):
-        """Adds a batch of items fetched from Google Photos to the database."""
-        if not self.conn: return 0
         added_count = 0
+        skipped_count = 0
         # Use MEDIA_TABLE_NAME
         sql = f"""
             INSERT OR IGNORE INTO {MEDIA_TABLE_NAME} (
                 google_id, filename, mime_type, base_url, product_url,
-                creation_timestamp, media_metadata_json, smugmug_album_key, status
+                creation_timestamp, media_metadata_json, status, smugmug_album_key
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         items_to_insert = []
         for item in items:
-            # Basic validation for essential fields
-            if not isinstance(item, dict) or not item.get('id') or not item.get('filename') or not item.get('mimeType'):
-                 logger.warning(f"Skipping invalid item during DB insert: {item}")
+            google_id = item.get('id')
+            if not google_id:
+                logger.warning("Skipping item with missing ID in batch add.")
+                continue
+
+            filename = item.get('filename')
+            mime_type = item.get('mimeType')
+            base_url = item.get('baseUrl')
+            product_url = item.get('productUrl')
+            media_metadata = item.get('mediaMetadata', {})
+            creation_time = media_metadata.get('creationTime')
+            media_metadata_json = json.dumps(media_metadata) if media_metadata else None
+
+            if not filename or not mime_type:
+                 logger.warning(f"Skipping item {google_id} due to missing filename or mimeType.")
                  continue
 
-            metadata = item.get('mediaMetadata', {})
-            creation_time = metadata.get('creationTime') # Keep as string from API
-
             items_to_insert.append((
-                item['id'],
-                item['filename'],
-                item['mimeType'],
-                item.get('baseUrl'),
-                item.get('productUrl'),
-                creation_time,
-                json.dumps(metadata), # Store metadata as JSON string
-                smugmug_album_key, # Store the key used for this batch
-                STATUS_PENDING # Initial status
+                google_id, filename, mime_type, base_url, product_url,
+                creation_time, media_metadata_json, STATUS_PENDING, target_album_key
             ))
 
         if not items_to_insert:
-            logger.warning("No valid items provided in the batch to add to the database.")
+            logger.info("No valid items provided in batch to add.")
             return 0
 
         try:
             with self.conn:
                 cursor = self.conn.executemany(sql, items_to_insert)
-                added_count = cursor.rowcount # Number of rows actually inserted (ignores duplicates)
-            logger.info(f"Added/Ignored {len(items_to_insert)} items in batch. New rows inserted: {added_count}")
+            added_count = cursor.rowcount
+            skipped_count = len(items_to_insert) - added_count
+            logger.info(f"Batch add complete: Added {added_count} new items, skipped {skipped_count} existing items.")
             return added_count
         except sqlite3.Error as e:
             logger.error(f"Error adding item batch to database: {e}", exc_info=True)
             return 0
 
-    # --- Modified get_items_to_process ---
-    def get_items_to_process(self, limit=None):
-        """
-        Gets items that need processing based on status.
-        ALWAYS includes items with retryable error statuses.
-        """
-        if not self.conn: return []
-
-        # Define statuses indicating item needs processing or retry
-        statuses_to_fetch = [
-            STATUS_PENDING,
-            STATUS_HASHED,
-            STATUS_SMUGMUG_CHECKED_NOT_FOUND,
-            STATUS_DOWNLOADED_FOR_UPLOAD,
-            STATUS_UPLOAD_ATTEMPTED,
-        ]
-        # Always include retryable errors
-        statuses_to_fetch.extend(ERROR_STATUSES)
-        # Remove duplicates just in case
-        statuses_to_fetch = list(set(statuses_to_fetch))
-
-        logger.info(f"Querying for items to process (including errors) with statuses: {statuses_to_fetch}")
-
-        placeholders = ', '.join('?' * len(statuses_to_fetch))
-        # Use MEDIA_TABLE_NAME
-        sql = f"SELECT * FROM {MEDIA_TABLE_NAME} WHERE status IN ({placeholders}) ORDER BY creation_timestamp ASC"
-
-        # Apply limit if provided
-        if limit and isinstance(limit, int) and limit > 0:
-            sql += f" LIMIT {limit}"
-
-        try:
-            cursor = self.conn.execute(sql, statuses_to_fetch)
-            items = cursor.fetchall()
-            # Convert sqlite3.Row objects to dictionaries for easier handling
-            item_dicts = [dict(row) for row in items]
-            logger.info(f"Found {len(item_dicts)} items to process.")
-            return item_dicts
-        except sqlite3.Error as e:
-            logger.error(f"Error fetching items to process: {e}", exc_info=True)
-            return []
-
     def update_item_status(self, google_id, status, error_message=None, md5_hash=None, increment_attempt=False):
-        """Updates the status and optionally other fields for a specific item."""
-        if not self.conn or not google_id: return False
-        logger.debug(f"Updating DB status for {google_id}: Status='{status}', Error='{error_message}', MD5='{md5_hash}', IncrAttempt={increment_attempt}")
+        """Updates the status and optionally the error message or hash of a media item."""
+        if not self.conn:
+            logger.error(f"Cannot update status for {google_id}: No database connection.")
+            return False
 
         now_timestamp = datetime.datetime.now()
-
-        # Build the SET part of the SQL query dynamically
-        sql_parts = ["status = ?", "last_processed_timestamp = ?"]
+        # Use MEDIA_TABLE_NAME
+        base_sql = f"UPDATE {MEDIA_TABLE_NAME} SET status = ?, last_processed_timestamp = ?"
         params = [status, now_timestamp]
 
         if error_message is not None:
-            sql_parts.append("last_error = ?")
+            base_sql += ", last_error = ?"
             params.append(error_message)
-        elif status not in ERROR_STATUSES:
-             # Clear last_error if the new status is not an error
-             sql_parts.append("last_error = NULL")
+        else:
+            # Clear previous error if status is not an error status
+            if status not in ERROR_STATUSES and status != STATUS_ERROR_MISSING_DATA:
+                 base_sql += ", last_error = NULL"
 
         if md5_hash is not None:
-            sql_parts.append("md5_hash = ?")
+            base_sql += ", md5_hash = ?"
             params.append(md5_hash)
 
         if increment_attempt:
-             # Increment upload_attempts counter
-             sql_parts.append("upload_attempts = upload_attempts + 1")
+             base_sql += ", upload_attempts = upload_attempts + 1"
 
-        # Use MEDIA_TABLE_NAME
-        sql = f"UPDATE {MEDIA_TABLE_NAME} SET {', '.join(sql_parts)} WHERE google_id = ?"
+        base_sql += " WHERE google_id = ?"
         params.append(google_id)
 
         try:
             with self.conn:
-                cursor = self.conn.execute(sql, params)
-            if cursor.rowcount == 0:
-                 # Log a warning if no rows were updated (e.g., google_id not found)
-                 logger.warning(f"No rows updated for google_id {google_id} during status update.")
-                 return False
+                self.conn.execute(base_sql, params)
+            # logger.debug(f"Updated status for {google_id} to {status}") # Can be noisy
             return True
         except sqlite3.Error as e:
-            logger.error(f"Error updating status for google_id {google_id}: {e}", exc_info=True)
+            logger.error(f"Error updating status for {google_id} to {status}: {e}", exc_info=True)
             return False
 
     def update_item_details(self, google_id, base_url, media_metadata_json):
-        """Updates the baseUrl and metadata for an item, typically after a refresh."""
-        if not self.conn or not google_id: return False
-        logger.debug(f"Updating DB details for {google_id}: New BaseUrl, New Metadata")
+        """Updates the base_url and media_metadata_json for an item."""
+        if not self.conn:
+            logger.error(f"Cannot update details for {google_id}: No database connection.")
+            return False
 
         now_timestamp = datetime.datetime.now()
         # Use MEDIA_TABLE_NAME
@@ -339,94 +263,131 @@ class DatabaseManager:
 
         try:
             with self.conn:
-                cursor = self.conn.execute(sql, params)
-            if cursor.rowcount == 0:
-                 logger.warning(f"No rows updated for google_id {google_id} during detail update.")
-                 return False
-            logger.info(f"Successfully updated details (baseUrl, metadata) for google_id {google_id} in DB.")
+                self.conn.execute(sql, params)
+            logger.debug(f"Updated details (baseUrl, metadata) for {google_id}")
             return True
         except sqlite3.Error as e:
-             logger.error(f"Error updating details for google_id {google_id}: {e}", exc_info=True)
-             return False
+            logger.error(f"Error updating details for {google_id}: {e}", exc_info=True)
+            return False
 
-    def get_item_count(self, status=None):
-        """Gets the total count of items, or count for a specific status."""
+    def get_items_to_process(self):
+        """
+        Retrieves all items that are not in a terminal success/skip state.
+        This now implicitly includes items with any ERROR_* status.
+        """
+        if not self.conn:
+            logger.error("Cannot get items: No database connection.")
+            return []
+
+        # Create placeholders for terminal statuses
+        terminal_placeholders = ', '.join('?' * len(TERMINAL_STATUSES))
+        # Use MEDIA_TABLE_NAME
+        sql = f"SELECT * FROM {MEDIA_TABLE_NAME} WHERE status NOT IN ({terminal_placeholders})"
+
+        try:
+            cursor = self.conn.execute(sql, TERMINAL_STATUSES)
+            items = [dict(row) for row in cursor.fetchall()]
+            logger.info(f"Retrieved {len(items)} items for processing (excluding terminal statuses).")
+            return items
+        except sqlite3.Error as e:
+            logger.error(f"Error retrieving items to process: {e}", exc_info=True)
+            return []
+
+    def get_item_count(self):
+        """Returns the total number of items in the media items table."""
         if not self.conn: return 0
         try:
             # Use MEDIA_TABLE_NAME
-            if status:
-                # Query count for a specific status
-                cursor = self.conn.execute(f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME} WHERE status = ?", (status,))
-            else:
-                # Query total count
-                cursor = self.conn.execute(f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME}")
+            cursor = self.conn.execute(f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME}")
             count = cursor.fetchone()[0]
             return count
         except sqlite3.Error as e:
-            logger.error(f"Error getting item count (status: {status}): {e}", exc_info=True)
-            return 0
-
-    # --- NEW Method ---
-    def get_item_count_by_status(self, statuses):
-        """Gets the count of items matching any status in the provided list."""
-        if not self.conn or not statuses: return 0
-        try:
-            # Create placeholders for the IN clause
-            placeholders = ', '.join('?' * len(statuses))
-            # Use MEDIA_TABLE_NAME
-            sql = f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME} WHERE status IN ({placeholders})"
-            cursor = self.conn.execute(sql, statuses)
-            count = cursor.fetchone()[0]
-            logger.debug(f"Count for statuses {statuses}: {count}")
-            return count
-        except sqlite3.Error as e:
-            logger.error(f"Error getting item count for statuses {statuses}: {e}", exc_info=True)
+            logger.error(f"Error getting item count: {e}", exc_info=True)
             return 0
 
     def get_stats(self):
-        """Returns a dictionary with counts for various statuses."""
+        """Returns a dictionary with counts for each status."""
         if not self.conn: return {}
         stats = {}
         try:
             # Use MEDIA_TABLE_NAME
             cursor = self.conn.execute(f"SELECT status, COUNT(*) FROM {MEDIA_TABLE_NAME} GROUP BY status")
-            rows = cursor.fetchall()
-            for row in rows:
+            for row in cursor.fetchall():
                 stats[row['status']] = row['COUNT(*)']
-            # Ensure all known statuses have a count, even if 0
-            all_statuses = list(set([
-                STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
-                STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED, STATUS_UPLOADED_SUCCESS,
-                STATUS_DUPLICATE_HASH, STATUS_DUPLICATE_FILENAME, STATUS_SKIPPED_FILTER,
-                STATUS_SKIPPED_HEIC] + ERROR_STATUSES + [STATUS_ERROR_MISSING_DATA])) # Include all possible statuses
-            for s in all_statuses:
-                 if s not in stats:
-                      stats[s] = 0
-            stats['TOTAL'] = sum(stats.values())
             return stats
         except sqlite3.Error as e:
-            logger.error(f"Error getting database stats: {e}", exc_info=True)
+            logger.error(f"Error getting status stats: {e}", exc_info=True)
             return {}
 
+    def get_item_count_by_status(self, status_list):
+        """Returns the count of items matching any status in the provided list."""
+        if not self.conn or not status_list:
+            return 0
+        try:
+            placeholders = ', '.join('?' * len(status_list))
+            # Use MEDIA_TABLE_NAME
+            sql = f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME} WHERE status IN ({placeholders})"
+            cursor = self.conn.execute(sql, status_list)
+            count = cursor.fetchone()[0]
+            return count
+        except sqlite3.Error as e:
+            logger.error(f"Error getting item count for statuses {status_list}: {e}", exc_info=True)
+            return 0
 
-    def get_item_details(self, google_id):
-         """Gets full details for a single item from the database."""
-         if not self.conn or not google_id: return None
-         try:
-              # Use MEDIA_TABLE_NAME
-              cursor = self.conn.execute(f"SELECT * FROM {MEDIA_TABLE_NAME} WHERE google_id = ?", (google_id,))
-              row = cursor.fetchone()
-              return dict(row) if row else None
-         except sqlite3.Error as e:
-              logger.error(f"Error getting details for google_id {google_id}: {e}", exc_info=True)
-              return None
+    def save_config_snapshot(self, initial_album_name, album_key, album_uri, folder_name, google_album_id):
+        """
+        Saves or updates the target configuration snapshot in the database.
+        Uses INSERT OR REPLACE to handle updates on subsequent calls (e.g., album switch).
+        """
+        if not self.conn:
+            logger.error("Cannot save config: No database connection.")
+            return False
+        # Use CONFIG_TABLE_NAME
+        # Use INSERT OR REPLACE to ensure only one row with id=1 exists and is updated
+        sql = f"""
+            INSERT OR REPLACE INTO {CONFIG_TABLE_NAME}
+            (id, initial_album_name, current_album_key, current_album_uri, current_folder_name, google_album_id, initial_run_timestamp)
+            VALUES (1, ?, ?, ?, ?, ?, ?)
+        """
+        # Use current timestamp for updates as well
+        now_timestamp = datetime.datetime.now()
+        params = [initial_album_name, album_key, album_uri, folder_name, google_album_id, now_timestamp]
+        try:
+            with self.conn:
+                self.conn.execute(sql, params)
+            logger.info(f"Saved/Updated run configuration snapshot in DB: BaseName='{initial_album_name}', CurrentKey='{album_key}', Folder='{folder_name}', GoogleSource='{google_album_id or 'Library'}'")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error saving run configuration snapshot: {e}", exc_info=True)
+            return False
+
+    def get_config_snapshot(self):
+        """Retrieves the stored configuration snapshot from the database."""
+        if not self.conn:
+            logger.error("Cannot get stored config: No database connection.")
+            return None
+        try:
+            # Use CONFIG_TABLE_NAME
+            cursor = self.conn.execute(f"SELECT * FROM {CONFIG_TABLE_NAME} WHERE id = 1")
+            row = cursor.fetchone()
+            if row:
+                logger.debug("Retrieved stored run configuration snapshot from DB.")
+                return dict(row)
+            else:
+                logger.debug("No stored run configuration snapshot found in DB.")
+                return None
+        except sqlite3.Error as e:
+            logger.error(f"Error retrieving stored run configuration: {e}", exc_info=True)
+            return None
 
     def reset_failed_items(self):
-        """Resets items with error statuses back to PENDING for retry."""
-        if not self.conn: return 0
+        """Resets all items with an error status back to PENDING."""
+        if not self.conn:
+            logger.error("Cannot reset items: No database connection.")
+            return 0
         logger.warning("Resetting items with error statuses back to PENDING...")
-        # Include all defined error statuses in the reset list
-        error_status_list = list(set(ERROR_STATUSES + [STATUS_ERROR_MISSING_DATA]))
+        # Ensure we use the current ERROR_STATUSES list which includes ALBUM_FULL
+        error_status_list = list(set(ERROR_STATUSES))
         error_status_placeholders = ', '.join('?' * len(error_status_list))
         now_timestamp = datetime.datetime.now()
         # Use MEDIA_TABLE_NAME
@@ -452,7 +413,7 @@ class DatabaseManager:
             try:
                 # WAL mode benefits from an explicit checkpoint before closing
                 # although Python's sqlite3 module might handle this implicitly.
-                # self.conn.execute("PRAGMA wal_checkpoint(FULL);")
+                # self.conn.execute("PRAGMA wal_checkpoint(FULL);") # Optional checkpoint
                 self.conn.close()
                 logger.info("Database connection closed.")
                 self.conn = None
@@ -460,5 +421,7 @@ class DatabaseManager:
                 logger.error(f"Error closing database connection: {e}", exc_info=True)
 
     def __del__(self):
-        """Ensure connection is closed when object is deleted."""
-        self.close()
+        """Ensure connection is closed when the object is garbage collected."""
+        if self.conn:
+            logger.warning("DatabaseManager object deleted without explicitly closing connection. Closing now.")
+            self.close()

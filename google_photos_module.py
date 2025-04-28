@@ -8,7 +8,8 @@ import tempfile
 import shutil
 import time # Needed for sleep
 import datetime # Needed for expiry check
-import json # For handling metadata
+# import httplib2
+# from google_auth_httplib2 import AuthorizedHttp
 import threading # Import threading for Lock
 
 # Third-party imports
@@ -208,17 +209,24 @@ class GooglePhotos:
             # Fallback check
             return self.creds and self.creds.valid
 
-
+    # Original _build_service method (Restored)
     def _build_service(self):
-        """Internal helper to build the service object. Assumes lock is held."""
+        """Builds the Google Photos service object using credentials."""
+        # Note: This function assumes the caller holds _api_lock if needed
         if not self.creds or not self.creds.valid:
-             logger.error("Cannot build service: Invalid credentials.")
-             self.service = None
-             return False
+            logger.error("Cannot build service: Invalid credentials.")
+            self.service = None
+            return False
         try:
-            # Explicitly disable cache discovery
-            self.service = build('photoslibrary', 'v1', credentials=self.creds, static_discovery=False, cache_discovery=False)
-            logger.info("Google Photos API service (re)built successfully.")
+            # Build service using only credentials - library handles default http client
+            self.service = build(
+                'photoslibrary',
+                'v1',
+                credentials=self.creds,
+                static_discovery=False,  # Recommended
+                cache_discovery=False  # Recommended
+            )
+            logger.info("Google Photos API service (re)built successfully (default HTTP client).")
             return True
         except Exception as build_err:
             logger.error(f"Failed to (re)build service: {build_err}", exc_info=True)
@@ -261,35 +269,33 @@ class GooglePhotos:
             logger.debug(f"Fetching page {page_count} for {action_desc}...")
             try:
                 # Acquire lock specifically for the API call within the loop
-                with self._api_lock:
-                    # Ensure token is still valid before making the API call
-                    # (refresh_token_if_needed acquires lock internally, but check again here just before API call)
-                    if not self.refresh_token_if_needed(buffer_minutes=1): # Use short buffer inside loop
-                         logger.error("Token became invalid mid-fetch (pre-API call check). Attempting re-auth...")
-                         # Need to release lock to allow authenticate to acquire it
-                         # This is getting complex, maybe authenticate should not acquire lock?
-                         # Let's simplify: assume refresh_token_if_needed is sufficient for now.
-                         # If auth fails, it will raise or return False, handled below.
+                # Ensure token is still valid before making the API call
+                # (refresh_token_if_needed acquires lock internally, but check again here just before API call)
+                if not self.refresh_token_if_needed(buffer_minutes=1): # Use short buffer inside loop
+                     logger.error("Token became invalid mid-fetch (pre-API call check). Attempting re-auth...")
+                     # Need to release lock to allow authenticate to acquire it
+                     # This is getting complex, maybe authenticate should not acquire lock?
+                     # Let's simplify: assume refresh_token_if_needed is sufficient for now.
+                     # If auth fails, it will raise or return False, handled below.
 
-                    # Ensure service object is available
-                    if not self.service:
-                         logger.error("Google Photos service object is missing mid-fetch. Cannot fetch.")
-                         # Attempt to rebuild service (still under lock)
-                         if not self._build_service():
-                              logger.critical("Failed to rebuild service mid-fetch. Stopping.")
-                              break # Exit loop if service cannot be rebuilt
-                         else:
-                              logger.info("Rebuilt service mid-fetch.")
+                # Ensure service object is available
+                if not self.service:
+                     logger.error("Google Photos service object is missing mid-fetch. Cannot fetch.")
+                     # Attempt to rebuild service (still under lock)
+                     if not self._build_service():
+                          logger.critical("Failed to rebuild service mid-fetch. Stopping.")
+                          break # Exit loop if service cannot be rebuilt
+                     else:
+                          logger.info("Rebuilt service mid-fetch.")
 
-
-                    # --- API Call (Protected by Lock) ---
-                    if album_id:
-                         body = {'albumId': album_id, 'pageSize': self.batch_size}
-                         if nextPageToken: body['pageToken'] = nextPageToken
-                         results = self.service.mediaItems().search(body=body).execute()
-                    else:
-                         results = self.service.mediaItems().list(pageSize=self.batch_size, pageToken=nextPageToken).execute()
-                    # --- End API Call ---
+                # --- API Call ---
+                if album_id:
+                     body = {'albumId': album_id, 'pageSize': self.batch_size}
+                     if nextPageToken: body['pageToken'] = nextPageToken
+                     results = self.service.mediaItems().search(body=body).execute()
+                else:
+                     results = self.service.mediaItems().list(pageSize=self.batch_size, pageToken=nextPageToken).execute()
+                # --- End API Call ---
 
                 # Process results outside the lock
                 items = results.get('mediaItems')
