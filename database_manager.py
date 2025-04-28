@@ -236,6 +236,8 @@ class DatabaseManager:
 
         base_sql += " WHERE google_id = ?"
         params.append(google_id)
+        #logger.debug(f"DB Update SQL for {google_id}: {base_sql}")
+        #logger.debug(f"DB Update PARAMS for {google_id}: {params}")
 
         try:
             with self.conn:
@@ -243,6 +245,8 @@ class DatabaseManager:
             # logger.debug(f"Updated status for {google_id} to {status}") # Can be noisy
             return True
         except sqlite3.Error as e:
+            logger.error(f"FAILED SQL: {base_sql}")
+            logger.error(f"FAILED PARAMS: {params}")
             logger.error(f"Error updating status for {google_id} to {status}: {e}", exc_info=True)
             return False
 

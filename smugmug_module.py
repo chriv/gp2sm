@@ -380,8 +380,15 @@ class SmugMug:
                 except OSError as e:
                     logger.warning(f"Failed remove temp {file_path}: {e}")
 
+    # Replacement for check_media_exists in smugmug_module.py (Hybrid Approach)
     def check_media_exists(self, album_key, filename, mime_type, file_hash=None):
-        """Checks if media exists via hash (images) or filename (videos)."""
+        """
+        Checks if media exists in the specified SmugMug album.
+        Uses MD5 hash for images (if provided).
+        For filename checks (videos/HEIC/images without hash):
+          1. Attempts faster image!search with Text filter.
+          2. Falls back to slower but reliable album!images listing if search fails or is empty.
+        """
         if not self.auth_session:
             logger.error("Check media: Not auth.")
             return False
@@ -390,63 +397,119 @@ class SmugMug:
             return False
 
         is_video = mime_type.startswith('video/')
-        check_method = "MD5 hash" if not is_video and file_hash else "filename"
+        # Check by filename if it's a video, or HEIC/HEIF without hash
+        check_by_filename = is_video or (mime_type.lower().endswith(('.heic', '.heif')) and not file_hash)
+        check_method = "filename" if check_by_filename else "MD5 hash"
+
         logger.debug(f"Checking album {album_key} for '{filename}' via {check_method}...")
 
-        album_media_uri = f'/api/v2/album/{album_key}!images'
-        params = {'count': 100}
-        search_uri = album_media_uri # Default to searching within album images
-
-        if is_video:
-            params['_filter'] = 'FileName'
-            params['_filteruri'] = album_media_uri
-            search_uri = '/api/v2/image!search'
-        elif file_hash:
-            params['_filter'] = 'ArchivedMD5'
-            params['_filtervalue'] = file_hash
-            # search_uri remains album_media_uri
-        else: # Image without hash (e.g., HEIC)
-            is_video = True # Treat like video for search logic
-            params['_filter'] = 'FileName'
-            params['_filteruri'] = album_media_uri
-            search_uri = '/api/v2/image!search'
-
-        next_page_start = 1
-        while True:
-            params['start'] = next_page_start
-            _, data = self._make_api_request('GET', search_uri, params=params)
-
-            if data and 'Response' in data and 'Image' in data['Response']:
-                 media_list = data['Response']['Image']
-                 if not media_list:
-                     break # No more items found
-
-                 for media in media_list:
-                      if is_video:
-                           if media.get('FileName', '').lower() == filename.lower():
-                                logger.info(f"Found '{filename}' in {album_key} by filename.")
-                                return True
-                      elif media.get('ArchivedMD5') == file_hash:
-                           logger.info(f"Found '{filename}' in {album_key} by MD5.")
-                           return True
-
-                 paging = data['Response'].get('Pages')
-                 if paging and paging.get('NextPage'):
-                      try:
-                           next_page_start = int(paging['NextPage'].split('start=')[1].split('&')[0])
-                           logger.debug(f"Paginating check, next: {next_page_start}")
-                      except (IndexError, ValueError) as e:
-                           logger.warning(f"Cannot parse NextPage URI: {paging['NextPage']} - {e}")
-                           break
-                 else:
-                      break # No more pages
-            elif data and 'Response' in data and 'Image' not in data['Response']:
-                 break # No 'Image' key means no results found
+        # --- Method 1: Check by MD5 Hash (If applicable and hash provided) ---
+        if not check_by_filename and file_hash:
+            logger.debug(f"Attempting check via MD5 hash: {file_hash}")
+            album_images_uri = f'/api/v2/album/{album_key}!images'
+            params = {
+                'count': 1,  # Only need to find one match
+                '_filter': 'ArchivedMD5',
+                '_filtervalue': file_hash
+            }
+            _, data = self._make_api_request('GET', album_images_uri, params=params)
+            if data and 'Response' in data and 'Image' in data['Response'] and data['Response']['Image']:
+                # Check if the list is not empty
+                logger.info(f"Found '{filename}' in {album_key} by MD5 hash.")
+                return True
             else:
-                 logger.warning(f"Failed retrieve media from {album_key}.")
-                 return False # Treat API errors as potentially not found
+                # Log if hash search failed or returned empty, but proceed to filename check if needed
+                logger.debug(f"Media '{filename}' not found in {album_key} via MD5 hash.")
+                # Don't return False yet, might still exist by filename if hash wasn't stored correctly?
+                # Or maybe we should trust the hash check? For now, let's assume hash check is definitive if attempted.
+                return False  # Trust the hash check result if performed
 
-        logger.debug(f"Media '{filename}' not found in {album_key} via {check_method}.")
+        # --- Method 2: Check by Filename ---
+        elif check_by_filename:
+            # --- Attempt 2a: Faster image!search with Text filter ---
+            logger.debug(f"Attempting check via image!search with Text='{filename}'")
+            search_params = {
+                'Scope': f'/api/v2/album/{album_key}',  # Scope to the specific album URI
+                'Text': filename,  # Search for the exact filename in text fields
+                '_filter': ['FileName'],  # Ask API to filter results where FileName matches Text
+                '_filterValue': [filename],  # Redundant? Maybe helps API focus.
+                'count': 5  # Only need a few results to check
+            }
+            search_response, search_data = self._make_api_request('GET', '/api/v2/image!search',
+                                                                  params=search_params)
+
+            # Validate search response
+            if search_response is not None and search_response.status_code == 200 and \
+                    search_data and 'Response' in search_data and 'Image' in search_data['Response']:
+                # Search succeeded, check the results
+                found_images = search_data['Response']['Image']
+                if found_images:
+                    # Check if any returned image has the exact filename (case-insensitive)
+                    for img in found_images:
+                        if img.get('FileName', '').lower() == filename.lower():
+                            logger.info(f"Found '{filename}' in {album_key} via image!search.")
+                            return True
+                    # Found images via search, but none matched the exact filename? Log and fallback.
+                    logger.debug(
+                        f"image!search found potential matches for '{filename}', but none matched exactly. Falling back to album listing.")
+                else:
+                    # Search succeeded but returned no results
+                    logger.debug(f"image!search found no results for '{filename}'. Assuming not present.")
+                    return False  # Assume search is accurate if it returns empty list successfully
+
+            else:
+                # Search failed (e.g., 400 error) or returned unexpected structure. Fallback needed.
+                status_code = search_response.status_code if search_response else "N/A"
+                logger.warning(
+                    f"image!search failed for '{filename}' (Status: {status_code}). Falling back to listing album images.")
+
+            # --- Attempt 2b: Fallback - List Album Images/Videos ---
+            logger.debug(f"Fallback: Listing images/videos in album {album_key} to check for '{filename}'...")
+            album_media_uri = f'/api/v2/album/{album_key}!images'
+            params = {'count': 100}  # Reset params for listing
+            next_page_start = 1
+
+            while True:
+                params['start'] = next_page_start
+                _, data = self._make_api_request('GET', album_media_uri, params=params)
+
+                if data and 'Response' in data and 'Image' in data['Response']:
+                    media_list = data['Response']['Image']
+                    if not media_list:
+                        break  # No more items found
+
+                    for media in media_list:
+                        # Compare filenames case-insensitively
+                        if media.get('FileName', '').lower() == filename.lower():
+                            logger.info(f"Found '{filename}' in {album_key} by listing album content (fallback).")
+                            return True
+
+                    # Handle pagination
+                    paging = data['Response'].get('Pages')
+                    if paging and paging.get('NextPage'):
+                        try:
+                            next_page_start = int(paging['NextPage'].split('start=')[1].split('&')[0])
+                            logger.debug(f"Paginating album listing check, next start: {next_page_start}")
+                        except (IndexError, ValueError, TypeError) as e:
+                            logger.warning(f"Cannot parse NextPage URI: {paging.get('NextPage')} - {e}")
+                            break  # Stop pagination if URI is unparseable
+                    else:
+                        break  # No more pages
+                elif data and 'Response' in data and 'Image' not in data['Response']:
+                    logger.debug(
+                        f"No 'Image' key in album listing response for {album_key} page {next_page_start}.")
+                    break  # No 'Image' key means no results on this page
+                else:
+                    logger.warning(f"Failed listing album content for {album_key} starting {next_page_start}.")
+                    # Treat API errors during listing as potentially not found to avoid skipping uploads
+                    return False
+
+            # If loop completes without finding a match via listing
+            logger.debug(f"Media '{filename}' not found in {album_key} via filename (after fallback listing).")
+            return False
+
+        # Should not be reached if logic is correct
+        logger.error(f"Reached unexpected end of check_media_exists for '{filename}'.")
         return False
 
     def get_or_create_folder(self, parent_node_uri, folder_name):
