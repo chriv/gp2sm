@@ -1,4 +1,7 @@
-# database_manager.py (v1.9 - Added Config Snapshot Table)
+# database_manager.py (v2.0)
+# - Added get_item_count_by_status method.
+# - Modified get_items_to_process to always include errors for retry.
+# - Removed retry_errors parameter from get_items_to_process.
 # Handles SQLite database operations for gp2sm transfer state.
 
 import sqlite3
@@ -40,17 +43,17 @@ TERMINAL_STATUSES = [
     STATUS_DUPLICATE_FILENAME,
     STATUS_SKIPPED_FILTER,
     STATUS_SKIPPED_HEIC,
-    STATUS_ERROR_MISSING_DATA,
+    STATUS_ERROR_MISSING_DATA, # Treat missing data as terminal unless manually reset
 ]
 
-# List of statuses indicating an error occurred
+# List of statuses indicating an error occurred (will now be retried by default)
 ERROR_STATUSES = [
     STATUS_ERROR_DOWNLOAD,
     STATUS_ERROR_HASHING,
     STATUS_ERROR_SMUGMUG_API,
     STATUS_ERROR_UPLOAD_FAILED,
     STATUS_ERROR_UNKNOWN,
-    STATUS_ERROR_MISSING_DATA,
+    # STATUS_ERROR_MISSING_DATA is excluded here as it's less likely to be auto-resolved
 ]
 
 
@@ -67,9 +70,11 @@ class DatabaseManager:
     def _connect(self):
         """Establishes a connection to the SQLite database."""
         try:
+            # check_same_thread=False is necessary for multi-threaded access
             self.conn = sqlite3.connect(self.db_file, check_same_thread=False,
                                         detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
             self.conn.row_factory = sqlite3.Row
+            # Enable Write-Ahead Logging for better concurrency
             self.conn.execute("PRAGMA journal_mode=WAL;")
             logger.info(f"Connected to database: {self.db_file}")
         except sqlite3.Error as e:
@@ -102,6 +107,7 @@ class DatabaseManager:
                     )
                 """)
                 logger.debug(f"Ensured table '{MEDIA_TABLE_NAME}' exists.")
+                # Add indexes for faster queries
                 self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_status ON {MEDIA_TABLE_NAME} (status);")
                 self.conn.execute(f"CREATE INDEX IF NOT EXISTS idx_filename ON {MEDIA_TABLE_NAME} (filename);")
                 logger.debug(f"Ensured indexes exist on '{MEDIA_TABLE_NAME}'.")
@@ -186,9 +192,6 @@ class DatabaseManager:
             logger.error(f"Error retrieving stored run configuration: {e}", exc_info=True)
             return None
 
-    # --- Other methods (add_item_batch, get_items_to_process, etc.) remain the same ---
-    # --- Make sure they use MEDIA_TABLE_NAME ---
-
     def add_item_batch(self, items, smugmug_album_key):
         """Adds a batch of items fetched from Google Photos to the database."""
         if not self.conn: return 0
@@ -202,6 +205,7 @@ class DatabaseManager:
         """
         items_to_insert = []
         for item in items:
+            # Basic validation for essential fields
             if not isinstance(item, dict) or not item.get('id') or not item.get('filename') or not item.get('mimeType'):
                  logger.warning(f"Skipping invalid item during DB insert: {item}")
                  continue
@@ -216,9 +220,9 @@ class DatabaseManager:
                 item.get('baseUrl'),
                 item.get('productUrl'),
                 creation_time,
-                json.dumps(metadata), # Store metadata as JSON
+                json.dumps(metadata), # Store metadata as JSON string
                 smugmug_album_key, # Store the key used for this batch
-                STATUS_PENDING
+                STATUS_PENDING # Initial status
             ))
 
         if not items_to_insert:
@@ -228,42 +232,48 @@ class DatabaseManager:
         try:
             with self.conn:
                 cursor = self.conn.executemany(sql, items_to_insert)
-                added_count = cursor.rowcount
-            logger.info(f"Added/Ignored {len(items_to_insert)} items in batch. Rows inserted: {added_count}")
+                added_count = cursor.rowcount # Number of rows actually inserted (ignores duplicates)
+            logger.info(f"Added/Ignored {len(items_to_insert)} items in batch. New rows inserted: {added_count}")
             return added_count
         except sqlite3.Error as e:
             logger.error(f"Error adding item batch to database: {e}", exc_info=True)
             return 0
 
-    def get_items_to_process(self, limit=None, retry_errors=False):
-        """Gets items that need processing based on status."""
+    # --- Modified get_items_to_process ---
+    def get_items_to_process(self, limit=None):
+        """
+        Gets items that need processing based on status.
+        ALWAYS includes items with retryable error statuses.
+        """
         if not self.conn: return []
 
+        # Define statuses indicating item needs processing or retry
         statuses_to_fetch = [
-            STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
-            STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED,
+            STATUS_PENDING,
+            STATUS_HASHED,
+            STATUS_SMUGMUG_CHECKED_NOT_FOUND,
+            STATUS_DOWNLOADED_FOR_UPLOAD,
+            STATUS_UPLOAD_ATTEMPTED,
         ]
+        # Always include retryable errors
+        statuses_to_fetch.extend(ERROR_STATUSES)
+        # Remove duplicates just in case
+        statuses_to_fetch = list(set(statuses_to_fetch))
 
-        if retry_errors:
-            retryable_errors = [
-                STATUS_ERROR_DOWNLOAD, STATUS_ERROR_HASHING, STATUS_ERROR_SMUGMUG_API,
-                STATUS_ERROR_UPLOAD_FAILED, STATUS_ERROR_UNKNOWN,
-            ]
-            statuses_to_fetch.extend(retryable_errors)
-            logger.info("Querying for items to process, including retryable errors.")
-        else:
-             logger.info("Querying for items to process (excluding errors).")
+        logger.info(f"Querying for items to process (including errors) with statuses: {statuses_to_fetch}")
 
         placeholders = ', '.join('?' * len(statuses_to_fetch))
         # Use MEDIA_TABLE_NAME
         sql = f"SELECT * FROM {MEDIA_TABLE_NAME} WHERE status IN ({placeholders}) ORDER BY creation_timestamp ASC"
 
+        # Apply limit if provided
         if limit and isinstance(limit, int) and limit > 0:
             sql += f" LIMIT {limit}"
 
         try:
             cursor = self.conn.execute(sql, statuses_to_fetch)
             items = cursor.fetchall()
+            # Convert sqlite3.Row objects to dictionaries for easier handling
             item_dicts = [dict(row) for row in items]
             logger.info(f"Found {len(item_dicts)} items to process.")
             return item_dicts
@@ -278,6 +288,7 @@ class DatabaseManager:
 
         now_timestamp = datetime.datetime.now()
 
+        # Build the SET part of the SQL query dynamically
         sql_parts = ["status = ?", "last_processed_timestamp = ?"]
         params = [status, now_timestamp]
 
@@ -285,6 +296,7 @@ class DatabaseManager:
             sql_parts.append("last_error = ?")
             params.append(error_message)
         elif status not in ERROR_STATUSES:
+             # Clear last_error if the new status is not an error
              sql_parts.append("last_error = NULL")
 
         if md5_hash is not None:
@@ -292,6 +304,7 @@ class DatabaseManager:
             params.append(md5_hash)
 
         if increment_attempt:
+             # Increment upload_attempts counter
              sql_parts.append("upload_attempts = upload_attempts + 1")
 
         # Use MEDIA_TABLE_NAME
@@ -302,6 +315,7 @@ class DatabaseManager:
             with self.conn:
                 cursor = self.conn.execute(sql, params)
             if cursor.rowcount == 0:
+                 # Log a warning if no rows were updated (e.g., google_id not found)
                  logger.warning(f"No rows updated for google_id {google_id} during status update.")
                  return False
             return True
@@ -341,13 +355,32 @@ class DatabaseManager:
         try:
             # Use MEDIA_TABLE_NAME
             if status:
+                # Query count for a specific status
                 cursor = self.conn.execute(f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME} WHERE status = ?", (status,))
             else:
+                # Query total count
                 cursor = self.conn.execute(f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME}")
             count = cursor.fetchone()[0]
             return count
         except sqlite3.Error as e:
             logger.error(f"Error getting item count (status: {status}): {e}", exc_info=True)
+            return 0
+
+    # --- NEW Method ---
+    def get_item_count_by_status(self, statuses):
+        """Gets the count of items matching any status in the provided list."""
+        if not self.conn or not statuses: return 0
+        try:
+            # Create placeholders for the IN clause
+            placeholders = ', '.join('?' * len(statuses))
+            # Use MEDIA_TABLE_NAME
+            sql = f"SELECT COUNT(*) FROM {MEDIA_TABLE_NAME} WHERE status IN ({placeholders})"
+            cursor = self.conn.execute(sql, statuses)
+            count = cursor.fetchone()[0]
+            logger.debug(f"Count for statuses {statuses}: {count}")
+            return count
+        except sqlite3.Error as e:
+            logger.error(f"Error getting item count for statuses {statuses}: {e}", exc_info=True)
             return 0
 
     def get_stats(self):
@@ -365,7 +398,7 @@ class DatabaseManager:
                 STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
                 STATUS_DOWNLOADED_FOR_UPLOAD, STATUS_UPLOAD_ATTEMPTED, STATUS_UPLOADED_SUCCESS,
                 STATUS_DUPLICATE_HASH, STATUS_DUPLICATE_FILENAME, STATUS_SKIPPED_FILTER,
-                STATUS_SKIPPED_HEIC] + ERROR_STATUSES))
+                STATUS_SKIPPED_HEIC] + ERROR_STATUSES + [STATUS_ERROR_MISSING_DATA])) # Include all possible statuses
             for s in all_statuses:
                  if s not in stats:
                       stats[s] = 0
@@ -392,7 +425,8 @@ class DatabaseManager:
         """Resets items with error statuses back to PENDING for retry."""
         if not self.conn: return 0
         logger.warning("Resetting items with error statuses back to PENDING...")
-        error_status_list = list(set(ERROR_STATUSES))
+        # Include all defined error statuses in the reset list
+        error_status_list = list(set(ERROR_STATUSES + [STATUS_ERROR_MISSING_DATA]))
         error_status_placeholders = ', '.join('?' * len(error_status_list))
         now_timestamp = datetime.datetime.now()
         # Use MEDIA_TABLE_NAME
@@ -416,6 +450,9 @@ class DatabaseManager:
         """Closes the database connection."""
         if self.conn:
             try:
+                # WAL mode benefits from an explicit checkpoint before closing
+                # although Python's sqlite3 module might handle this implicitly.
+                # self.conn.execute("PRAGMA wal_checkpoint(FULL);")
                 self.conn.close()
                 logger.info("Database connection closed.")
                 self.conn = None

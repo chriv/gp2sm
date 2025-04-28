@@ -1,7 +1,9 @@
 # Google Photos to SmugMug Transfer Script (v2.0)
+# - Simplified colorlog format string to color entire line by level.
+# - Set INFO level color to white.
+# - Removed --retry-errors argument (errors always retried now via db_manager).
+# - Fixed progress calculation to use db_manager.get_item_count_by_status.
 # - Added custom PROGRESS log level with distinct color.
-# - Changed progress calculation to show overall progress (processed / total_db).
-# - Reverted colorlog setup *exactly* to v1.9 structure (plus threadName).
 # - Changed console handler back to sys.stdout.
 # - Replaced ALL print statements with logger calls for progress, summary, and status.
 # - Fixed SyntaxError in worker try/except blocks.
@@ -40,6 +42,7 @@ except ImportError:
 try:
     from google_photos_module import GooglePhotos, GoogleCredentialsNotFoundError
     from smugmug_module import SmugMug, DEFAULT_SMUGMUG_CONFIG
+    # Updated import list for database_manager status codes
     from database_manager import (
         DatabaseManager, DB_FILE_DEFAULT, MEDIA_TABLE_NAME,
         STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
@@ -129,37 +132,26 @@ def setup_logging(debug=False):
         logger.handlers.clear()
     logger.setLevel(log_level) # Set minimum level for the logger
 
-    # Define log format based on v1.9 snippet, adding threadName
-    # Use %(message_log_color)s to allow secondary colors for message part
-    # Added %(threadName)s inside the brackets
-    console_format = ('%(asctime)s - %(log_color)s%(levelname)-8s%(reset)s - '
+    # Define log format to color the entire line based on level
+    # Put log_color at the start, remove intermediate resets and message_log_color
+    console_format = ('%(log_color)s%(asctime)s - %(levelname)-8s - '
                       '[%(threadName)s:%(name)s:%(funcName)s:%(lineno)d] - '
-                      '%(message_log_color)s%(message)s%(reset)s') # Final reset included
+                      '%(message)s') # No reset here, handled by reset=True
 
     # Configure console handler (using colorlog, output to stdout)
-    # Use exact formatter setup from v1.9 snippet, adding PROGRESS color
     console_formatter = colorlog.ColoredFormatter(
-        console_format, # Use the single format string
+        console_format, # Use the simplified format string
         datefmt='%Y-%m-%d %H:%M:%S',
-        reset=True, # reset=True adds reset at the end
+        reset=True, # reset=True adds reset at the end of the entire line
         log_colors={
             'DEBUG':    'cyan',
-            'INFO':     'green',
+            'INFO':     'white', # Set INFO to white as requested
             'PROGRESS': 'blue', # Assign color for PROGRESS level
             'WARNING':  'yellow',
             'ERROR':    'red',
             'CRITICAL': 'red,bg_white',
         },
-        # secondary_log_colors matching v1.9 snippet + PROGRESS reset
-        secondary_log_colors={
-            'message': {
-                'PROGRESS': 'reset', # Ensure PROGRESS message part uses default color
-                'WARNING':  'yellow',
-                'ERROR':    'red',
-                'CRITICAL': 'red', # Background is handled by log_colors
-            }
-            # INFO and DEBUG messages will use default color due to %(reset)s after levelname
-        },
+        # Removed secondary_log_colors as it's not needed for this format
         style='%'
     )
     # Changed handler back to sys.stdout as per user request
@@ -278,6 +270,7 @@ def cleanup(google_photos_instance, db_manager_instance):
 
 
 # --- Item Processing Worker Function ---
+# This function remains unchanged as the logic for processing a single item is correct.
 def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
     """
     Worker function executed by each thread. Handles the entire lifecycle
@@ -630,7 +623,8 @@ def main():
         description="Transfer Google Photos to SmugMug using SQLite and parallel workers.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter # Provides default values in help message
     )
-    # Define command-line arguments (same as before)
+    # Define command-line arguments
+    # Removed --retry-errors argument
     parser.add_argument('--google-photos-album-id', help='(Optional) Google Photos Album ID to sync (syncs entire library if omitted).')
     parser.add_argument('--ignore-photos', action='store_true', help='Skip processing photos (only process videos).')
     parser.add_argument('--ignore-videos', action='store_true', help='Skip processing videos (only process photos).')
@@ -643,7 +637,6 @@ def main():
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('--db-file', default=DB_FILE_DEFAULT, help='Path to the SQLite database file for tracking transfer state.')
     parser.add_argument('--force-refresh-list', action='store_true', help='Re-fetch the media list from Google Photos, clearing existing DB entries.')
-    parser.add_argument('--retry-errors', action='store_true', help='Include items currently marked with an error status in this processing run.')
     parser.add_argument('--reset-errors', action='store_true', help='Reset all items currently marked with an error status back to PENDING before starting the run.')
     parser.add_argument('--workers', type=int, default=MAX_WORKERS, help=f'Number of parallel worker threads for processing items (default: {MAX_WORKERS}).')
 
@@ -951,8 +944,8 @@ def main():
 
         # --- Get Items for Processing ---
         logger.info("Fetching items to process from database...")
-        # Get list of items based on status (includes errors if --retry-errors is used)
-        items_to_process_list = db_manager.get_items_to_process(retry_errors=args.retry_errors)
+        # Get list of items based on status. Errors are now always included by db_manager.
+        items_to_process_list = db_manager.get_items_to_process()
         total_items_to_process_this_run = len(items_to_process_list) # Total items for this specific run
         # Get total items again *after* potential reset/fetch to use for overall progress calc
         total_db_items = db_manager.get_item_count()
@@ -1014,9 +1007,11 @@ def main():
                             errors_in_run += 1
 
                         # --- Log Progress Update (Overall) ---
-                        # Calculate overall progress based on total DB items
-                        items_remaining_to_process = total_items_to_process_this_run - processed_count_this_run
-                        overall_processed_count = total_db_items - items_remaining_to_process
+                        # Get count of items NOT in a terminal state for a more accurate progress %
+                        non_terminal_statuses = list(set(db_manager.get_stats().keys()) - set(TERMINAL_STATUSES) - {'TOTAL'})
+                        items_remaining_count = db_manager.get_item_count_by_status(non_terminal_statuses) if db_manager else (num_submitted - processed_count_this_run)
+                        overall_processed_count = total_db_items - items_remaining_count
+
                         percentage = (overall_processed_count / total_db_items) * 100 if total_db_items > 0 else 0
                         last_id_short = f"{google_id[:8]}..." if google_id else "N/A"
 
@@ -1033,11 +1028,13 @@ def main():
                         errors_in_run += 1 # Count this as an error for the summary
 
                         # Log progress even on error retrieving result
-                        items_remaining_to_process = total_items_to_process_this_run - processed_count_this_run
-                        overall_processed_count = total_db_items - items_remaining_to_process
-                        percentage = (overall_processed_count / total_db_items) * 100 if total_db_items > 0 else 0
+                        # Use the less accurate estimate here to avoid another DB query in error path
+                        items_remaining_to_process = num_submitted - processed_count_this_run
+                        # Need total_db_items from before the loop started
+                        overall_processed_count_estimate = total_db_items - items_remaining_to_process
+                        percentage = (overall_processed_count_estimate / total_db_items) * 100 if total_db_items > 0 else 0
                         logger.error(
-                            f"Overall Progress: {overall_processed_count}/{total_db_items} ({percentage:.1f}%) "
+                            f"Overall Progress Estimate: {overall_processed_count_estimate}/{total_db_items} ({percentage:.1f}%) "
                             f"| Run: Up: {uploaded_in_run} Dup: {duplicates_in_run} Skip: {skipped_in_run} Err: {errors_in_run} "
                             f"| Last: ERROR retrieving future result"
                         )
@@ -1089,8 +1086,11 @@ def main():
             if run_completed_successfully:
                 logger.info("- Status: Completed run without errors")
                 # Check if any non-terminal items remain in the DB
-                remaining_items = db_manager.get_items_to_process(retry_errors=False) if db_manager else []
-                if not remaining_items:
+                # Use the new method to check non-terminal statuses accurately
+                non_terminal_statuses = list(set(db_manager.get_stats().keys()) - set(TERMINAL_STATUSES) - {'TOTAL'})
+                remaining_items_count = db_manager.get_item_count_by_status(non_terminal_statuses) if db_manager else -1 # -1 indicates unknown
+
+                if remaining_items_count == 0:
                     # All items processed successfully, attempt to rename DB
                     logger.info("All targeted items processed successfully. Run complete.")
                     logger.info("Attempting to rename completed database file...")
@@ -1121,9 +1121,12 @@ def main():
                         logger.error(f"Failed to rename database file: {e}", exc_info=True)
                         # Use print for this critical error message as well
                         print(f"\nERROR: Failed to rename completed database file: {e}", file=sys.stderr)
-                else:
+                elif remaining_items_count > 0:
                      # Run completed without errors, but items remain
-                     logger.warning(f"Run completed without errors, but {len(remaining_items)} items still require processing. DB not renamed.")
+                     logger.warning(f"Run completed without errors, but {remaining_items_count} items still require processing. DB not renamed.")
+                else: # remaining_items_count is -1 (error getting count)
+                     logger.error("Could not determine remaining items count. DB not renamed.")
+
             elif shutdown_requested:
                 # Run was terminated by user signal
                 logger.warning("- Status: Terminated by user")
