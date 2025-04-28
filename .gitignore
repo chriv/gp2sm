@@ -8,4 +8,5 @@ temp_downloads/
 *.db
 *.db-wal
 *.db-shm
+*.lock
 smugmugapikeyandsecret.txt
