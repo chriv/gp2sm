@@ -1,4 +1,6 @@
 # Google Photos to SmugMug Transfer Script (v2.0)
+# - Added custom PROGRESS log level with distinct color.
+# - Changed progress calculation to show overall progress (processed / total_db).
 # - Reverted colorlog setup *exactly* to v1.9 structure (plus threadName).
 # - Changed console handler back to sys.stdout.
 # - Replaced ALL print statements with logger calls for progress, summary, and status.
@@ -60,6 +62,8 @@ LOCK_FILE = "gp2sm.lock"
 LOG_ID_TRUNCATE_LEN = 8
 # --- Concurrency Settings ---
 MAX_WORKERS = 5 # Default number of concurrent worker threads
+# --- Custom Log Level ---
+PROGRESS_LEVEL_NUM = 15 # Between DEBUG (10) and INFO (20)
 
 # --- Global Variables ---
 logger = None
@@ -104,8 +108,21 @@ def signal_handler(sig, frame):
 # --- Logging Setup ---
 def setup_logging(debug=False):
     """Configures logging to both console (stdout) and a rotating file."""
-    global logger
+    global logger, PROGRESS_LEVEL_NUM
+
+    # Add custom PROGRESS level
+    logging.addLevelName(PROGRESS_LEVEL_NUM, "PROGRESS")
+    def progress(self, message, *args, **kws):
+        # Yes, logger takes its '*args' as 'args'.
+        if self.isEnabledFor(PROGRESS_LEVEL_NUM):
+            self._log(PROGRESS_LEVEL_NUM, message, args, **kws)
+    logging.Logger.progress = progress # Add the method to the Logger class
+
     log_level = logging.DEBUG if debug else logging.INFO
+    # Ensure PROGRESS level is always enabled if INFO is enabled
+    if log_level > PROGRESS_LEVEL_NUM:
+        log_level = PROGRESS_LEVEL_NUM
+
     logger = logging.getLogger() # Get root logger
     # Clear existing handlers to prevent duplicate logs if re-configured
     if logger.hasHandlers():
@@ -120,7 +137,7 @@ def setup_logging(debug=False):
                       '%(message_log_color)s%(message)s%(reset)s') # Final reset included
 
     # Configure console handler (using colorlog, output to stdout)
-    # Use exact formatter setup from v1.9 snippet
+    # Use exact formatter setup from v1.9 snippet, adding PROGRESS color
     console_formatter = colorlog.ColoredFormatter(
         console_format, # Use the single format string
         datefmt='%Y-%m-%d %H:%M:%S',
@@ -128,26 +145,31 @@ def setup_logging(debug=False):
         log_colors={
             'DEBUG':    'cyan',
             'INFO':     'green',
+            'PROGRESS': 'blue', # Assign color for PROGRESS level
             'WARNING':  'yellow',
             'ERROR':    'red',
             'CRITICAL': 'red,bg_white',
         },
-        # *** secondary_log_colors exactly matching v1.9 snippet ***
+        # secondary_log_colors matching v1.9 snippet + PROGRESS reset
         secondary_log_colors={
             'message': {
+                'PROGRESS': 'reset', # Ensure PROGRESS message part uses default color
+                'WARNING':  'yellow',
                 'ERROR':    'red',
-                'CRITICAL': 'red',
-                'WARNING':  'yellow'
+                'CRITICAL': 'red', # Background is handled by log_colors
             }
             # INFO and DEBUG messages will use default color due to %(reset)s after levelname
         },
         style='%'
     )
-    # *** Changed handler back to sys.stdout as per user request ***
+    # Changed handler back to sys.stdout as per user request
     console_handler = colorlog.StreamHandler(sys.stdout)
     console_handler.setFormatter(console_formatter)
-    # Console handler level respects the debug flag
-    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    # Console handler level respects the debug flag, but ensures PROGRESS is shown if INFO is
+    console_handler_level = logging.DEBUG if debug else logging.INFO
+    if console_handler_level > PROGRESS_LEVEL_NUM:
+         console_handler_level = PROGRESS_LEVEL_NUM
+    console_handler.setLevel(console_handler_level)
     logger.addHandler(console_handler)
 
     # Configure file handler (rotating file, always logs DEBUG level and above)
@@ -158,7 +180,7 @@ def setup_logging(debug=False):
         # Rotate log file when it reaches 5MB, keep 5 backup files
         file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
         file_handler.setFormatter(file_formatter)
-        file_handler.setLevel(logging.DEBUG) # Log everything to the file
+        file_handler.setLevel(logging.DEBUG) # Log everything (including PROGRESS) to the file
         logger.addHandler(file_handler)
     except Exception as e:
         # Log error to stderr if file logging fails
@@ -599,7 +621,7 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
 # --- Main Function ---
 def main():
     """Main execution function: parses args, initializes modules, runs processing loop."""
-    global logger, shutdown_requested, google_photos_instance_global, db_manager_global, shutdown_event
+    global logger, shutdown_requested, google_photos_instance_global, db_manager_global, shutdown_event, PROGRESS_LEVEL_NUM
     # Access global counters for summary
     global uploaded_in_run, duplicates_in_run, skipped_in_run, errors_in_run
 
@@ -662,6 +684,7 @@ def main():
     duplicates_in_run = 0
     skipped_in_run = 0
     errors_in_run = 0
+    total_db_items = 0 # Initialize total DB items
     total_items_to_process_this_run = 0 # Will be updated after fetching item list
 
     # --- Main Execution Block (Try/Except/Finally) ---
@@ -799,7 +822,7 @@ def main():
 
         # --- Database Population / Config Consistency Check ---
         is_initial_run = False # Flag to track if this is the very first run with this DB
-        total_db_items = db_manager.get_item_count() # Get current item count
+        total_db_items = db_manager.get_item_count() # Get current item count *before* potential fetch
         stored_config = db_manager.get_stored_config() # Get config snapshot from DB
 
         # Determine if a fresh list fetch from Google Photos is needed
@@ -852,7 +875,7 @@ def main():
                  logger.info(f"Adding {len(photos_list)} fetched items to the database...")
                  added_count = db_manager.add_item_batch(photos_list, current_target_album_key)
                  logger.info(f"Populated DB with {added_count} new items.")
-                 total_db_items = db_manager.get_item_count() # Update total count
+                 total_db_items = db_manager.get_item_count() # Update total count *after* adding
             else:
                  # No items found in Google Photos source
                  logger.info("No items found in Google Photos source to add to DB.")
@@ -861,6 +884,8 @@ def main():
                       logger.info("Exiting as no items were found in the source on initial run.")
                       sys.exit(0)
                  # If force_refresh resulted in no items, continue (DB is now empty or cleared)
+                 total_db_items = 0 # Update total count if DB was cleared/empty
+
         else:
              # Database exists and not forcing refresh, check config consistency
              logger.info(f"DB contains {total_db_items} items. Checking config consistency...")
@@ -929,11 +954,16 @@ def main():
         # Get list of items based on status (includes errors if --retry-errors is used)
         items_to_process_list = db_manager.get_items_to_process(retry_errors=args.retry_errors)
         total_items_to_process_this_run = len(items_to_process_list) # Total items for this specific run
-        logger.info(f"Found {total_items_to_process_this_run} items requiring processing.")
+        # Get total items again *after* potential reset/fetch to use for overall progress calc
+        total_db_items = db_manager.get_item_count()
+        logger.info(f"Found {total_items_to_process_this_run} items requiring processing out of {total_db_items} total items in DB.")
 
         # Check if there's anything to process
         if total_items_to_process_this_run == 0:
-             logger.info("No items require processing in this run.")
+             if total_db_items > 0:
+                 logger.info("No items require processing in this run (all items in terminal/skipped state).")
+             else:
+                 logger.info("No items found in database to process.")
              # Skip the processing loop and go directly to summary
         else:
             # Items found, log message and proceed to processing loop
@@ -983,13 +1013,17 @@ def main():
                         elif final_status in ERROR_STATUSES:
                             errors_in_run += 1
 
-                        # --- Log Progress Update ---
-                        percentage = (processed_count_this_run / num_submitted) * 100 if num_submitted > 0 else 0
+                        # --- Log Progress Update (Overall) ---
+                        # Calculate overall progress based on total DB items
+                        items_remaining_to_process = total_items_to_process_this_run - processed_count_this_run
+                        overall_processed_count = total_db_items - items_remaining_to_process
+                        percentage = (overall_processed_count / total_db_items) * 100 if total_db_items > 0 else 0
                         last_id_short = f"{google_id[:8]}..." if google_id else "N/A"
-                        # Log the progress information
-                        logger.info(
-                            f"Progress: {processed_count_this_run}/{num_submitted} ({percentage:.1f}%) "
-                            f"| Up: {uploaded_in_run} Dup: {duplicates_in_run} Skip: {skipped_in_run} Err: {errors_in_run} "
+
+                        # Log the progress information using the custom PROGRESS level
+                        logger.progress(
+                            f"Overall Progress: {overall_processed_count}/{total_db_items} ({percentage:.1f}%) "
+                            f"| Run: Up: {uploaded_in_run} Dup: {duplicates_in_run} Skip: {skipped_in_run} Err: {errors_in_run} "
                             f"| Last: {final_status} (ID: {last_id_short})"
                         )
 
@@ -997,11 +1031,14 @@ def main():
                         # Catch exceptions that might occur during future.result() or if worker raised unhandled exception
                         logger.error(f"Exception retrieving result from worker future: {exc}", exc_info=True)
                         errors_in_run += 1 # Count this as an error for the summary
+
                         # Log progress even on error retrieving result
-                        percentage = (processed_count_this_run / num_submitted) * 100 if num_submitted > 0 else 0
+                        items_remaining_to_process = total_items_to_process_this_run - processed_count_this_run
+                        overall_processed_count = total_db_items - items_remaining_to_process
+                        percentage = (overall_processed_count / total_db_items) * 100 if total_db_items > 0 else 0
                         logger.error(
-                            f"Progress: {processed_count_this_run}/{num_submitted} ({percentage:.1f}%) "
-                            f"| Up: {uploaded_in_run} Dup: {duplicates_in_run} Skip: {skipped_in_run} Err: {errors_in_run} "
+                            f"Overall Progress: {overall_processed_count}/{total_db_items} ({percentage:.1f}%) "
+                            f"| Run: Up: {uploaded_in_run} Dup: {duplicates_in_run} Skip: {skipped_in_run} Err: {errors_in_run} "
                             f"| Last: ERROR retrieving future result"
                         )
 
