@@ -1,5 +1,6 @@
 # Google Photos to SmugMug Transfer Script (v2.0)
-# - Corrected colorlog secondary_log_colors configuration.
+# - Reverted colorlog setup *exactly* to v1.9 structure (plus threadName).
+# - Changed console handler back to sys.stdout.
 # - Replaced ALL print statements with logger calls for progress, summary, and status.
 # - Fixed SyntaxError in worker try/except blocks.
 # Implements parallel processing using worker threads,
@@ -102,7 +103,7 @@ def signal_handler(sig, frame):
 
 # --- Logging Setup ---
 def setup_logging(debug=False):
-    """Configures logging to both console (stderr) and a rotating file."""
+    """Configures logging to both console (stdout) and a rotating file."""
     global logger
     log_level = logging.DEBUG if debug else logging.INFO
     logger = logging.getLogger() # Get root logger
@@ -111,18 +112,19 @@ def setup_logging(debug=False):
         logger.handlers.clear()
     logger.setLevel(log_level) # Set minimum level for the logger
 
-    # Define log formats (debug includes more detail)
-    debug_format = ('%(asctime)s - %(log_color)s%(levelname)-8s%(reset)s - '
-                    '[%(threadName)s:%(name)s:%(funcName)s:%(lineno)d] - '
-                    '%(message_log_color)s%(message)s%(reset)s') # Uses message_log_color
-    info_format = ('%(asctime)s - %(log_color)s%(levelname)-8s%(reset)s - '
-                   '[%(threadName)s:%(name)s:%(funcName)s:%(lineno)d] - ' # Keep threadname for info too
-                   '%(message_log_color)s%(message)s%(reset)s') # Uses message_log_color
-    log_format = debug_format if debug else info_format
+    # Define log format based on v1.9 snippet, adding threadName
+    # Use %(message_log_color)s to allow secondary colors for message part
+    # Added %(threadName)s inside the brackets
+    console_format = ('%(asctime)s - %(log_color)s%(levelname)-8s%(reset)s - '
+                      '[%(threadName)s:%(name)s:%(funcName)s:%(lineno)d] - '
+                      '%(message_log_color)s%(message)s%(reset)s') # Final reset included
 
-    # Configure console handler (using colorlog, output to stderr)
+    # Configure console handler (using colorlog, output to stdout)
+    # Use exact formatter setup from v1.9 snippet
     console_formatter = colorlog.ColoredFormatter(
-        log_format, datefmt='%Y-%m-%d %H:%M:%S', reset=True,
+        console_format, # Use the single format string
+        datefmt='%Y-%m-%d %H:%M:%S',
+        reset=True, # reset=True adds reset at the end
         log_colors={
             'DEBUG':    'cyan',
             'INFO':     'green',
@@ -130,25 +132,26 @@ def setup_logging(debug=False):
             'ERROR':    'red',
             'CRITICAL': 'red,bg_white',
         },
+        # *** secondary_log_colors exactly matching v1.9 snippet ***
         secondary_log_colors={
             'message': {
-                'DEBUG':    'reset', # Use default terminal color for DEBUG messages
-                'INFO':     'reset', # Use default terminal color for INFO messages
-                'WARNING':  'yellow',
                 'ERROR':    'red',
-                'CRITICAL': 'red,bg_white',
+                'CRITICAL': 'red',
+                'WARNING':  'yellow'
             }
+            # INFO and DEBUG messages will use default color due to %(reset)s after levelname
         },
         style='%'
     )
-    # Use stderr for console logs
-    console_handler = colorlog.StreamHandler(sys.stderr)
+    # *** Changed handler back to sys.stdout as per user request ***
+    console_handler = colorlog.StreamHandler(sys.stdout)
     console_handler.setFormatter(console_formatter)
     # Console handler level respects the debug flag
     console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     logger.addHandler(console_handler)
 
     # Configure file handler (rotating file, always logs DEBUG level and above)
+    # File handler uses a non-colored format, adapted to include threadName
     file_format = '%(asctime)s - %(levelname)-8s - [%(threadName)s:%(name)s:%(funcName)s:%(lineno)d] - %(message)s'
     file_formatter = logging.Formatter(file_format, datefmt='%Y-%m-%d %H:%M:%S')
     try:
