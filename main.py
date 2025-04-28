@@ -193,7 +193,7 @@ def cleanup(google_photos_instance, db_manager_instance):
     log_func_info("--- Cleanup complete ---")
 
 
-# --- Album Switching Logic (Revised - No Global Flag) ---
+# --- Album Switching Logic (Corrected - Uses Current Full Album Name) ---
 def get_next_album_name(current_album_name):
     """Generates the next sequential album name."""
     match = re.search(r" - Part (\d+)$", current_album_name, re.IGNORECASE)
@@ -223,11 +223,10 @@ def handle_album_full_switch(smugmug_instance, db_manager_instance, initial_albu
             return False # Indicate switch failed
 
         db_target_key = stored_config.get('current_album_key')
-        # Use initial_album_name from snapshot for generating next name, fallback to current key
-        db_initial_album_name = stored_config.get('initial_album_name')
 
         # 2. Get the album key the shared smugmug object is *currently* using
         shared_target_key = smugmug_instance.album_key
+        shared_target_name = smugmug_instance.album_name # Get the name of the album that filled up
 
         # 3. Compare DB target with shared object target
         if db_target_key != shared_target_key:
@@ -238,16 +237,21 @@ def handle_album_full_switch(smugmug_instance, db_manager_instance, initial_albu
 
         # 4. If keys match, THIS worker is the first to handle the full error *for this album*
         logger.warning("="*60)
-        logger.warning(f"SmugMug album '{shared_target_key}' reported as full! Attempting live switch...")
+        logger.warning(f"SmugMug album '{shared_target_key}' ({shared_target_name or 'Name Unknown'}) reported as full! Attempting live switch...")
 
-        # Use the name stored in the DB snapshot (initial_album_name) if available,
-        # otherwise use the current album name from the shared instance.
-        current_album_name_for_next = db_initial_album_name or smugmug_instance.album_name or shared_target_key
-        if not current_album_name_for_next:
-             logger.error("Cannot determine current album name/key to generate next sequential name.")
-             return False
+        # *** CORRECTED LOGIC: Use the name of the album that JUST filled up ***
+        current_full_album_name = shared_target_name
+        if not current_full_album_name:
+            # Fallback if name is missing for some reason, try using the key
+            current_full_album_name = shared_target_key
+            logger.warning(f"Album name missing for key {shared_target_key}, using key itself to generate next name.")
+            if not current_full_album_name: # Should not happen if shared_target_key exists
+                 logger.error("Cannot determine current full album name/key to generate next sequential name.")
+                 return False
 
-        next_album_name = get_next_album_name(current_album_name_for_next)
+        next_album_name = get_next_album_name(current_full_album_name)
+        # *** END OF CORRECTION ***
+
         logger.warning(f"Attempting to find/create next album: '{next_album_name}'")
 
         # Use a temporary SmugMug object instance for the get_or_create call
@@ -286,7 +290,6 @@ def handle_album_full_switch(smugmug_instance, db_manager_instance, initial_albu
             logger.error(f"Failed to find or create the next album '{next_album_name}'. Cannot switch.")
             return False # Indicate switch failed
 # --- End Album Switching Logic ---
-
 
 # --- Item Processing Worker Function (Revised Album Full Handling) ---
 def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
