@@ -259,6 +259,11 @@ def cleanup(google_photos_instance, db_manager_instance):
     log_func_info("--- Cleanup complete ---")
 
 
+# main.py - Corrected process_item_worker function
+
+# (Keep all imports and other functions as they are)
+# ...
+
 # --- Item Processing Worker Function ---
 def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
     """
@@ -277,51 +282,39 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
         tuple: (google_id, final_status) indicating the outcome for this item.
                google_id might be None if essential data was missing.
     """
-    # Access global shutdown event to allow early exit
-    global shutdown_event
+    global shutdown_event # Access global shutdown event
 
-    # Safely extract essential details from the item dictionary
     google_id = item_details.get('google_id')
     filename = item_details.get('filename')
     mime_type = item_details.get('mime_type')
     current_md5_hash = item_details.get('md5_hash') # May be None initially
+    current_status = item_details.get('status', STATUS_PENDING)
 
-    # Determine media type characteristics
     is_video = mime_type.startswith('video/') if mime_type else False
-    # Check filename case-insensitively for .heic extension
     is_heic = filename.lower().endswith('.heic') if filename else False
-    # Determine if HEIC files should be processed based on args or SmugMug config
     should_process_heic = args.process_heic or (smugmug.config and smugmug.config.get('process_heic', False))
 
-    # --- Pre-check: Ensure essential data exists ---
     if not google_id or not filename or not mime_type:
-        # Log error if core data is missing
-        logger.error(f"Worker skipped item due to missing core data: ID={google_id}, Filename={filename}, Mime={mime_type}")
-        # Attempt to update DB status for missing data if we have an ID
+        logger.error(f"Worker skipped item due to missing core data: ID={google_id}, File={filename}, Mime={mime_type}")
         if google_id:
             db_manager.update_item_status(google_id, STATUS_ERROR_MISSING_DATA, "Item missing filename or mimeType in DB")
-        # Return error status; google_id might be None here
         return google_id, STATUS_ERROR_MISSING_DATA
 
-    # Create a truncated ID for cleaner logging
     truncated_id = f"{google_id[:LOG_ID_TRUNCATE_LEN]}...{google_id[-LOG_ID_TRUNCATE_LEN:]}" if len(google_id) > LOG_ID_TRUNCATE_LEN * 2 else google_id
     log_identifier = f"Worker (ID: {truncated_id}, File: '{filename}')"
-    # Initial log message commented out to reduce noise; uncomment if needed for debugging start of each item
-    # logger.info(f"{log_identifier}: Starting processing.")
 
-    temp_file_path = None # Path to downloaded file, initially None
-    final_status = item_details.get('status', STATUS_PENDING) # Start with current status from DB
+    temp_file_path = None
+    final_status = current_status
+    refreshed_details = None
+    upload_needed = False # Flag to track if upload should proceed
 
     try:
-        # --- Check for Shutdown Signal ---
         if shutdown_event.is_set():
-            # Log warning only if the item wasn't already in a terminal or error state
             if final_status not in TERMINAL_STATUSES and final_status not in ERROR_STATUSES:
                  logger.warning(f"{log_identifier}: Shutdown signalled before processing started. Skipping.")
-            # Return the item's current status as no work was done
             return google_id, final_status
 
-        # --- Apply Command-Line Filters ---
+        # --- Apply Filters ---
         if args.ignore_photos and not is_video:
              logger.info(f"{log_identifier}: Marked to skip (Photo filter active).")
              db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, error_message="Skipped via --ignore-photos")
@@ -330,282 +323,172 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
              logger.info(f"{log_identifier}: Marked to skip (Video filter active).")
              db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, error_message="Skipped via --ignore-videos")
              return google_id, STATUS_SKIPPED_FILTER
+        if is_heic and not should_process_heic:
+            logger.info(f"{log_identifier}: Marked to skip (HEIC processing disabled).")
+            db_manager.update_item_status(google_id, STATUS_SKIPPED_HEIC, error_message="HEIC processing not enabled")
+            return google_id, STATUS_SKIPPED_HEIC
 
-        # --- HEIC File Handling ---
-        if is_heic:
-            if not should_process_heic:
-                # If HEIC processing is disabled, skip the file
-                logger.info(f"{log_identifier}: Marked to skip (HEIC processing disabled).")
-                db_manager.update_item_status(google_id, STATUS_SKIPPED_HEIC, error_message="HEIC processing not enabled")
-                return google_id, STATUS_SKIPPED_HEIC
-            else:
-                # HEIC processing enabled, proceed (no duplicate check possible)
-                # logger.warning(f"{log_identifier}: Processing HEIC (no duplicate check).") # Optional: Log HEIC processing start
-                pass # Continue processing
+        # --- Determine if Initial Download is Needed ---
+        # Download needed if:
+        # - It's a video (always download to check by filename)
+        # - It's HEIC and processing is enabled (always download)
+        # - It's an image without a hash (need to download to calculate hash)
+        needs_initial_download = is_video or (is_heic and should_process_heic) or \
+                                (not is_video and not is_heic and not current_md5_hash)
 
-        # --- Download Step (Conditional) ---
-        # Determine if download is necessary based on type and current state
-        needs_download = (not is_video and not is_heic and not current_md5_hash) or \
-                         is_video or \
-                         (is_heic and should_process_heic)
-
-        refreshed_details = None # To store potentially updated details from download
-
-        if needs_download:
-            logger.debug(f"{log_identifier}: Download required. Calling download function...")
-            # Call the download method, which handles retries and potential detail refresh
+        if needs_initial_download:
+            logger.debug(f"{log_identifier}: Initial download required. Calling download function...")
             temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details)
-
-            # Check if download was successful
             if not temp_file_path:
-                logger.error(f"{log_identifier}: Download failed.")
-                # Update DB status to reflect download error
-                db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Download function returned failure")
-                return google_id, STATUS_ERROR_DOWNLOAD # Exit processing for this item
-
-            # If download refreshed item details (e.g., new baseUrl), update the database
+                logger.error(f"{log_identifier}: Initial download failed.")
+                db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Initial download function returned failure")
+                return google_id, STATUS_ERROR_DOWNLOAD
             if refreshed_details:
                  logger.debug(f"{log_identifier}: Details refreshed during download. Updating DB.")
                  new_base_url = refreshed_details.get('baseUrl')
-                 # Only update metadata if it exists in the refreshed details
                  new_metadata = refreshed_details.get('mediaMetadata')
-                 # Keep old metadata if no new metadata was fetched
                  new_metadata_json = json.dumps(new_metadata) if new_metadata else item_details.get('media_metadata_json')
                  db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-                 refreshed_details = None # Reset flag after processing
+                 refreshed_details = None
 
-        # --- Hashing Step (Conditional) ---
-        # Only hash if: Not video, not HEIC, AND no hash exists yet in DB
+        # --- Hashing Step (Only for non-video/non-HEIC images without existing hash) ---
         if not is_video and not is_heic and not current_md5_hash:
-            # Ensure the downloaded file exists before attempting to hash
             if not temp_file_path or not os.path.exists(temp_file_path):
-                 # This implies download was needed but failed, or file disappeared
-                 logger.error(f"{log_identifier}: Temp file missing for hashing (expected path: {temp_file_path}). Download may have failed silently.")
+                 logger.error(f"{log_identifier}: Temp file missing for hashing.")
                  db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Temp file missing before hash calculation")
-                 return google_id, STATUS_ERROR_DOWNLOAD # Exit processing
-
+                 return google_id, STATUS_ERROR_DOWNLOAD
             logger.info(f"{log_identifier}: Calculating MD5 hash...")
-            # Calculate MD5 hash using the SmugMug module's utility function
             calculated_hash = smugmug.calculate_file_hash(temp_file_path, hash_algorithm='md5')
-
-            # Check if hashing was successful
             if not calculated_hash:
                 logger.error(f"{log_identifier}: MD5 hash calculation failed.")
                 db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, "MD5 calculation failed")
-                # Cleanup temp file if hashing failed
-                if temp_file_path and os.path.exists(temp_file_path):
-                    # Use proper try/except block structure
-                    try:
-                        os.remove(temp_file_path)
-                        logger.debug(f"{log_identifier}: Cleaned temp file after hashing error.")
-                    except OSError as e:
-                        logger.warning(f"{log_identifier}: Failed to clean temp file {temp_file_path} after hashing error: {e}")
-                return google_id, STATUS_ERROR_HASHING # Exit processing
+                # Cleanup handled in finally block
+                return google_id, STATUS_ERROR_HASHING
             else:
-                # Hashing successful, update local variable and database
                 logger.debug(f"{log_identifier}: Calculated MD5: {calculated_hash}. Updating DB.")
-                current_md5_hash = calculated_hash # Update local variable for subsequent checks
+                current_md5_hash = calculated_hash # Update local variable
                 db_manager.update_item_status(google_id, STATUS_HASHED, md5_hash=current_md5_hash)
-                final_status = STATUS_HASHED # Update intermediate status
+                final_status = STATUS_HASHED
 
-        # --- SmugMug Duplicate Check Step (Conditional) ---
-        # Skip duplicate check if it's a HEIC file being processed
+        # --- SmugMug Duplicate Check (Skip for HEIC) ---
         if not (is_heic and should_process_heic):
             exists_on_smugmug = False
-            log_reason = "" # Reason for check (filename or hash)
-            # Use the confirmed album key from the initialized SmugMug object
             target_album_key_for_check = smugmug.album_key
             if not target_album_key_for_check:
-                 # Should not happen if initialization succeeded, but check defensively
-                 logger.error(f"{log_identifier}: SmugMug target album key missing. Cannot check for duplicates.")
+                 logger.error(f"{log_identifier}: SmugMug target album key missing. Cannot check duplicates.")
                  db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, "SM album key missing during duplicate check")
-                 # Cleanup temp file if it exists
-                 if temp_file_path and os.path.exists(temp_file_path):
-                     # Use proper try/except block structure
-                     try:
-                         os.remove(temp_file_path)
-                         logger.debug(f"{log_identifier}: Cleaned temp file after SM API error (missing key).")
-                     except OSError as e:
-                         logger.warning(f"{log_identifier}: Failed to clean temp file {temp_file_path} after SM API error: {e}")
-                 return google_id, STATUS_ERROR_SMUGMUG_API # Exit processing
+                 # Cleanup handled in finally block
+                 return google_id, STATUS_ERROR_SMUGMUG_API
 
             logger.info(f"{log_identifier}: Checking SmugMug album '{target_album_key_for_check}' for duplicates...")
-            # Perform check based on media type
-            if is_video:
-                 # Videos are checked by filename
-                 log_reason = "filename match"
-                 exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type)
-            elif not is_video: # Standard image
-                 # Images are checked by MD5 hash
-                 log_reason = "MD5 hash match"
-                 if current_md5_hash:
-                      exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type, file_hash=current_md5_hash)
-                 else:
-                      # This should not happen if hashing logic above is correct, but check defensively
-                      logger.error(f"{log_identifier}: Cannot check SmugMug for image duplicate, MD5 hash missing unexpectedly.")
-                      db_manager.update_item_status(google_id, STATUS_ERROR_HASHING, "MD5 missing before SM duplicate check")
-                      # Cleanup temp file if it exists
-                      if temp_file_path and os.path.exists(temp_file_path):
-                         # Use proper try/except block structure
-                         try:
-                             os.remove(temp_file_path)
-                             logger.debug(f"{log_identifier}: Cleaned temp file after missing hash error.")
-                         except OSError as e:
-                             logger.warning(f"{log_identifier}: Failed to clean temp file {temp_file_path} after missing hash error: {e}")
-                      return google_id, STATUS_ERROR_HASHING # Exit processing
+            check_hash = current_md5_hash if not is_video else None # Pass hash only for images
+            exists_on_smugmug = smugmug.check_media_exists(target_album_key_for_check, filename, mime_type, file_hash=check_hash)
 
-            # Process duplicate check result
             if exists_on_smugmug:
-                 # Determine duplicate status based on check method
                  duplicate_status = STATUS_DUPLICATE_FILENAME if is_video else STATUS_DUPLICATE_HASH
+                 log_reason = "filename match" if is_video else "MD5 hash match"
                  logger.info(f"{log_identifier}: Found on SmugMug ({log_reason}). Marking as duplicate.")
                  db_manager.update_item_status(google_id, duplicate_status, error_message=f"Duplicate check via {log_reason}")
                  final_status = duplicate_status
-                 # Optional: Log simulated deletion from Google Photos if flag is set
                  if args.delete_from_google:
-                     # Note: remove_photo currently only simulates deletion
                      google_photos.remove_photo(google_id, dry_run=args.dry_run)
-                 # Cleanup temp file if it exists (might not exist for videos if check passed before download)
-                 if temp_file_path and os.path.exists(temp_file_path):
-                      try:
-                          os.remove(temp_file_path)
-                          logger.debug(f"{log_identifier}: Cleaned temp file for duplicate item.")
-                      except OSError as e:
-                          logger.warning(f"{log_identifier}: Failed clean temp file for duplicate item: {e}")
-                 return google_id, final_status # Stop processing this item - it's a duplicate
+                 # Cleanup handled in finally block
+                 return google_id, final_status # Stop processing duplicate
             else:
-                 # Only log if not found (reduces noise vs logging every check start)
+                 log_reason = "filename match" if is_video else "MD5 hash match"
                  logger.info(f"{log_identifier}: Checked SmugMug via {log_reason}: Not found.")
-                 # Update DB status to indicate check completed and item needs upload
                  db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, error_message=f"SM check via {log_reason} - not found")
-                 final_status = STATUS_SMUGMUG_CHECKED_NOT_FOUND # Update status before potential upload
+                 final_status = STATUS_SMUGMUG_CHECKED_NOT_FOUND
+                 upload_needed = True # Mark for upload
+        else:
+             # If it's HEIC and processing is enabled, skip duplicate check and mark for upload
+             logger.info(f"{log_identifier}: Skipping duplicate check for HEIC file.")
+             final_status = STATUS_PENDING # Or some other suitable status before upload
+             upload_needed = True
 
-        # --- Upload Step (Conditional) ---
-        # Proceed only if not skipped, not duplicate, and no errors occurred so far
-
-        # Handle Dry Run: If dry run is enabled, simulate upload and cleanup
-        if args.dry_run:
-            # Only log dry-run message if the item would have been uploaded
-            if final_status not in [STATUS_SKIPPED_FILTER, STATUS_SKIPPED_HEIC, STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH] and \
-               final_status not in ERROR_STATUSES:
+        # --- Upload Step (If needed) ---
+        if upload_needed:
+            # --- Handle Dry Run ---
+            if args.dry_run:
                 logger.info(f"{log_identifier}: [DRY RUN] Would upload.")
-                # Keep status as checked for dry run, don't mark as uploaded
-                final_status = STATUS_SMUGMUG_CHECKED_NOT_FOUND
-                # Simulate Google Photos deletion if flag is set
+                final_status = STATUS_SMUGMUG_CHECKED_NOT_FOUND # Keep status as checked
                 if args.delete_from_google:
                     google_photos.remove_photo(google_id, dry_run=True)
-                # Cleanup temp file manually in dry run if it exists
-                if temp_file_path and os.path.exists(temp_file_path):
-                     try:
-                         os.remove(temp_file_path)
-                         logger.debug(f"{log_identifier}: [DRY RUN] Cleaned temp file.")
-                     except OSError as e:
-                         logger.warning(f"{log_identifier}: [DRY RUN] Failed clean temp file: {e}")
-            # Return whatever the status was before the dry-run check
-            return google_id, final_status
+                # Cleanup handled in finally block
+                return google_id, final_status
 
-        # --- Proceed with Actual Upload ---
-        # Ensure temp file exists before attempting upload (might need re-download)
-        if not temp_file_path or not os.path.exists(temp_file_path):
-            # This implies download was needed but failed, or file disappeared.
-            # Attempt re-download only if download was originally needed for this item type.
-            if needs_download:
-                 logger.warning(f"{log_identifier}: Temp file path missing before upload. Attempting download again...")
-                 # Reuse original item_details for re-download attempt
-                 temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details)
-                 # Check if re-download succeeded
-                 if not temp_file_path:
-                      logger.error(f"{log_identifier}: Re-download failed before upload.")
-                      db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Re-download failed before upload attempt")
-                      return google_id, STATUS_ERROR_DOWNLOAD # Exit processing
-                 # Update DB if details refreshed during re-download
-                 if refreshed_details:
-                      new_base_url = refreshed_details.get('baseUrl')
-                      new_metadata = refreshed_details.get('mediaMetadata')
-                      new_metadata_json = json.dumps(new_metadata) if new_metadata else item_details.get('media_metadata_json')
-                      db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
-            else:
-                # If download wasn't originally needed, but file is missing now, it's an unexpected error
-                 logger.error(f"{log_identifier}: Temp file path missing unexpectedly before upload. Skipping. Expected path: {temp_file_path}")
-                 db_manager.update_item_status(google_id, STATUS_ERROR_UNKNOWN, "Temp file missing unexpectedly before upload")
-                 return google_id, STATUS_ERROR_UNKNOWN # Exit processing
+            # --- Ensure File is Downloaded Before Upload --- *CORRECTION HERE*
+            if not temp_file_path or not os.path.exists(temp_file_path):
+                logger.info(f"{log_identifier}: File not downloaded yet. Downloading before upload...")
+                # Use original item details for download
+                temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details)
+                if not temp_file_path:
+                    logger.error(f"{log_identifier}: Download failed before upload.")
+                    db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Download failed before upload attempt")
+                    return google_id, STATUS_ERROR_DOWNLOAD
+                # Update DB if details refreshed during this download
+                if refreshed_details:
+                    logger.debug(f"{log_identifier}: Details refreshed during pre-upload download. Updating DB.")
+                    new_base_url = refreshed_details.get('baseUrl')
+                    new_metadata = refreshed_details.get('mediaMetadata')
+                    new_metadata_json = json.dumps(new_metadata) if new_metadata else item_details.get('media_metadata_json')
+                    db_manager.update_item_details(google_id, new_base_url, new_metadata_json)
+                    refreshed_details = None
 
+            # --- Perform Actual Upload ---
+            target_album_uri_for_upload = smugmug.album_api_uri
+            if not target_album_uri_for_upload:
+                 logger.error(f"{log_identifier}: SmugMug target album URI missing. Cannot upload.")
+                 db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, "SM album URI missing during upload")
+                 # Cleanup handled in finally block
+                 return google_id, STATUS_ERROR_SMUGMUG_API
 
-        # --- Upload Attempt ---
-        # Use the confirmed album API URI from the initialized SmugMug object
-        target_album_uri_for_upload = smugmug.album_api_uri
-        if not target_album_uri_for_upload:
-             # Should not happen if initialization succeeded, but check defensively
-             logger.error(f"{log_identifier}: SmugMug target album URI missing. Cannot upload.")
-             db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, "SM album URI missing during upload")
-             # Cleanup temp file if it exists
-             if temp_file_path and os.path.exists(temp_file_path):
-                 # Use proper try/except block structure
-                 try:
-                     os.remove(temp_file_path)
-                     logger.debug(f"{log_identifier}: Cleaned temp file after SM API error (missing URI).")
-                 except OSError as e:
-                     logger.warning(f"{log_identifier}: Failed to clean temp file {temp_file_path} after SM API error: {e}")
-             return google_id, STATUS_ERROR_SMUGMUG_API # Exit processing
+            logger.info(f"{log_identifier}: Uploading to SmugMug album URI: {target_album_uri_for_upload}...")
+            db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
+            final_status = STATUS_UPLOAD_ATTEMPTED
 
-        # Log upload attempt and update DB status
-        logger.info(f"{log_identifier}: Uploading to SmugMug album URI: {target_album_uri_for_upload}...")
-        db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
-        final_status = STATUS_UPLOAD_ATTEMPTED # Update intermediate status
+            try:
+                # upload_media now handles its own temp file cleanup
+                upload_success = smugmug.upload_media(target_album_uri_for_upload, temp_file_path, filename, mime_type)
+                temp_file_path = None # Mark as consumed by upload_media
 
-        # --- Wrap upload call in try/except for SmugMugAlbumFullError ---
-        try:
-            # Call the upload method - it handles temp file cleanup internally
-            upload_success = smugmug.upload_media(target_album_uri_for_upload, temp_file_path, filename, mime_type)
+                if upload_success:
+                    logger.info(f"{log_identifier}: Upload successful.")
+                    db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS)
+                    final_status = STATUS_UPLOADED_SUCCESS
+                    if args.delete_from_google:
+                        google_photos.remove_photo(google_id, dry_run=False)
+                else:
+                    logger.error(f"{log_identifier}: Upload failed.")
+                    db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, "Upload function returned failure")
+                    final_status = STATUS_ERROR_UPLOAD_FAILED
 
-            # Process upload result
-            if upload_success:
-                logger.info(f"{log_identifier}: Upload successful.")
-                db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS)
-                final_status = STATUS_UPLOADED_SUCCESS
-                # Optional: Log simulated deletion from Google Photos if flag is set
-                if args.delete_from_google:
-                    # Note: remove_photo currently only simulates deletion
-                    google_photos.remove_photo(google_id, dry_run=False)
-            else:
-                # upload_media logs the specific upload error
-                logger.error(f"{log_identifier}: Upload failed.")
-                # Update DB status to reflect upload failure
-                db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, "Upload function returned failure")
-                final_status = STATUS_ERROR_UPLOAD_FAILED
+            except SmugMugAlbumFullError as afe:
+                 logger.error(f"{log_identifier}: Upload failed - SmugMug Album Full: {afe}")
+                 db_manager.update_item_status(google_id, STATUS_ERROR_ALBUM_FULL, f"Album full: {afe}")
+                 final_status = STATUS_ERROR_ALBUM_FULL
+                 temp_file_path = None # Ensure path is None after exception
 
-        except SmugMugAlbumFullError as afe:
-             logger.error(f"{log_identifier}: Upload failed - SmugMug Album Full: {afe}")
-             db_manager.update_item_status(google_id, STATUS_ERROR_ALBUM_FULL, f"Album full: {afe}")
-             final_status = STATUS_ERROR_ALBUM_FULL # Set specific status
-        # --- End SmugMugAlbumFullError handling ---
-
-        # Temp file path should be None now as upload_media cleans it up
-        temp_file_path = None
-        return google_id, final_status # Return final status after upload attempt
+        # If we reach here, processing is done for this item (either uploaded, skipped, duplicated, or dry run)
+        return google_id, final_status
 
     except Exception as e:
-        # --- Catch-all for Unexpected Errors in Worker ---
-        logger.error(f"Unexpected exception in processing worker for {google_id} ('{filename}'): {e}\n{traceback.format_exc()}")
-        final_status = STATUS_ERROR_UNKNOWN # Mark as unknown error
-        # Attempt to update DB status with the error, but might fail
+        logger.error(f"Unexpected exception in worker for {google_id} ('{filename}'): {e}\n{traceback.format_exc()}")
+        final_status = STATUS_ERROR_UNKNOWN
         try:
-             # Include part of the exception message in the DB error field
-             error_msg_short = str(e)[:200] # Limit error message length for DB
+             error_msg_short = str(e)[:200]
              db_manager.update_item_status(google_id, final_status, f"Worker exception: {error_msg_short}")
         except Exception as db_e:
-             # Log secondary error if DB update fails
-             logger.error(f"Failed to update DB status after worker exception for {google_id}: {db_e}")
-        # Ensure cleanup of temp file if it still exists due to early exit or error
+             logger.error(f"Failed update DB status after worker exception for {google_id}: {db_e}")
+        return google_id, final_status
+    finally:
+        # Ensure temp file is cleaned up if it still exists (e.g., early exit before upload)
         if temp_file_path and os.path.exists(temp_file_path):
-             # Use proper try/except block structure
              try:
                  os.remove(temp_file_path)
-                 logger.debug(f"{log_identifier}: Cleaned temp file after worker exception.")
+                 logger.debug(f"{log_identifier}: Cleaned up temp file in finally block.")
              except OSError as clean_e:
-                 logger.warning(f"{log_identifier}: Failed clean temp file {temp_file_path} after worker exception: {clean_e}")
-        # Return the error status
-        return google_id, final_status
+                 logger.warning(f"{log_identifier}: Failed clean temp file {temp_file_path} in finally block: {clean_e}")
 
 
 # --- Album Switching Logic ---
