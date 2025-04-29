@@ -31,6 +31,8 @@ import traceback
 
 # Third-party imports
 import colorlog
+from PIL import Image
+import io
 
 # Local module imports
 # Pass the quota_exceeded_flag to GooglePhotos constructor
@@ -234,6 +236,104 @@ def get_next_album_name(current_album_name):
         # If no ' - Part X' found, start with Part 2
         return f"{current_album_name} - Part 2"
 
+def check_album_capacity_and_switch(smugmug_instance, db_manager_instance, initial_album_name, current_folder_name, google_album_id, force_switch=False):
+    """
+    Checks if the current album is near capacity (80%) and switches to a new album if needed.
+    If force_switch is True, switches regardless of capacity.
+    Uses locking to ensure only one worker performs the switch action.
+    Returns True if a switch was performed, False otherwise.
+    """
+    global album_switch_lock
+    
+    with album_switch_lock:
+        # Get the current album key from the database config snapshot
+        stored_config = db_manager_instance.get_config_snapshot()
+        if not stored_config:
+            logger.error("Cannot check album capacity: Failed to retrieve stored config from DB.")
+            return False
+        
+        db_target_key = stored_config.get('current_album_key')
+        
+        # Get the album key the shared smugmug object is currently using
+        shared_target_key = smugmug_instance.album_key
+        shared_target_name = smugmug_instance.album_name
+        
+        # Compare DB target with shared object target
+        if db_target_key != shared_target_key:
+            # If they differ, another worker already completed a switch
+            logger.debug(f"Album keys differ: DB={db_target_key}, Shared={shared_target_key}. Assuming another worker switched.")
+            return False
+        
+        # Check if album is near capacity or force switch is requested
+        if not force_switch:
+            is_near_capacity = db_manager_instance.is_album_near_capacity(db_target_key)
+            if not is_near_capacity:
+                # Album is not near capacity, no need to switch
+                return False
+            
+            logger.warning("="*60)
+            logger.warning(f"SmugMug album '{shared_target_key}' ({shared_target_name or 'Name Unknown'}) is approaching 80% capacity! Switching to next album...")
+        else:
+            logger.warning("="*60)
+            logger.warning(f"SmugMug album '{shared_target_key}' ({shared_target_name or 'Name Unknown'}) reported as full! Forcing switch to next album...")
+        
+        # Use the album name currently associated with the shared instance
+        current_album_name = shared_target_name
+        if not current_album_name:
+            # Fallback if name is missing
+            current_album_name = shared_target_key
+            logger.warning(f"Album name missing for key {shared_target_key}, using key itself to generate next name.")
+            if not current_album_name:
+                logger.error("Cannot determine current album name/key to generate next sequential name.")
+                return False
+        
+        next_album_name = get_next_album_name(current_album_name)
+        logger.warning(f"Attempting to find/create next album: '{next_album_name}'")
+        
+        # Use a temporary SmugMug object instance for the get_or_create call
+        temp_smugmug = SmugMug()
+        temp_smugmug.config = smugmug_instance.config
+        temp_smugmug.auth_session = smugmug_instance.auth_session
+        temp_smugmug.user_uri = smugmug_instance.user_uri
+        
+        # Attempt to find or create the next album
+        if temp_smugmug.get_or_create_album_in_path(next_album_name, current_folder_name):
+            new_album_key = temp_smugmug.album_key
+            new_album_uri = temp_smugmug.album_api_uri
+            logger.info(f"Successfully found/created next album: '{next_album_name}' (Key: {new_album_key})")
+            
+            # Update the database config first (most critical)
+            if not db_manager_instance.save_config_snapshot(
+                initial_album_name=initial_album_name,  # Keep original base name
+                album_key=new_album_key,               # NEW key
+                album_uri=new_album_uri,               # NEW uri
+                folder_name=current_folder_name,
+                google_album_id=google_album_id
+            ):
+                logger.error("CRITICAL: Failed to update database config snapshot with new album!")
+                return False
+            
+            # Add or update the album in the tracking table
+            db_manager_instance.add_or_update_album(
+                album_key=new_album_key,
+                album_name=next_album_name,
+                album_uri=new_album_uri,
+                folder_name=current_folder_name,
+                is_current=True
+            )
+            
+            # Update the shared SmugMug instance state
+            logger.warning(f"Updating shared SmugMug instance to target new album: {new_album_key}")
+            smugmug_instance.album_key = new_album_key
+            smugmug_instance.album_api_uri = new_album_uri
+            smugmug_instance.album_name = next_album_name
+            
+            logger.warning("Album switch complete. Subsequent uploads will target the new album.")
+            return True
+        else:
+            logger.error(f"Failed to find or create the next album '{next_album_name}'. Cannot switch.")
+            return False
+
 def handle_album_full_switch(smugmug_instance, db_manager_instance, initial_album_name, current_folder_name, google_album_id):
     """
     Handles switching to the next SmugMug album when full, updating shared state live.
@@ -241,81 +341,55 @@ def handle_album_full_switch(smugmug_instance, db_manager_instance, initial_albu
     Relies on DB config snapshot as the source of truth for the *intended* target.
     Returns True if the switch was successfully performed by THIS call, False otherwise.
     """
-    global album_switch_lock # Only need the lock globally
-
-    with album_switch_lock:
-        # 1. Get the *current* target album key from the database config snapshot
-        stored_config = db_manager_instance.get_config_snapshot()
-        if not stored_config:
-            logger.error("Cannot perform album switch: Failed to retrieve stored config from DB.")
-            return False # Indicate switch failed
-
-        db_target_key = stored_config.get('current_album_key')
-
-        # 2. Get the album key the shared smugmug object is *currently* using
-        shared_target_key = smugmug_instance.album_key
-        shared_target_name = smugmug_instance.album_name # Get the name of the album that filled up
-
-        # 3. Compare DB target with shared object target
-        if db_target_key != shared_target_key:
-            # If they differ, it means another worker already successfully completed
-            # the switch (updated DB and shared object). This worker just needs to retry.
-            logger.debug(f"Album switch from {shared_target_key} to {db_target_key} already completed by another worker.")
-            return False # Indicate switch already done
-
-        # 4. If keys match, THIS worker is the first to handle the full error *for this album*
-        logger.warning("="*60)
-        logger.warning(f"SmugMug album '{shared_target_key}' ({shared_target_name or 'Name Unknown'}) reported as full! Attempting live switch...")
-
-        # Use the album name currently associated with the shared instance
-        current_full_album_name = shared_target_name
-        if not current_full_album_name:
-            # Fallback if name is missing for some reason, try using the key
-            current_full_album_name = shared_target_key
-            logger.warning(f"Album name missing for key {shared_target_key}, using key itself to generate next name.")
-            if not current_full_album_name: # Should not happen if shared_target_key exists
-                 logger.error("Cannot determine current full album name/key to generate next sequential name.")
-                 return False
-
-        next_album_name = get_next_album_name(current_full_album_name)
-        logger.warning(f"Attempting to find/create next album: '{next_album_name}'")
-
-        # Use a temporary SmugMug object instance for the get_or_create call
-        temp_smugmug = SmugMug()
-        temp_smugmug.config = smugmug_instance.config
-        temp_smugmug.auth_session = smugmug_instance.auth_session
-        temp_smugmug.user_uri = smugmug_instance.user_uri
-
-        # Attempt to find or create the next album
-        if temp_smugmug.get_or_create_album_in_path(next_album_name, current_folder_name):
-            new_album_key = temp_smugmug.album_key
-            new_album_uri = temp_smugmug.album_api_uri
-            logger.info(f"Successfully found/created next album: '{next_album_name}' (Key: {new_album_key})")
-
-            # Update the database config first (most critical)
-            # Keep the original initial_album_name, update current key/uri
-            if not db_manager_instance.save_config_snapshot(
-                initial_album_name=initial_album_name, # Keep original base name
-                album_key=new_album_key,             # NEW key
-                album_uri=new_album_uri,             # NEW uri
-                folder_name=current_folder_name,
-                google_album_id=google_album_id
-            ):
-                logger.error("CRITICAL: Failed to update database config snapshot with new album!")
-                return False # Indicate switch failed critically
-
-            # Now, update the shared SmugMug instance state
-            logger.warning(f"Updating shared SmugMug instance to target new album: {new_album_key}")
-            smugmug_instance.album_key = new_album_key
-            smugmug_instance.album_api_uri = new_album_uri
-            smugmug_instance.album_name = next_album_name # Update name as well
-
-            logger.warning("Live album switch complete. Subsequent uploads in this run will target the new album.")
-            return True # Indicate switch was performed successfully by this call
-        else:
-            logger.error(f"Failed to find or create the next album '{next_album_name}'. Cannot switch.")
-            return False # Indicate switch failed
+    # Force switch regardless of capacity since we know the album is full
+    return check_album_capacity_and_switch(
+        smugmug_instance,
+        db_manager_instance,
+        initial_album_name,
+        current_folder_name,
+        google_album_id,
+        force_switch=True
+    )
 # --- End Album Switching Logic ---
+
+# --- Image Conversion Functions ---
+def convert_image_to_jpeg(input_file_path, output_file_path=None, quality=95):
+    """
+    Converts an image file (BMP, WebP, HEIC, etc.) to a high-quality JPEG.
+    
+    Args:
+        input_file_path: Path to the input image file
+        output_file_path: Path for the output JPEG file. If None, uses the input path with .jpg extension
+        quality: JPEG quality (1-100), higher is better quality but larger file size
+        
+    Returns:
+        Tuple of (success_bool, output_file_path)
+    """
+    if not output_file_path:
+        # Replace original extension with .jpg
+        base_name = os.path.splitext(input_file_path)[0]
+        output_file_path = f"{base_name}.jpg"
+    
+    try:
+        # Open the image
+        with Image.open(input_file_path) as img:
+            # Convert to RGB if needed (e.g., for transparent images)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                rgb_img = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                rgb_img.paste(img, mask=img.split()[3] if img.mode == 'RGBA' else None)
+                img = rgb_img
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Save as high-quality JPEG
+            img.save(output_file_path, 'JPEG', quality=quality, optimize=True)
+            
+            return True, output_file_path
+    except Exception as e:
+        logger.error(f"Error converting image to JPEG: {e}", exc_info=True)
+        return False, None
 
 
 # --- Item Processing Worker Function (Modified Quota Handling) ---
@@ -331,7 +405,16 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
 
     is_video = mime_type.startswith('video/') if mime_type else False
     is_heic = filename.lower().endswith(('.heic', '.heif')) if filename else False
+    is_bmp = filename.lower().endswith('.bmp') if filename else False
+    is_webp = filename.lower().endswith('.webp') if filename else False
+    
+    # Determine how to handle HEIC files
     should_process_heic = args.process_heic or (smugmug.config and smugmug.config.get('process_heic', False))
+    should_process_heic_with_md5 = args.heic_with_md5
+    
+    # If both are specified, heic_with_md5 takes precedence
+    if should_process_heic and should_process_heic_with_md5:
+        should_process_heic = False
 
     if not google_id or not filename or not mime_type:
         logger.error(f"Worker skip: missing core data: ID={google_id}, File={filename}, Mime={mime_type}")
@@ -368,14 +451,103 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
             logger.info(f"{log_identifier}: Skip (Video filter).")
             db_manager.update_item_status(google_id, STATUS_SKIPPED_FILTER, "Skipped --ignore-videos")
             return google_id, STATUS_SKIPPED_FILTER
-        if is_heic and not should_process_heic:
-            logger.info(f"{log_identifier}: Skip (HEIC disabled).")
-            db_manager.update_item_status(google_id, STATUS_SKIPPED_HEIC, "HEIC not enabled")
-            return google_id, STATUS_SKIPPED_HEIC
+            
+        # Check for large videos (default behavior)
+        if is_video:
+            # Get video metadata from the item_details
+            media_metadata = None
+            if item_details.get('media_metadata_json'):
+                try:
+                    media_metadata = json.loads(item_details.get('media_metadata_json'))
+                except json.JSONDecodeError:
+                    pass
+                    
+            # Check video duration if available
+            if media_metadata and 'video' in media_metadata:
+                video_metadata = media_metadata.get('video', {})
+                
+                # Check duration (SmugMug limit is 20 minutes = 1200 seconds)
+                duration_millis = video_metadata.get('durationMillis')
+                if duration_millis and int(duration_millis) > 1200000:  # 20 minutes in milliseconds
+                    # Skip large videos by default unless --process-large-videos is specified
+                    if not args.process_large_videos:
+                        logger.info(f"{log_identifier}: Skip (Video exceeds 20 minute limit: {int(duration_millis)/60000:.1f} minutes).")
+                        db_manager.update_item_status(google_id, STATUS_SKIPPED_LARGE_VIDEO, "Video exceeds 20 minute duration limit")
+                        return google_id, STATUS_SKIPPED_LARGE_VIDEO
+                    else:
+                        logger.warning(f"{log_identifier}: Processing large video (exceeds 20 minute limit: {int(duration_millis)/60000:.1f} minutes). May fail on SmugMug.")
+                
+                # Check for video file size estimation
+                # Google Photos API doesn't provide file size directly in metadata
+                # But we can estimate from width, height, duration and bitrate if available
+                try:
+                    width = video_metadata.get('width', 0)
+                    height = video_metadata.get('height', 0)
+                    duration_secs = int(duration_millis) / 1000 if duration_millis else 0
+                    
+                    # If we have width, height and duration, we can make a rough estimate
+                    if width > 0 and height > 0 and duration_secs > 0:
+                        # Estimate bitrate based on resolution
+                        # This is a very rough estimate and will vary by codec
+                        estimated_bitrate = 0
+                        if width >= 3840:  # 4K
+                            estimated_bitrate = 45000000  # ~45 Mbps for 4K
+                        elif width >= 1920:  # 1080p
+                            estimated_bitrate = 15000000  # ~15 Mbps for 1080p
+                        elif width >= 1280:  # 720p
+                            estimated_bitrate = 8000000   # ~8 Mbps for 720p
+                        else:
+                            estimated_bitrate = 5000000   # ~5 Mbps for SD
+                        
+                        # Calculate estimated size in bytes: bitrate (bits/sec) * duration (sec) / 8 bits per byte
+                        estimated_size_bytes = (estimated_bitrate * duration_secs) / 8
+                        estimated_size_gb = estimated_size_bytes / (1024 * 1024 * 1024)
+                        
+                        # SmugMug limit is 3GB
+                        if estimated_size_gb > 3.0:
+                            # Skip large videos by default unless --process-large-videos is specified
+                            if not args.process_large_videos:
+                                logger.info(f"{log_identifier}: Skip (Video estimated size: {estimated_size_gb:.2f} GB exceeds 3GB limit).")
+                                db_manager.update_item_status(google_id, STATUS_SKIPPED_LARGE_VIDEO, f"Video estimated size {estimated_size_gb:.2f}GB exceeds 3GB limit")
+                                return google_id, STATUS_SKIPPED_LARGE_VIDEO
+                            else:
+                                logger.warning(f"{log_identifier}: Processing large video (estimated size: {estimated_size_gb:.2f} GB exceeds 3GB limit). May fail on SmugMug.")
+                        else:
+                            logger.debug(f"{log_identifier}: Video estimated size: {estimated_size_gb:.2f} GB (under 3GB limit).")
+                except Exception as e:
+                    logger.warning(f"{log_identifier}: Error estimating video size: {e}. Will proceed with caution.")
+            
+        # Handle HEIC files
+        if is_heic:
+            if not (should_process_heic or should_process_heic_with_md5):
+                logger.info(f"{log_identifier}: Skip (HEIC disabled).")
+                db_manager.update_item_status(google_id, STATUS_SKIPPED_HEIC, "HEIC not enabled")
+                return google_id, STATUS_SKIPPED_HEIC
+                
+        # Handle BMP files
+        if is_bmp:
+            if not args.convert_bmp:
+                logger.info(f"{log_identifier}: Skip (BMP not enabled for conversion).")
+                db_manager.update_item_status(google_id, STATUS_SKIPPED_BMP, "BMP conversion not enabled")
+                return google_id, STATUS_SKIPPED_BMP
+            else:
+                logger.info(f"{log_identifier}: BMP conversion enabled, will convert to JPEG.")
+            
+        # Handle WebP files
+        if is_webp:
+            if not args.convert_webp:
+                logger.info(f"{log_identifier}: Skip (WebP not enabled for conversion).")
+                db_manager.update_item_status(google_id, STATUS_SKIPPED_WEBP, "WebP conversion not enabled")
+                return google_id, STATUS_SKIPPED_WEBP
+            else:
+                logger.info(f"{log_identifier}: WebP conversion enabled, will convert to JPEG.")
 
         # --- Initial Download Check ---
-        needs_initial_download = is_video or (is_heic and should_process_heic) or \
-                                (not is_video and not is_heic and not current_md5_hash)
+        needs_initial_download = is_video or \
+                                (is_heic and (should_process_heic or should_process_heic_with_md5)) or \
+                                (is_bmp and args.convert_bmp) or \
+                                (is_webp and args.convert_webp) or \
+                                (not is_video and not is_heic and not is_bmp and not is_webp and not current_md5_hash)
         if needs_initial_download:
             logger.debug(f"{log_identifier}: Initial download needed...")
             temp_file_path, _, _, refreshed_details = google_photos.download_photo(item_details)
@@ -399,7 +571,12 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
                  refreshed_details = None # Clear after use
 
         # --- Hashing ---
-        if not is_video and not is_heic and not current_md5_hash:
+        # Skip hashing if requested
+        if args.skip_hash_check:
+            logger.info(f"{log_identifier}: Skipping hash check as requested.")
+            current_md5_hash = None
+        # Otherwise hash if needed
+        elif not is_video and not current_md5_hash and (not is_heic or should_process_heic_with_md5) and not is_bmp and not is_webp:
             if not temp_file_path or not os.path.exists(temp_file_path):
                  logger.error(f"{log_identifier}: Temp file missing for hash.")
                  db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Temp file missing pre-hash")
@@ -417,7 +594,41 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
                 final_status = STATUS_HASHED
 
         # --- Duplicate Check ---
-        if not (is_heic and should_process_heic):
+        # Skip duplicate check if requested
+        if args.skip_hash_check:
+            logger.info(f"{log_identifier}: Skipping duplicate check as requested.")
+            final_status = STATUS_PENDING
+            upload_needed = True
+        # Skip duplicate check for HEIC with standard processing (not with MD5)
+        elif is_heic and should_process_heic and not should_process_heic_with_md5:
+            logger.info(f"{log_identifier}: Skipping duplicate check for HEIC (standard processing).")
+            final_status = STATUS_PENDING
+            upload_needed = True
+        # Skip hash check for BMP and WebP conversions, but still check filename
+        elif (is_bmp and args.convert_bmp) or (is_webp and args.convert_webp):
+            target_album_key = smugmug.album_key
+            if not target_album_key:
+                logger.error(f"{log_identifier}: SM album key missing for dup check.")
+                db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, "SM key missing for dup check")
+                return google_id, STATUS_ERROR_SMUGMUG_API
+                
+            logger.info(f"{log_identifier}: Checking SM album '{target_album_key}' for duplicates by filename...")
+            exists = smugmug.check_media_exists(target_album_key, filename, mime_type, file_hash=None)
+            
+            if exists:
+                logger.info(f"{log_identifier}: Found on SM (filename). Marking duplicate.")
+                db_manager.update_item_status(google_id, STATUS_DUPLICATE_FILENAME, "Duplicate check via filename")
+                final_status = STATUS_DUPLICATE_FILENAME
+                if args.delete_from_google:
+                    google_photos.remove_photo(google_id, dry_run=args.dry_run)
+                return google_id, final_status
+            else:
+                logger.info(f"{log_identifier}: Checked SM via filename: Not found.")
+                db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, "SM check via filename - not found")
+                final_status = STATUS_SMUGMUG_CHECKED_NOT_FOUND
+                upload_needed = True
+        # Normal duplicate check for everything else
+        else:
             target_album_key = smugmug.album_key # Use current key from shared object
             if not target_album_key:
                  logger.error(f"{log_identifier}: SM album key missing for dup check.")
@@ -443,10 +654,6 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
                  db_manager.update_item_status(google_id, STATUS_SMUGMUG_CHECKED_NOT_FOUND, f"SM check via {log_reason} - not found")
                  final_status = STATUS_SMUGMUG_CHECKED_NOT_FOUND
                  upload_needed = True
-        else:
-             logger.info(f"{log_identifier}: Skipping duplicate check for HEIC.")
-             final_status = STATUS_PENDING
-             upload_needed = True
 
         # --- Upload Step ---
         if upload_needed:
@@ -490,14 +697,54 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
             logger.info(f"{log_identifier}: Uploading to SM album URI: {target_album_uri}...")
             db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
             final_status = STATUS_UPLOAD_ATTEMPTED
-
+            
+            # Handle file conversions if needed
+            converted_file_path = None
+            upload_file_path = temp_file_path
+            upload_filename = filename
+            upload_mime_type = mime_type
+            
             try:
-                upload_success = smugmug.upload_media(target_album_uri, temp_file_path, filename, mime_type)
-                temp_file_path = None # Consumed by upload_media
+                # Convert BMP to JPEG if needed
+                if is_bmp and args.convert_bmp:
+                    logger.info(f"{log_identifier}: Converting BMP to high-quality JPEG...")
+                    success, converted_file_path = convert_image_to_jpeg(temp_file_path, quality=95)
+                    if success:
+                        upload_file_path = converted_file_path
+                        upload_filename = os.path.basename(converted_file_path)
+                        upload_mime_type = "image/jpeg"
+                        logger.info(f"{log_identifier}: BMP successfully converted to JPEG: {upload_filename}")
+                    else:
+                        logger.error(f"{log_identifier}: BMP conversion failed, will attempt to upload original.")
+                
+                # Convert WebP to JPEG if needed
+                elif is_webp and args.convert_webp:
+                    logger.info(f"{log_identifier}: Converting WebP to high-quality JPEG...")
+                    success, converted_file_path = convert_image_to_jpeg(temp_file_path, quality=95)
+                    if success:
+                        upload_file_path = converted_file_path
+                        upload_filename = os.path.basename(converted_file_path)
+                        upload_mime_type = "image/jpeg"
+                        logger.info(f"{log_identifier}: WebP successfully converted to JPEG: {upload_filename}")
+                    else:
+                        logger.error(f"{log_identifier}: WebP conversion failed, will attempt to upload original.")
+                
+                # Upload the file (original or converted)
+                upload_success = smugmug.upload_media(target_album_uri, upload_file_path, upload_filename, upload_mime_type)
+                temp_file_path = None  # Consumed by upload_media
+                if converted_file_path and os.path.exists(converted_file_path):
+                    try:
+                        os.remove(converted_file_path)
+                        logger.debug(f"{log_identifier}: Cleaned up converted file.")
+                    except OSError as e:
+                        logger.warning(f"{log_identifier}: Failed to clean up converted file: {e}")
 
                 if upload_success:
                     logger.info(f"{log_identifier}: Upload successful.")
-                    db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS)
+                    # Update item status and record which album it was uploaded to
+                    db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS, smugmug_album_key=smugmug.album_key)
+                    # Increment the item count for this album
+                    db_manager.increment_album_item_count(smugmug.album_key)
                     final_status = STATUS_UPLOADED_SUCCESS
                     if args.delete_from_google:
                         google_photos.remove_photo(google_id, dry_run=False)
@@ -523,12 +770,47 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
                  switch_performed = handle_album_full_switch(
                      smugmug, db_manager, initial_base_name, current_folder, google_source_id
                  )
+                 
                  if switch_performed:
                      logger.info(f"{log_identifier}: Successfully initiated album switch.")
+                     
+                     # Immediate retry with the new album if we have the file
+                     if not shutdown_event.is_set() and temp_file_path and os.path.exists(temp_file_path):
+                         logger.info(f"{log_identifier}: Retrying upload with new album...")
+                         try:
+                             # Get the new album URI from the updated smugmug instance
+                             new_target_album_uri = smugmug.album_api_uri
+                             if not new_target_album_uri:
+                                 logger.error(f"{log_identifier}: New target album URI missing. Cannot retry.")
+                                 return google_id, final_status
+                             
+                             # Update status to show we're attempting upload again
+                             db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
+                             
+                             # Try upload with the new album
+                             retry_success = smugmug.upload_media(new_target_album_uri, temp_file_path, filename, mime_type)
+                             if retry_success:
+                                 logger.info(f"{log_identifier}: Retry upload successful with new album.")
+                                 db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS, smugmug_album_key=smugmug.album_key)
+                                 db_manager.increment_album_item_count(smugmug.album_key)
+                                 final_status = STATUS_UPLOADED_SUCCESS
+                                 if args.delete_from_google:
+                                     google_photos.remove_photo(google_id, dry_run=False)
+                             else:
+                                 logger.error(f"{log_identifier}: Retry upload failed with new album.")
+                                 db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, "Retry upload failed with new album")
+                                 final_status = STATUS_ERROR_UPLOAD_FAILED
+                         except Exception as retry_e:
+                             logger.error(f"{log_identifier}: Error during retry upload: {retry_e}", exc_info=True)
+                             db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, f"Retry error: {str(retry_e)[:200]}")
+                             final_status = STATUS_ERROR_UPLOAD_FAILED
+                     else:
+                         if shutdown_event.is_set():
+                             logger.info(f"{log_identifier}: Shutdown requested, skipping retry.")
+                         else:
+                             logger.info(f"{log_identifier}: Temp file not available for retry. Item will be retried in next run.")
                  else:
                      logger.info(f"{log_identifier}: Album switch handled by another worker or failed. Item marked for retry.")
-
-                 # Return ERROR_ALBUM_FULL so item is retried later
 
         return google_id, final_status # Return the final status determined
 
@@ -557,11 +839,9 @@ def main():
     global album_switch_lock, quota_exceeded_flag # Include quota flag
 
     parser = argparse.ArgumentParser(description="Transfer Google Photos to SmugMug.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # Args remain the same...
+    
+    # Basic options
     parser.add_argument('--google-photos-album-id', help='(Optional) Google Photos Album ID to sync (syncs entire library if omitted).')
-    parser.add_argument('--ignore-photos', action='store_true', help='Skip processing photos (only process videos).')
-    parser.add_argument('--ignore-videos', action='store_true', help='Skip processing videos (only process photos).')
-    parser.add_argument('--process-heic', action='store_true', help='Attempt to process HEIC/HEIF files (upload as JPGs, no duplicate check). Requires SmugMug config setting or this flag.')
     parser.add_argument('--smugmug-album', help='(Optional) Target SmugMug album name. Overrides config file setting.')
     parser.add_argument('--smugmug-folder', help='(Optional) Target SmugMug folder path (e.g., "Folder/Subfolder"). Overrides config file setting.')
     parser.add_argument('--dry-run', action='store_true', help='Simulate transfer: perform checks but do not upload files.')
@@ -569,11 +849,36 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable detailed debug logging to console and file.')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('--db-file', default=DB_FILE_DEFAULT, help='Path to the SQLite database file for tracking transfer state.')
-    parser.add_argument('--force-refresh-list', action='store_true', help='Re-fetch the media list from Google Photos, clearing existing DB entries.')
-    parser.add_argument('--retry-errors', action='store_true', help='[DEPRECATED - Errors are always retried] Include items currently marked with an error status in this processing run.')
-    parser.add_argument('--reset-errors', action='store_true', help='Reset all items currently marked with an error status back to PENDING before starting the run.')
     parser.add_argument('--workers', type=int, default=MAX_WORKERS, help=f'Number of parallel worker threads for processing items (default: {MAX_WORKERS}).')
+    
+    # File type filtering options
+    file_filter_group = parser.add_argument_group('File Type Filtering')
+    file_filter_group.add_argument('--ignore-photos', action='store_true', help='Skip processing photos (only process videos).')
+    file_filter_group.add_argument('--ignore-videos', action='store_true', help='Skip processing videos (only process photos).')
+    
+    # Database management options
+    db_group = parser.add_argument_group('Database Management')
+    db_group.add_argument('--force-refresh-list', action='store_true', help='Re-fetch the media list from Google Photos, clearing existing DB entries.')
+    db_group.add_argument('--retry-errors', action='store_true', help='[DEPRECATED - Errors are always retried] Include items currently marked with an error status in this processing run.')
+    db_group.add_argument('--reset-errors', action='store_true', help='Reset all items currently marked with an error status back to PENDING before starting the run.')
+    db_group.add_argument('--restart-all', action='store_true', help='Reset ALL files to PENDING status, keeping MD5 hashes but clearing album assignments.')
+    
+    # File type handling options (Requirement 3)
+    file_type_group = parser.add_argument_group('File Type Handling')
+    file_type_group.add_argument('--process-heic', action='store_true', help='Attempt to process HEIC/HEIF files (upload as JPGs, no duplicate check). Requires SmugMug config setting or this flag.')
+    file_type_group.add_argument('--heic-with-md5', action='store_true', help='Process HEIC/HEIF files with MD5 hash checking (experimental, may not work with all SmugMug accounts).')
+    file_type_group.add_argument('--convert-bmp', action='store_true', help='Convert BMP files to high-quality JPEGs instead of skipping them.')
+    file_type_group.add_argument('--convert-webp', action='store_true', help='Convert WebP files to high-quality JPEGs instead of skipping them.')
+    file_type_group.add_argument('--skip-hash-check', action='store_true', help='Skip all file hashing and duplicate checking (faster but may result in duplicates).')
+    file_type_group.add_argument('--process-large-videos', action='store_true', help='Attempt to process videos exceeding SmugMug limitations (20 minutes or 3GB). Not recommended as they will likely fail to upload.')
     args = parser.parse_args()
+
+    # Check for conflicting options
+    if args.heic_with_md5 and args.process_heic:
+        print("Warning: Both --heic-with-md5 and --process-heic specified. Using --heic-with-md5.", file=sys.stderr)
+    
+    if args.skip_hash_check and (args.heic_with_md5 or args.process_heic):
+        print("Warning: --skip-hash-check will override HEIC processing options for hash checking.", file=sys.stderr)
 
     num_workers = args.workers
     if num_workers <= 0:
@@ -631,7 +936,10 @@ def main():
                  initial_duplicate_count = initial_stats.get(STATUS_DUPLICATE_HASH, 0) + \
                                            initial_stats.get(STATUS_DUPLICATE_FILENAME, 0)
                  initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + \
-                                         initial_stats.get(STATUS_SKIPPED_HEIC, 0)
+                                         initial_stats.get(STATUS_SKIPPED_HEIC, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_BMP, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_WEBP, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_LARGE_VIDEO, 0)
                  # Include ALBUM_FULL and QUOTA in the initial error count for display consistency
                  initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
                                        initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) + \
@@ -644,8 +952,15 @@ def main():
              print(f"Critical Error: Failed init DB: {e}", file=sys.stderr)
              sys.exit(1)
 
-        # --- Reset Errored Items (Optional - BEFORE fetching list to process) ---
-        if args.reset_errors:
+        # --- Reset Items (Optional - BEFORE fetching list to process) ---
+        if args.restart_all:
+            logger.info("Restarting ALL items (reset to PENDING, keep MD5, clear album assignments)...")
+            reset_count = db_manager.restart_all_items()
+            logger.info(f"Reset {reset_count} items.")
+            # Re-fetch total count and initial stats after reset
+            total_db_items = db_manager.get_item_count()
+            initial_stats = db_manager.get_stats()
+        elif args.reset_errors:
             logger.info("Resetting errored items to PENDING...")
             reset_count = db_manager.reset_failed_items()
             logger.info(f"Reset {reset_count} items.")
@@ -655,7 +970,11 @@ def main():
             if initial_stats:
                  initial_uploaded_count = initial_stats.get(STATUS_UPLOADED_SUCCESS, 0)
                  initial_duplicate_count = initial_stats.get(STATUS_DUPLICATE_HASH, 0) + initial_stats.get(STATUS_DUPLICATE_FILENAME, 0)
-                 initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + initial_stats.get(STATUS_SKIPPED_HEIC, 0)
+                 initial_skipped_count = initial_stats.get(STATUS_SKIPPED_FILTER, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_HEIC, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_BMP, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_WEBP, 0) + \
+                                         initial_stats.get(STATUS_SKIPPED_LARGE_VIDEO, 0)
                  initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
                                        initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) + \
                                        initial_stats.get(STATUS_ERROR_ALBUM_FULL, 0) + \
@@ -795,6 +1114,15 @@ def main():
             current_target_album_key = smugmug.album_key
             current_target_album_uri = smugmug.album_api_uri
             logger.info(f"Confirmed Target - SM Key: {current_target_album_key}, URI: {current_target_album_uri}")
+            
+            # Add the album to the tracking table
+            db_manager.add_or_update_album(
+                album_key=current_target_album_key,
+                album_name=current_target_album_name or "Unknown Album",
+                album_uri=current_target_album_uri,
+                folder_name=current_target_folder_path,
+                is_current=True
+            )
 
             if is_initial_run or args.force_refresh_list:
                 if not db_manager.save_config_snapshot(initial_base_album_name, current_target_album_key, current_target_album_uri, smugmug.folder_name, current_google_album_arg):
@@ -876,6 +1204,15 @@ def main():
                     smugmug.folder_name = stored_config.get('current_folder_name')
                     smugmug.album_name = stored_config.get('initial_album_name')
                     initial_base_album_name = stored_config.get('initial_album_name') or initial_base_album_name
+                    
+                    # Make sure the album is in the tracking table
+                    db_manager.add_or_update_album(
+                        album_key=smugmug.album_key,
+                        album_name=smugmug.album_name or "Unknown Album",
+                        album_uri=smugmug.album_api_uri,
+                        folder_name=smugmug.folder_name,
+                        is_current=True
+                    )
              else: # Existing DB, no snapshot
                 logger.warning("Existing DB found, but no config snapshot. Saving current config...")
                 current_target_album_name = smugmug.album_name
@@ -890,6 +1227,15 @@ def main():
                     sys.exit(1)
                 if not db_manager.save_config_snapshot(initial_base_album_name, smugmug.album_key, smugmug.album_api_uri, smugmug.folder_name, current_google_album_arg):
                      logger.error("Failed save current config snapshot.")
+                
+                # Add the album to the tracking table
+                db_manager.add_or_update_album(
+                    album_key=smugmug.album_key,
+                    album_name=current_target_album_name or "Unknown Album",
+                    album_uri=smugmug.album_api_uri,
+                    folder_name=current_target_folder_path,
+                    is_current=True
+                )
 
         # --- Initialize Google Photos (if not done already) ---
         if google_photos is None:
@@ -929,6 +1275,27 @@ def main():
                     if shutdown_event.is_set():
                         logger.warning("Shutdown during submission.")
                         break
+                    # Check if current album is near capacity before submitting new tasks
+                    if db_manager.is_album_near_capacity(smugmug.album_key):
+                        logger.warning(f"Current album {smugmug.album_key} is approaching 80% capacity. Switching albums before submitting more tasks...")
+                        
+                        # Get config for album switch
+                        stored_config = db_manager.get_config_snapshot()
+                        initial_base_name = stored_config.get('initial_album_name') if stored_config else "UnknownAlbumBase"
+                        current_folder = stored_config.get('current_folder_name') if stored_config else None
+                        google_source_id = stored_config.get('google_album_id') if stored_config else None
+                        
+                        # Perform the switch
+                        switch_performed = check_album_capacity_and_switch(
+                            smugmug, db_manager, initial_base_name, current_folder, google_source_id
+                        )
+                        
+                        if switch_performed:
+                            logger.info("Successfully switched to new album before submitting more tasks.")
+                        else:
+                            logger.warning("Failed to switch albums or another worker already did. Continuing with current album.")
+                    
+                    # Submit the task
                     future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args)
                     submitted_futures.append(future)
 

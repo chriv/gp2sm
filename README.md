@@ -1,6 +1,6 @@
 # gp2sm - Google Photos to SmugMug Transfer Tool (v2.0)
 
-A Python tool for transferring media (photos and videos) from Google Photos to SmugMug, featuring **parallel processing**, duplicate checking, HEIC handling options, automatic configuration file generation, enhanced authentication handling, colorized logging, graceful shutdown, SQLite-based state tracking for resuming interrupted transfers, configuration consistency checks, and automatic database renaming on successful completion.
+A Python tool for transferring media (photos and videos) from Google Photos to SmugMug, featuring **parallel processing**, duplicate checking, HEIC/BMP/WebP handling options, automatic configuration file generation, enhanced authentication handling, colorized logging, graceful shutdown, SQLite-based state tracking for resuming interrupted transfers, configuration consistency checks, automatic album switching, and automatic database renaming on successful completion.
 
 ## Important Notes
 
@@ -27,7 +27,11 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * **Duplicate Checking:**
     * Checks for existing images on SmugMug using MD5 hash comparison (hash is calculated once and stored in the database).
     * Checks for existing videos on SmugMug using filename comparison (case-insensitive).
-* **HEIC File Handling:** Ignores Apple HEIC files by default, with an option to process them (converting them to JPGs on SmugMug, disabling duplicate checks for them).
+* **Enhanced File Type Handling:**
+  * **HEIC File Handling:** Ignores Apple HEIC files by default, with options to process them (converting them to JPGs on SmugMug) with or without MD5 hash checking.
+  * **BMP File Handling:** Ignores BMP files by default, with an option to convert them to high-quality JPEGs.
+  * **WebP File Handling:** Ignores WebP files by default, with an option to convert them to high-quality JPEGs.
+  * **Large Video Handling:** Automatically skips videos exceeding SmugMug limitations (20 minutes or 3GB) without downloading them.
 * **Google Photos Album Support:** Optionally process only media items from a specific Google Photos album ID (used when initially populating the database).
 * **SmugMug Folder/Album Management:**
     * Specify target album by name or by key/URI.
@@ -49,6 +53,7 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * **Selective Transfer:** Options to ignore photos or ignore videos during transfer.
 * **Lock File:** Prevents multiple instances of the script from running simultaneously.
 * **Token Storage:** Securely stores and reuses OAuth tokens locally (`google_photos_token.json`, `smugmug_config.json`) to minimize re-authentication.
+* **Album Capacity Management:** Automatically switches to a new album when the current album approaches 80% capacity (4,000 files for SmugMug's 5,000 file limit), ensuring smooth uploads without hitting album limits.
 
 ## Prerequisites
 
@@ -132,9 +137,15 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * `--ignore-photos`: (Optional) Mark photos (images) as `SKIPPED_FILTER` in the database during processing.
 * `--ignore-videos`: (Optional) Mark videos as `SKIPPED_FILTER` in the database during processing.
 * `--process-heic`: (Optional) Process HEIC files (Apple Live Photos). Default is to ignore them. See "HEIC File Handling" below for important implications.
+* `--heic-with-md5`: (Optional) Process HEIC/HEIF files with MD5 hash checking (experimental, may not work with all SmugMug accounts).
+* `--convert-bmp`: (Optional) Convert BMP files to high-quality JPEGs instead of skipping them.
+* `--convert-webp`: (Optional) Convert WebP files to high-quality JPEGs instead of skipping them.
+* `--skip-hash-check`: (Optional) Skip all file hashing and duplicate checking (faster but may result in duplicates).
+* `--process-large-videos`: (Optional) Attempt to process videos exceeding SmugMug limitations (20 minutes or 3GB). Not recommended as they will likely fail to upload.
 * `--db-file <PATH>`: (Optional) Specify the path to the SQLite database file. Defaults to `gp2sm_transfer_state.db` in the current directory.
 * `--force-refresh-list`: (Optional) Ignore existing database content and re-fetch the complete list from Google Photos, populating the database again (including saving a new configuration snapshot). Use if you suspect the DB is out of sync or want to start a new transfer based on current settings. Existing entries won't be deleted, but new items will be added.
 * `--reset-errors`: (Optional) Before starting the processing loop, reset all items currently marked with an error status back to `PENDING` for a fresh retry attempt.
+* `--restart-all`: (Optional) Reset ALL files to PENDING status, keeping MD5 hashes but clearing album assignments.
 * `--workers <NUM>`: (Optional) Specify the number of parallel worker threads to use (default: 5).
 * `--debug`: (Optional) Enable debug logging, providing more verbose output to both the console and the log file.
 * `--version`: Show the script's version number and exit.
@@ -144,7 +155,8 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 
 * **Images:** The script downloads the image from Google Photos (if needed and not already hashed), calculates its MD5 hash, and stores the hash in the database. It then checks if any image in the target SmugMug album has a matching `ArchivedMD5` value. This prevents uploading exact duplicates.
 * **Videos:** Because SmugMug re-encodes videos upon upload, their MD5 hash changes. Therefore, the script checks for existing videos by comparing the `FileName` from Google Photos (case-insensitive) against the filenames of items already in the target SmugMug album. This check happens before downloading the video (if possible) to save bandwidth if a filename match is found.
-* **HEIC Files:** If `--process-heic` is enabled, no duplicate checking is performed for these files due to SmugMug's conversion process. They are marked as `SKIPPED_HEIC` or proceed directly to upload attempt.
+* **HEIC Files:** If `--process-heic` is enabled, no duplicate checking is performed for these files due to SmugMug's conversion process. They are marked as `SKIPPED_HEIC` or proceed directly to upload attempt. If `--heic-with-md5` is used instead, MD5 hash checking is performed (experimental).
+* **BMP/WebP Files:** If `--convert-bmp` or `--convert-webp` is enabled, these files are converted to high-quality JPEGs before upload. Duplicate checking is performed by filename.
 
 ## HEIC File Handling (Apple Live Photos)
 
@@ -156,7 +168,38 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * You can enable processing of `.heic` files using the `--process-heic` command-line flag or by setting `"process_heic": true` in `smugmug_config.json`.
 * **If you enable HEIC processing, be aware that:**
     * The live video portion will be lost on SmugMug.
-    * Duplicate checking for `.heic` files is completely skipped. You may end up with duplicate converted JPGs on SmugMug if you run the script multiple times with this option enabled.
+    * Duplicate checking for `.heic` files is completely skipped with `--process-heic`. You may end up with duplicate converted JPGs on SmugMug if you run the script multiple times with this option enabled.
+    * If you use `--heic-with-md5` instead, the script will attempt to use MD5 hash checking for HEIC files. This is experimental and may not work with all SmugMug accounts.
+
+## BMP and WebP File Handling
+
+* BMP (Bitmap) and WebP files are not supported by SmugMug in their native format.
+* By default, this script **IGNORES** `.bmp` and `.webp` files (marks them as `SKIPPED_BMP` or `SKIPPED_WEBP` in the database).
+* You can enable conversion of these files to high-quality JPEGs using the `--convert-bmp` and `--convert-webp` command-line flags.
+* **If you enable BMP or WebP conversion, be aware that:**
+    * The conversion uses the PIL/Pillow library to create high-quality JPEGs (quality=95).
+    * Duplicate checking for converted files is performed by filename, not by hash.
+    * Transparency in WebP files will be replaced with a white background.
+
+## Large Video Handling
+
+* SmugMug has limitations on video uploads: maximum 20 minutes duration and 3GB file size.
+* By default, the script will automatically skip videos that exceed these limits without downloading them.
+* Videos are checked using metadata from Google Photos:
+    * Videos exceeding 20 minutes duration are skipped.
+    * Videos with an estimated file size over 3GB (based on resolution and duration) are skipped.
+    * Skipped videos are marked as `SKIPPED_LARGE_VIDEO` in the database.
+* If you want to attempt processing large videos anyway (not recommended), you can use the `--process-large-videos` command-line flag.
+
+## Album Capacity Management
+
+* SmugMug has a limit of 5,000 files per album.
+* This script implements an 80% capacity threshold (4,000 files) to avoid hitting this limit.
+* When an album approaches 80% capacity:
+    * The script automatically creates a new album with a sequential name (e.g., "Album Name - Part 2").
+    * All subsequent uploads are directed to the new album.
+    * The database configuration is updated to reflect the new target album.
+* This allows for continuous uploading without manual intervention when albums fill up.
 
 ## Status Codes (in Database)
 
@@ -170,10 +213,15 @@ A Python tool for transferring media (photos and videos) from Google Photos to S
 * `DUPLICATE_FILENAME`: Video with the same filename already exists on SmugMug.
 * `SKIPPED_FILTER`: Skipped due to `--ignore-photos` or `--ignore-videos`.
 * `SKIPPED_HEIC`: Skipped because it's a HEIC file and processing is disabled.
+* `SKIPPED_BMP`: Skipped because it's a BMP file and conversion is disabled.
+* `SKIPPED_WEBP`: Skipped because it's a WebP file and conversion is disabled.
+* `SKIPPED_LARGE_VIDEO`: Skipped because it's a large video exceeding SmugMug limitations.
 * `ERROR_DOWNLOAD`: Failed to download the item from Google Photos.
 * `ERROR_HASHING`: Failed to calculate the MD5 hash.
 * `ERROR_SMUGMUG_API`: Error interacting with the SmugMug API (check/upload).
 * `ERROR_UPLOAD_FAILED`: SmugMug upload request failed after being sent.
+* `ERROR_ALBUM_FULL`: SmugMug album limit reached (triggers automatic album switch).
+* `ERROR_QUOTA`: Google API Quota Exceeded (triggers graceful shutdown).
 * `ERROR_UNKNOWN`: An unexpected error occurred during processing.
 * `ERROR_MISSING_DATA`: Item in DB lacks essential info (ID, filename, mimeType).
 
