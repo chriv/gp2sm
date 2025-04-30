@@ -67,7 +67,7 @@ Here is the plan broken down into sequential tasks. For each task, please provid
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-6.  [ ] **Task 6: Implement Quota Handling in Worker**
+6.  [x] **Task 6: Implement Quota Handling in Worker**
     * **Objective:** Modify `process_item_worker` in `main.py`. Add checks for `quota_exceeded_flag.is_set()` before calling Google Photos functions. After failed GP calls, check the flag again. If the flag is set, return the item's previous status (`current_status`) immediately without calling `db_manager.update_item_status`. Remove any explicit code that updates status to `STATUS_ERROR_QUOTA`.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
