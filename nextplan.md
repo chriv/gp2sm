@@ -57,7 +57,7 @@ Here is the plan broken down into sequential tasks. For each task, please provid
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-4.  [ ] **Task 4: Pass Target Album Key to Worker**
+4.  [x] **Task 4: Pass Target Album Key to Worker**
     * **Objective:** Modify the `process_item_worker` function definition in `main.py` to accept `target_album_key` as a parameter. Update the `executor.submit` call to pass this value from the item dictionary prepared in Task 3.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.

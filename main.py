@@ -411,7 +411,7 @@ def convert_image_to_jpeg(input_file_path, output_file_path=None, quality=95):
 
 
 # --- Item Processing Worker Function (Modified Quota Handling) ---
-def process_item_worker(item_details, google_photos, smugmug, db_manager, args): # TODO: Update signature in Task 4
+def process_item_worker(item_details, google_photos, smugmug, db_manager, args, target_album_key):
     """Worker function: Download -> Hash -> Check -> Upload. Handles Quota."""
     global shutdown_event, album_switch_lock, quota_exceeded_flag # Access globals
 
@@ -1520,7 +1520,7 @@ def main():
 
                     # Submit the task
                     # Note: Task 4 will modify this to pass item_details['target_album_key']
-                    future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args) # Pass target_album_key later
+                    future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args, item_details['target_album_key'])
                     submitted_futures.append(future)
 
                 logger.info(f"Submitted {len(submitted_futures)} tasks. Waiting for completion or shutdown...")
