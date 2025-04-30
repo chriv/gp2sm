@@ -33,6 +33,8 @@ from logging.handlers import RotatingFileHandler
 import colorlog
 from PIL import Image
 
+# Local module imports
+# Pass the quota_exceeded_flag to GooglePhotos constructor
 from database_manager import (
     DatabaseManager, DB_FILE_DEFAULT, MEDIA_TABLE_NAME, STATUS_PENDING, STATUS_HASHED, STATUS_SMUGMUG_CHECKED_NOT_FOUND,
     STATUS_UPLOAD_ATTEMPTED, STATUS_UPLOADED_SUCCESS,
@@ -45,8 +47,6 @@ from database_manager import (
     STATUS_ERROR_UNKNOWN, STATUS_ERROR_MISSING_DATA,
     TERMINAL_STATUSES, ERROR_STATUSES
 )
-# Local module imports
-# Pass the quota_exceeded_flag to GooglePhotos constructor
 from google_photos_module import GooglePhotos, GoogleCredentialsNotFoundError
 from smugmug_module import SmugMug, DEFAULT_SMUGMUG_CONFIG, SmugMugAlbumFullError
 
@@ -1858,22 +1858,6 @@ def main():
         log_func_info(f"Exiting script with code {exit_code}.")
         logging.shutdown()
         sys.exit(exit_code)
-
-
-# --- Helper Functions (e.g., Album Naming) ---
-def get_next_album_name(current_album_name):
-    """Generates the next sequential album name."""
-    if not current_album_name:  # Handle case where current name might be None/empty
-        return "Google Photos Import - Part 1"  # Or a default base name
-    match = re.search(r" - Part (\d+)$", current_album_name, re.IGNORECASE)
-    if match:
-        part_number = int(match.group(1))
-        base_name = current_album_name[:match.start()]
-        next_part_number = part_number + 1
-        return f"{base_name} - Part {next_part_number}"
-    else:
-        # If no ' - Part X' found, start with Part 2
-        return f"{current_album_name} - Part 2"
 
 
 # --- Script Entry Point ---
