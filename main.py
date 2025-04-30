@@ -47,6 +47,7 @@ from database_manager import (
     STATUS_SKIPPED_HEIC, STATUS_SKIPPED_BMP, STATUS_SKIPPED_WEBP, STATUS_SKIPPED_LARGE_VIDEO, # Import all skipped statuses
     STATUS_ERROR_DOWNLOAD, STATUS_ERROR_HASHING,
     STATUS_ERROR_SMUGMUG_API, STATUS_ERROR_UPLOAD_FAILED,
+    STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA, # Import new status
     STATUS_ERROR_UNKNOWN, STATUS_ERROR_MISSING_DATA,
     TERMINAL_STATUSES, ERROR_STATUSES
 )
@@ -473,6 +474,9 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args, 
         # Check if we should process this item at the very beginning
         if should_abort_processing():
             # Ensure status reflects quota error if quota flag is set
+            if quota_exceeded_flag.is_set() and current_status != STATUS_ERROR_QUOTA:
+                 db_manager.update_item_status(google_id, STATUS_ERROR_QUOTA, "Google API Quota Exceeded (detected on worker start)")
+                 return google_id, STATUS_ERROR_QUOTA
             # Either move "Aborting processing due to shutdown/quota signal." to DEBUG or don't display at all. There are way too many of these lines in the log to be useful.
             # logger.debug(f"{log_identifier}: Aborting processing due to shutdown/quota signal.") # There are way too many of these lines to be "INFO".
             return google_id, final_status # Return current status if shutdown before start
@@ -601,6 +605,8 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args, 
                     except OSError as e:
                         logger.warning(f"{log_identifier}: Failed to clean up temp file: {e}")
                 if quota_exceeded_flag.is_set():
+                    db_manager.update_item_status(google_id, STATUS_ERROR_QUOTA, "Google API Quota Exceeded")
+                    return google_id, STATUS_ERROR_QUOTA
                 return google_id, final_status
 
             if not temp_file_path:
@@ -608,7 +614,9 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args, 
                 # Check if failure was due to quota
                 if quota_exceeded_flag.is_set():
                      logger.error(f"{log_identifier}: Download failed due to Google API Quota Exceeded.")
+                     db_manager.update_item_status(google_id, STATUS_ERROR_QUOTA, "Google API Quota Exceeded")
                      shutdown_event.set() # Signal graceful shutdown
+                     return google_id, STATUS_ERROR_QUOTA
                 else:
                      db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Initial download failed")
                      return google_id, STATUS_ERROR_DOWNLOAD
@@ -786,6 +794,8 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args, 
                         except OSError as e:
                             logger.warning(f"{log_identifier}: Failed to clean up temp file: {e}")
                     if quota_exceeded_flag.is_set():
+                        db_manager.update_item_status(google_id, STATUS_ERROR_QUOTA, "Google API Quota Exceeded")
+                        return google_id, STATUS_ERROR_QUOTA
                     return google_id, final_status
 
                 if not temp_file_path:
@@ -793,7 +803,9 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args, 
                     # Check if failure was due to quota
                     if quota_exceeded_flag.is_set():
                          logger.error(f"{log_identifier}: Download failed due to Google API Quota Exceeded.")
+                         db_manager.update_item_status(google_id, STATUS_ERROR_QUOTA, "Google API Quota Exceeded")
                          shutdown_event.set() # Signal graceful shutdown
+                         return google_id, STATUS_ERROR_QUOTA
                     else:
                          db_manager.update_item_status(google_id, STATUS_ERROR_DOWNLOAD, "Download failed pre-upload")
                          return google_id, STATUS_ERROR_DOWNLOAD
@@ -1083,6 +1095,7 @@ def main():
                  initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
                                        initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) + \
                                        initial_stats.get(STATUS_ERROR_ALBUM_FULL, 0) + \
+                                       initial_stats.get(STATUS_ERROR_QUOTA, 0)
                  logger.debug(f"Initial DB Stats: Up={initial_uploaded_count}, Dup={initial_duplicate_count}, Skip={initial_skipped_count}, Err={initial_error_count}")
              # --- End total count & initial stats fetch ---
         except Exception as e:
@@ -1118,6 +1131,7 @@ def main():
                  initial_error_count = sum(initial_stats.get(s, 0) for s in ERROR_STATUSES) + \
                                        initial_stats.get(STATUS_ERROR_MISSING_DATA, 0) + \
                                        initial_stats.get(STATUS_ERROR_ALBUM_FULL, 0) + \
+                                       initial_stats.get(STATUS_ERROR_QUOTA, 0)
                  logger.debug(f"DB Stats after reset: Up={initial_uploaded_count}, Dup={initial_duplicate_count}, Skip={initial_skipped_count}, Err={initial_error_count}")
 
 
@@ -1543,7 +1557,10 @@ def main():
                             elif final_status in [STATUS_SKIPPED_FILTER, STATUS_SKIPPED_HEIC, STATUS_SKIPPED_BMP, STATUS_SKIPPED_WEBP, STATUS_SKIPPED_LARGE_VIDEO]:
                                 skipped_in_run += 1
                             # Count QUOTA as error for run summary
-                                errors_in_run += 1
+                            elif final_status in ERROR_STATUSES or final_status == STATUS_ERROR_ALBUM_FULL or final_status == STATUS_ERROR_QUOTA:
+                                # Count errors only if quota flag is not set
+                                if not quota_exceeded_flag.is_set():
+                                    errors_in_run += 1
 
                             # --- Calculate and Log Overall Progress & Stats ---
                             overall_completed_count = items_completed_before_run + processed_count_this_run
@@ -1566,7 +1583,9 @@ def main():
 
                         except Exception as exc:
                             logger.error(f"Exception retrieving worker result: {exc}", exc_info=True)
-                            errors_in_run += 1 # Count as error for run summary
+                            # Count exception as error only if quota flag is not set
+                            if not quota_exceeded_flag.is_set():
+                                errors_in_run += 1
                             # Log overall progress even on error
                             overall_completed_count = items_completed_before_run + processed_count_this_run
                             percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
@@ -1603,7 +1622,7 @@ def main():
         logger.info(f"  Uploaded this Run:           {uploaded_in_run}")
         logger.info(f"  Marked as Duplicate this Run: {duplicates_in_run}")
         logger.info(f"  Skipped this Run:            {skipped_in_run}")
-        logger.info(f"  Errors this Run:             {errors_in_run}")
+        logger.info(f"  Errors this Run:             {errors_in_run}{' (excluding quota-related)' if quota_exceeded_flag.is_set() else ''}")
         logger.info(f"  Total processing time:       {total_duration:.2f} seconds")
         logger.info("-" * 60)
         logger.info("Overall Database Stats (Cumulative):") # Clarify summary scope
@@ -1624,8 +1643,10 @@ def main():
 
         final_db_filename = args.db_file
         # Check for persistent errors (excluding album full and quota, as they indicate rerun needed)
+        final_error_count_for_exit = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s not in [STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA]) + \
                                     final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
         album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) > 0 if 'final_stats' in locals() else False
+        quota_error_occurred_final = quota_exceeded_flag.is_set() or (final_stats.get(STATUS_ERROR_QUOTA, 0) > 0 if 'final_stats' in locals() else False)
 
         run_completed_successfully = (final_error_count_for_exit == 0 and not shutdown_requested)
 
@@ -1742,8 +1763,10 @@ def main():
 
     # Adjust exit code: Exit 0 only if run completed successfully AND no album switch/quota error happened
     # Use the final_stats captured before the except/finally blocks
+    final_error_count_for_exit = sum(final_stats.get(s, 0) for s in ERROR_STATUSES if s not in [STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA]) + \
                                  final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
     album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) > 0 if 'final_stats' in locals() else False
+    quota_error_occurred_final = quota_exceeded_flag.is_set() or (final_stats.get(STATUS_ERROR_QUOTA, 0) > 0 if 'final_stats' in locals() else False)
 
     exit_code = 0
     if final_error_count_for_exit > 0 or shutdown_requested or album_switch_occurred_final or quota_error_occurred_final:
