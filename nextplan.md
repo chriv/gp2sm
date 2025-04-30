@@ -47,7 +47,7 @@ Here is the plan broken down into sequential tasks. For each task, please provid
     * **Files Modified:** `database_manager.py`
     * **Expected Output:** Diff file for `database_manager.py`.
 
-2.  [ ] **Task 2: Initialize Album State in Main Thread**
+2.  [x] **Task 2: Initialize Album State in Main Thread**
     * **Objective:** Add logic to `main.py` (before the worker submission loop) to query the database for existing albums/counts, determine the initial `current_album_key`, `current_album_name`, `current_album_item_count`, and define capacity constants (`MAX_ALBUM_CAPACITY`, `ALBUM_THRESHOLD`).
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.

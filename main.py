@@ -58,6 +58,8 @@ LOCK_FILE = "gp2sm.lock"
 LOG_ID_TRUNCATE_LEN = 8
 MAX_WORKERS = 5
 PROGRESS_LEVEL_NUM = 15
+MAX_ALBUM_CAPACITY = 5000 # SmugMug album item limit
+ALBUM_THRESHOLD_PERCENT = 0.80 # Rotate album when 80% full
 
 # --- Global Variables ---
 logger = None
@@ -65,7 +67,7 @@ shutdown_requested = False
 google_photos_instance_global = None
 db_manager_global = None
 shutdown_event = threading.Event()
-album_switch_lock = threading.Lock()
+# album_switch_lock = threading.Lock() # Lock will be handled differently in main thread pre-assignment
 quota_exceeded_flag = threading.Event() # Flag for Google Quota
 PROCESS_NEW_FILES_LOCK_PATH = "gp2sm_process_new_files.lock"
 # Counters for run-specific summary (used internally for increments)
@@ -409,7 +411,7 @@ def convert_image_to_jpeg(input_file_path, output_file_path=None, quality=95):
 
 
 # --- Item Processing Worker Function (Modified Quota Handling) ---
-def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
+def process_item_worker(item_details, google_photos, smugmug, db_manager, args): # Add target_album_key later
     """Worker function: Download -> Hash -> Check -> Upload. Handles Quota."""
     global shutdown_event, album_switch_lock, quota_exceeded_flag # Access globals
 
@@ -726,7 +728,7 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
                 upload_needed = True
         # Normal duplicate check for everything else
         else:
-            target_album_key = smugmug.album_key # Use current key from shared object
+            target_album_key = item_details.get('target_album_key', smugmug.album_key) # Use assigned key (Task 4+) or fall back
             if not target_album_key:
                  logger.error(f"{log_identifier}: SM album key missing for dup check.")
                  db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, "SM key missing for dup check")
@@ -809,7 +811,7 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
                     refreshed_details = None
 
             # Get current target URI from shared object
-            target_album_uri = smugmug.album_api_uri
+            target_album_uri = db_manager.get_album_uri(item_details.get('target_album_key')) # Get URI for assigned key (Task 4+)
             if not target_album_uri:
                  logger.error(f"{log_identifier}: SM target album URI missing. Cannot upload.")
                  db_manager.update_item_status(google_id, STATUS_ERROR_SMUGMUG_API, "SM URI missing for upload")
@@ -928,14 +930,15 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
 
                 if upload_success:
                     logger.info(f"{log_identifier}: Upload successful.")
+                    target_album_key = item_details.get('target_album_key') # Get key it was uploaded to
                     # Update item status and record which album it was uploaded to
-                    db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS, smugmug_album_key=smugmug.album_key)
+                    db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS, smugmug_album_key=target_album_key)
                     # Increment the item count for this album
-                    db_manager.increment_album_item_count(smugmug.album_key)
+                    db_manager.increment_album_item_count(target_album_key) # Increment count for the target album
                     final_status = STATUS_UPLOADED_SUCCESS
                     if args.delete_from_google:
                         google_photos.remove_photo(google_id, dry_run=False)
-                else:
+                else: # Upload failed but not SmugMugAlbumFullError
                     logger.error(f"{log_identifier}: Upload failed (returned False).")
                     db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, "Upload function returned False")
                     final_status = STATUS_ERROR_UPLOAD_FAILED
@@ -943,72 +946,11 @@ def process_item_worker(item_details, google_photos, smugmug, db_manager, args):
             except SmugMugAlbumFullError as afe:
                  logger.error(f"{log_identifier}: Upload failed - SmugMug Album Full: {afe}")
                  # Update status FIRST to ERROR_ALBUM_FULL
-                 db_manager.update_item_status(google_id, STATUS_ERROR_ALBUM_FULL, f"Album full: {afe}")
+                 target_album_key = item_details.get('target_album_key') # Get key it failed on
+                 db_manager.update_item_status(google_id, STATUS_ERROR_ALBUM_FULL, f"Album full: {afe.album_key if hasattr(afe, 'album_key') else target_album_key}")
                  final_status = STATUS_ERROR_ALBUM_FULL
-                 temp_file_path = None # Ensure path is None
-
-                 # Attempt the album switch (function handles locking)
-                 stored_config = db_manager.get_config_snapshot()
-                 initial_base_name = stored_config.get('initial_album_name') if stored_config else "UnknownAlbumBase"
-                 current_folder = stored_config.get('current_folder_name') if stored_config else None
-                 google_source_id = stored_config.get('google_album_id') if stored_config else None
-
-                 # Call the switch handler - it returns True only if THIS call performed the switch
-                 switch_performed = handle_album_full_switch(
-                     smugmug, db_manager, initial_base_name, current_folder, google_source_id
-                 )
-
-                 if switch_performed:
-                     logger.info(f"{log_identifier}: Successfully initiated album switch.")
-
-                     # Immediate retry with the new album if we have the file and no shutdown is requested
-                     if not should_abort_processing() and temp_file_path and os.path.exists(temp_file_path):
-                         logger.info(f"{log_identifier}: Retrying upload with new album...")
-                         try:
-                             # Get the new album URI from the updated smugmug instance
-                             new_target_album_uri = smugmug.album_api_uri
-                             if not new_target_album_uri:
-                                 logger.error(f"{log_identifier}: New target album URI missing. Cannot retry.")
-                                 return google_id, final_status
-
-                             # Check shutdown again before retry upload
-                             if should_abort_processing():
-                                 logger.info(f"{log_identifier}: Shutdown requested before retry upload. Aborting.")
-                                 if temp_file_path and os.path.exists(temp_file_path):
-                                     try:
-                                         os.remove(temp_file_path)
-                                         logger.debug(f"{log_identifier}: Cleaned up temp file after shutdown signal.")
-                                     except OSError as e:
-                                         logger.warning(f"{log_identifier}: Failed to clean up temp file: {e}")
-                                 return google_id, final_status
-
-                             # Update status to show we're attempting upload again
-                             db_manager.update_item_status(google_id, STATUS_UPLOAD_ATTEMPTED, increment_attempt=True)
-
-                             # Try upload with the new album
-                             retry_success = smugmug.upload_media(new_target_album_uri, temp_file_path, filename, mime_type)
-                             if retry_success:
-                                 logger.info(f"{log_identifier}: Retry upload successful with new album.")
-                                 db_manager.update_item_status(google_id, STATUS_UPLOADED_SUCCESS, smugmug_album_key=smugmug.album_key)
-                                 db_manager.increment_album_item_count(smugmug.album_key)
-                                 final_status = STATUS_UPLOADED_SUCCESS
-                                 if args.delete_from_google:
-                                     google_photos.remove_photo(google_id, dry_run=False)
-                             else:
-                                 logger.error(f"{log_identifier}: Retry upload failed with new album.")
-                                 db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, "Retry upload failed with new album")
-                                 final_status = STATUS_ERROR_UPLOAD_FAILED
-                         except Exception as retry_e:
-                             logger.error(f"{log_identifier}: Error during retry upload: {retry_e}", exc_info=True)
-                             db_manager.update_item_status(google_id, STATUS_ERROR_UPLOAD_FAILED, f"Retry error: {str(retry_e)[:200]}")
-                             final_status = STATUS_ERROR_UPLOAD_FAILED
-                     else:
-                         if shutdown_event.is_set():
-                             logger.info(f"{log_identifier}: Shutdown requested, skipping retry.")
-                         else:
-                             logger.info(f"{log_identifier}: Temp file not available for retry. Item will be retried in next run.")
-                 else:
-                     logger.info(f"{log_identifier}: Album switch handled by another worker or failed. Item marked for retry.")
+                 # No retry logic here; main thread handles assignment for next run
+                 logger.warning(f"{log_identifier}: Marked as album full. Will be reassigned in next run if needed.")
 
         return google_id, final_status # Return the final status determined
 
@@ -1039,7 +981,7 @@ def main():
     global uploaded_in_run, duplicates_in_run, skipped_in_run, errors_in_run
     global album_switch_lock, quota_exceeded_flag # Include quota flag
 
-    parser = argparse.ArgumentParser(description="Transfer Google Photos to SmugMug.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description=f"Transfer Google Photos to SmugMug (gp2sm v{__version__}).", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     # Basic options
     parser.add_argument('--google-photos-album-id', help='(Optional) Google Photos Album ID to sync (syncs entire library if omitted).')
@@ -1433,6 +1375,33 @@ def main():
                 if not db_manager.save_config_snapshot(initial_base_album_name, smugmug.album_key, smugmug.album_api_uri, smugmug.folder_name, current_google_album_arg):
                      logger.error("Failed save current config snapshot.")
 
+        # --- Task 2 Start: Initialize Album State for Pre-Assignment ---
+        album_capacity_threshold = int(MAX_ALBUM_CAPACITY * ALBUM_THRESHOLD_PERCENT)
+        current_album_key = None
+        current_album_name = None
+        current_album_item_count = 0
+
+        # Get the current album details from the SmugMug object (which reflects config/DB snapshot)
+        current_album_key = smugmug.album_key
+        current_album_name = smugmug.album_name
+
+        if current_album_key:
+            current_album_item_count = db_manager.get_album_item_count(current_album_key)
+            if current_album_item_count < 0:
+                logger.error(f"Failed to get item count for current album {current_album_key}. Assuming 0.")
+                current_album_item_count = 0 # Reset count on error
+            logger.info(f"Initializing album state for pre-assignment:")
+            logger.info(f"  Current Album Key:  {current_album_key}")
+            logger.info(f"  Current Album Name: {current_album_name or 'Unknown'}")
+            logger.info(f"  Current Item Count: {current_album_item_count}")
+            logger.info(f"  Album Threshold:    {album_capacity_threshold}/{MAX_ALBUM_CAPACITY}")
+        else:
+            logger.critical("Could not determine the current SmugMug target album key after initialization. Cannot proceed with pre-assignment.")
+            # Handle critical error - maybe exit?
+            sys.exit(1)
+
+        # --- Task 2 End ---
+
                 # Add the album to the tracking table
                 db_manager.add_or_update_album(
                     album_key=smugmug.album_key,
@@ -1468,6 +1437,9 @@ def main():
         num_submitted = len(items_to_process_list) # Number of items for THIS run
         logger.info(f"Found {num_submitted} items requiring processing (out of {total_db_items} total).")
 
+        # --- Task 3 Start: Pre-Assign Albums ---
+        # TODO: Add pre-assignment loop here
+
         if num_submitted == 0:
              logger.info("No items require processing.")
         else:
@@ -1492,26 +1464,6 @@ def main():
                          # When shutdown is requested, update the lock file to prevent new processing
                          if shutdown_event.is_set():
                               try:
-                                  with open(PROCESS_NEW_FILES_LOCK_PATH, 'w') as f:
-                                      f.write("0")  # 0 means no new processing
-                              except Exception as e:
-                                  logger.warning(f"Failed to update process new files lock: {e}")
-                         break # Stop submitting new tasks
-
-                    # Check if current album is near capacity before submitting new tasks
-                    if db_manager.is_album_near_capacity(smugmug.album_key):
-                        logger.warning(f"Current album {smugmug.album_key} is approaching 80% capacity. Switching albums before submitting more tasks...")
-
-                        # Get config for album switch
-                        stored_config = db_manager.get_config_snapshot()
-                        initial_base_name = stored_config.get('initial_album_name') if stored_config else "UnknownAlbumBase"
-                        current_folder = stored_config.get('current_folder_name') if stored_config else None
-                        google_source_id = stored_config.get('google_album_id') if stored_config else None
-
-                        # Perform the switch
-                        switch_performed = check_album_capacity_and_switch(
-                            smugmug, db_manager, initial_base_name, current_folder, google_source_id
-                        )
 
                         if switch_performed:
                             album_switch_occurred_this_run = True
@@ -1520,7 +1472,8 @@ def main():
                             logger.warning("Failed to switch albums or another worker already did. Continuing with current album.")
 
                     # Submit the task
-                    future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args)
+                    # Note: Task 4 will modify this to pass item_details['target_album_key']
+                    future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args) # Pass target_album_key later
                     submitted_futures.append(future)
 
                 logger.info(f"Submitted {len(submitted_futures)} tasks. Waiting for completion or shutdown...")
