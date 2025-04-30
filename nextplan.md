@@ -52,7 +52,7 @@ Here is the plan broken down into sequential tasks. For each task, please provid
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-3.  [ ] **Task 3: Implement Pre-Assignment Loop in Main Thread**
+3.  [x] **Task 3: Implement Pre-Assignment Loop in Main Thread**
     * **Objective:** Add the loop in `main.py` (before worker submission) that iterates through `items_to_process_list`, checks `current_album_item_count` against `ALBUM_THRESHOLD`, performs sequential album switching logic if needed (find/create next album, update DB tables `smugmug_albums` and `run_config`, update main thread state variables), and assigns the determined `target_album_key` to each item dictionary.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.

@@ -67,7 +67,7 @@ shutdown_requested = False
 google_photos_instance_global = None
 db_manager_global = None
 shutdown_event = threading.Event()
-# album_switch_lock = threading.Lock() # Lock will be handled differently in main thread pre-assignment
+# album_switch_lock = threading.Lock() # Retain for now, though primary lock moves to main thread
 quota_exceeded_flag = threading.Event() # Flag for Google Quota
 PROCESS_NEW_FILES_LOCK_PATH = "gp2sm_process_new_files.lock"
 # Counters for run-specific summary (used internally for increments)
@@ -411,7 +411,7 @@ def convert_image_to_jpeg(input_file_path, output_file_path=None, quality=95):
 
 
 # --- Item Processing Worker Function (Modified Quota Handling) ---
-def process_item_worker(item_details, google_photos, smugmug, db_manager, args): # Add target_album_key later
+def process_item_worker(item_details, google_photos, smugmug, db_manager, args): # TODO: Update signature in Task 4
     """Worker function: Download -> Hash -> Check -> Upload. Handles Quota."""
     global shutdown_event, album_switch_lock, quota_exceeded_flag # Access globals
 
@@ -1438,10 +1438,57 @@ def main():
         logger.info(f"Found {num_submitted} items requiring processing (out of {total_db_items} total).")
 
         # --- Task 3 Start: Pre-Assign Albums ---
-        # TODO: Add pre-assignment loop here
+        logger.info("Pre-assigning items to target SmugMug albums...")
+        assignment_interrupted = False
+        # Ensure we have the correct folder name for creating new albums
+        current_folder_name = smugmug.folder_name # From initialization/config check
+        # And the original base name specified by the user
+        # initial_base_album_name = initial_base_album_name # Already defined earlier
+
+        for item_details in items_to_process_list:
+            # Check for shutdown/quota before assigning each item
+            if should_abort_processing():
+                logger.warning("Stopping album pre-assignment due to shutdown or quota signal.")
+                assignment_interrupted = True
+                break # Stop assigning albums
+
+            # Check if album switch is needed based on current count
+            if current_album_item_count >= album_capacity_threshold:
+                logger.warning(f"Album '{current_album_key}' ({current_album_name}) reached threshold ({current_album_item_count}/{album_capacity_threshold}). Switching...")
+                album_switch_occurred_this_run = True # Mark that a switch happened
+                next_album_name = get_next_album_name(current_album_name)
+
+                # Use the global SmugMug instance to find/create the next album
+                if smugmug.get_or_create_album_in_path(next_album_name, current_folder_name):
+                    new_album_key = smugmug.album_key
+                    new_album_uri = smugmug.album_api_uri
+                    logger.info(f"Switched to new album: '{next_album_name}' (Key: {new_album_key})")
+
+                    # Update the DB tracking table
+                    db_manager.add_or_update_album(new_album_key, next_album_name, new_album_uri, current_folder_name, is_current=True)
+                    # Update the main thread's state
+                    current_album_key = new_album_key
+                    current_album_name = next_album_name
+                    current_album_item_count = db_manager.get_album_item_count(new_album_key) # Get actual count, might not be 0 if resuming
+                    if current_album_item_count < 0: current_album_item_count = 0 # Reset on error
+
+                    # Update the run config snapshot
+                    db_manager.save_config_snapshot(initial_base_album_name, new_album_key, new_album_uri, current_folder_name, current_google_album_arg)
+                else:
+                    logger.critical(f"Failed to find or create the next album '{next_album_name}'. Stopping assignment.")
+                    assignment_interrupted = True
+                    break # Stop processing items
+
+            # Assign the current target album key to the item
+            item_details['target_album_key'] = current_album_key
+            current_album_item_count += 1 # Increment count for the next item's check
+
+        # --- Task 3 End ---
 
         if num_submitted == 0:
              logger.info("No items require processing.")
+        elif assignment_interrupted:
+             logger.error("Album assignment interrupted. No tasks will be submitted.")
         else:
             logger.info(f"Starting {num_workers} workers to process {num_submitted} items...")
             # --- Parallel Processing ---
@@ -1456,7 +1503,7 @@ def main():
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers, thread_name_prefix='Worker') as executor:
                 submitted_futures = []
-                logger.info(f"Submitting {num_submitted} items...")
+                logger.info(f"Submitting {len(items_to_process_list)} pre-assigned items...") # Length might change if assignment stopped
                 for item_details in items_to_process_list:
                     # Check if we should stop processing new files or if shutdown is requested
                     if should_abort_processing(): # Use the check function here too
@@ -1717,6 +1764,21 @@ def main():
     log_func_info(f"Exiting script with code {exit_code}.")
     logging.shutdown()
     sys.exit(exit_code)
+
+# --- Helper Functions (e.g., Album Naming) ---
+def get_next_album_name(current_album_name):
+    """Generates the next sequential album name."""
+    if not current_album_name: # Handle case where current name might be None/empty
+        return "Google Photos Import - Part 1" # Or a default base name
+    match = re.search(r" - Part (\d+)$", current_album_name, re.IGNORECASE)
+    if match:
+        part_number = int(match.group(1))
+        base_name = current_album_name[:match.start()]
+        next_part_number = part_number + 1
+        return f"{base_name} - Part {next_part_number}"
+    else:
+        # If no ' - Part X' found, start with Part 2
+        return f"{current_album_name} - Part 2"
 
 # --- Script Entry Point ---
 if __name__ == "__main__":
