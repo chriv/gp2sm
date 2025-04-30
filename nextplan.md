@@ -42,37 +42,37 @@ This plan addresses two primary issues:
 
 Here is the plan broken down into sequential tasks. For each task, please provide the current source file(s) for modification. The expected output for each task is a **single diff file** (`.diff` or `.patch`) containing all changes made in that task.
 
-1.  **Task 1: Database Preparation for Pre-Assignment**
+1.  [x] **Task 1: Database Preparation for Pre-Assignment**
     * **Objective:** Modify `database_manager.py` to support the main thread's album management. Ensure functions for getting all albums/counts and incrementing specific album counts are robust. Remove the no-longer-needed `is_album_near_capacity` function.
     * **Files Modified:** `database_manager.py`
     * **Expected Output:** Diff file for `database_manager.py`.
 
-2.  **Task 2: Initialize Album State in Main Thread**
+2.  [ ] **Task 2: Initialize Album State in Main Thread**
     * **Objective:** Add logic to `main.py` (before the worker submission loop) to query the database for existing albums/counts, determine the initial `current_album_key`, `current_album_name`, `current_album_item_count`, and define capacity constants (`MAX_ALBUM_CAPACITY`, `ALBUM_THRESHOLD`).
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-3.  **Task 3: Implement Pre-Assignment Loop in Main Thread**
+3.  [ ] **Task 3: Implement Pre-Assignment Loop in Main Thread**
     * **Objective:** Add the loop in `main.py` (before worker submission) that iterates through `items_to_process_list`, checks `current_album_item_count` against `ALBUM_THRESHOLD`, performs sequential album switching logic if needed (find/create next album, update DB tables `smugmug_albums` and `run_config`, update main thread state variables), and assigns the determined `target_album_key` to each item dictionary.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-4.  **Task 4: Pass Target Album Key to Worker**
+4.  [ ] **Task 4: Pass Target Album Key to Worker**
     * **Objective:** Modify the `process_item_worker` function definition in `main.py` to accept `target_album_key` as a parameter. Update the `executor.submit` call to pass this value from the item dictionary prepared in Task 3.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-5.  **Task 5: Update Worker Logic for Pre-Assigned Album**
+5.  [ ] **Task 5: Update Worker Logic for Pre-Assigned Album**
     * **Objective:** Modify the body of `process_item_worker` in `main.py`. Replace uses of the global/shared `smugmug.album_key` with the passed-in `target_album_key` for SmugMug operations. Remove calls to `check_album_capacity_and_switch` and `handle_album_full_switch`. Update the `SmugMugAlbumFullError` handler to log the error and return `STATUS_ERROR_ALBUM_FULL` without attempting a switch. Ensure successful uploads call `db_manager.increment_album_item_count(target_album_key)`.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-6.  **Task 6: Implement Quota Handling in Worker**
+6.  [ ] **Task 6: Implement Quota Handling in Worker**
     * **Objective:** Modify `process_item_worker` in `main.py`. Add checks for `quota_exceeded_flag.is_set()` before calling Google Photos functions. After failed GP calls, check the flag again. If the flag is set, return the item's previous status (`current_status`) immediately without calling `db_manager.update_item_status`. Remove any explicit code that updates status to `STATUS_ERROR_QUOTA`.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-7.  **Task 7: Adjust Quota Error Statistics**
+7.  [ ] **Task 7: Adjust Quota Error Statistics**
     * **Objective:** Modify the result processing loop (`as_completed`) in `main.py`. Prevent the `errors_in_run` counter from being incremented if an error status is returned *and* the `quota_exceeded_flag` is set, or if the status is `STATUS_ERROR_QUOTA`. Ensure the final summary report uses this adjusted count.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
