@@ -1485,319 +1485,332 @@ def main():
                 is_current=True
             )
 
-    # --- Initialize Google Photos (if not done already) ---
-    if google_photos is None:
-        try:
-            logger.info("Initializing Google Photos...")
-            # *** Pass quota_flag to constructor ***
-            google_photos = GooglePhotos(credentials_file='google_api_keys.json', token_file='google_photos_token.json',
-                                         quota_flag=quota_exceeded_flag)
-            google_photos_instance_global = google_photos
-            if not google_photos.is_authenticated():
-                logger.critical("GP auth failed.")
-                print("Critical Error: GP auth failed.", file=sys.stderr)
+        # --- Initialize Google Photos (if not done already) ---
+        if google_photos is None:
+            try:
+                logger.info("Initializing Google Photos...")
+                # *** Pass quota_flag to constructor ***
+                google_photos = GooglePhotos(credentials_file='google_api_keys.json', token_file='google_photos_token.json',
+                                             quota_flag=quota_exceeded_flag)
+                google_photos_instance_global = google_photos
+                if not google_photos.is_authenticated():
+                    logger.critical("GP auth failed.")
+                    print("Critical Error: GP auth failed.", file=sys.stderr)
+                    sys.exit(1)
+                logger.info("Google Photos init OK.")
+            except GoogleCredentialsNotFoundError as e:
+                print(f"\nError: {e}", file=sys.stderr)
                 sys.exit(1)
-            logger.info("Google Photos init OK.")
-        except GoogleCredentialsNotFoundError as e:
-            print(f"\nError: {e}", file=sys.stderr)
-            sys.exit(1)
-        except Exception as e:
-            logger.critical(f"Failed init GP module: {e}", exc_info=True)
-            print(f"Critical Error: Failed init GP: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    # --- Get Items for Processing ---
-    logger.info("Fetching items to process from database...")
-    items_to_process_list = db_manager.get_items_to_process()
-    num_submitted = len(items_to_process_list)  # Number of items for THIS run
-    logger.info(f"Found {num_submitted} items requiring processing (out of {total_db_items} total).")
-
-    # --- Task 3 Start: Pre-Assign Albums ---
-    logger.info("Pre-assigning items to target SmugMug albums...")
-    assignment_interrupted = False
-    # Ensure we have the correct folder name for creating new albums
-    current_folder_name = smugmug.folder_name  # From initialization/config check
-    # And the original base name specified by the user
-    # initial_base_album_name = initial_base_album_name # Already defined earlier
-
-    for item_details in items_to_process_list:
-        # Check for shutdown/quota before assigning each item
-        if should_abort_processing():
-            logger.warning("Stopping album pre-assignment due to shutdown or quota signal.")
-            assignment_interrupted = True
-            break  # Stop assigning albums
-
-        # Check if album switch is needed based on current count
-        if current_album_item_count >= album_capacity_threshold:
-            logger.warning(
-                f"Album '{current_album_key}' ({current_album_name}) reached threshold ({current_album_item_count}/{album_capacity_threshold}). Switching...")
-            album_switch_occurred_this_run = True  # Mark that a switch happened
-            next_album_name = get_next_album_name(current_album_name)
-
-            # Use the global SmugMug instance to find/create the next album
-            if smugmug.get_or_create_album_in_path(next_album_name, current_folder_name):
-                new_album_key = smugmug.album_key
-                new_album_uri = smugmug.album_api_uri
-                logger.info(f"Switched to new album: '{next_album_name}' (Key: {new_album_key})")
-
-                # Update the DB tracking table
-                db_manager.add_or_update_album(new_album_key, next_album_name, new_album_uri, current_folder_name,
-                                               is_current=True)
-                # Update the main thread's state
-                current_album_key = new_album_key
-                current_album_name = next_album_name
-                current_album_item_count = db_manager.get_album_item_count(
-                    new_album_key)  # Get actual count, might not be 0 if resuming
-                if current_album_item_count < 0: current_album_item_count = 0  # Reset on error
-
-                # Update the run config snapshot
-                db_manager.save_config_snapshot(initial_base_album_name, new_album_key, new_album_uri,
-                                                current_folder_name, current_google_album_arg)
-            else:
-                logger.critical(f"Failed to find or create the next album '{next_album_name}'. Stopping assignment.")
-                assignment_interrupted = True
-                break  # Stop processing items
-
-        # Assign the current target album key to the item
-        item_details['target_album_key'] = current_album_key
-        current_album_item_count += 1  # Increment count for the next item's check
-
-    # --- Task 3 End ---
-
-    if num_submitted == 0:
-        logger.info("No items require processing.")
-    elif assignment_interrupted:
-        logger.error("Album assignment interrupted. No tasks will be submitted.")
-    else:
-        logger.info(f"Starting {num_workers} workers to process {num_submitted} items...")
-        # --- Parallel Processing ---
-        # Create a file-based lock to coordinate between processes
-        # Create the lock file if it doesn't exist
-        if not os.path.exists(PROCESS_NEW_FILES_LOCK_PATH):
-            try:
-                with open(PROCESS_NEW_FILES_LOCK_PATH, 'w') as f:
-                    f.write("1")  # 1 means processing is allowed
             except Exception as e:
-                logger.warning(f"Failed to create process new files lock: {e}")
+                logger.critical(f"Failed init GP module: {e}", exc_info=True)
+                print(f"Critical Error: Failed init GP: {e}", file=sys.stderr)
+                sys.exit(1)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers, thread_name_prefix='Worker') as executor:
-            submitted_futures = []
-            logger.info(
-                f"Submitting {len(items_to_process_list)} pre-assigned items...")  # Length might change if assignment stopped
-            for item_details in items_to_process_list:
-                # Check if we should stop processing new files or if shutdown is requested
-                if should_abort_processing():  # Use the check function here too
-                    logger.warning(
-                        "Shutdown signalled during submission or new processing is locked. Stopping new task submission.")
-                    # When shutdown is requested, update the lock file to prevent new processing
-                    if shutdown_event.is_set():
-                        try:
+        # --- Get Items for Processing ---
+        logger.info("Fetching items to process from database...")
+        items_to_process_list = db_manager.get_items_to_process()
+        num_submitted = len(items_to_process_list)  # Number of items for THIS run
+        logger.info(f"Found {num_submitted} items requiring processing (out of {total_db_items} total).")
 
-                if switch_performed:
-                    album_switch_occurred_this_run = True
-                    logger.info("Successfully switched to new album before submitting more tasks.")
+        # --- Task 3 Start: Pre-Assign Albums ---
+        logger.info("Pre-assigning items to target SmugMug albums...")
+        assignment_interrupted = False
+        # Ensure we have the correct folder name for creating new albums
+        current_folder_name = smugmug.folder_name  # From initialization/config check
+        # And the original base name specified by the user
+        # initial_base_album_name = initial_base_album_name # Already defined earlier
+
+        for item_details in items_to_process_list:
+            # Check for shutdown/quota before assigning each item
+            if should_abort_processing():
+                logger.warning("Stopping album pre-assignment due to shutdown or quota signal.")
+                assignment_interrupted = True
+                break  # Stop assigning albums
+
+            # Check if album switch is needed based on current count
+            if current_album_item_count >= album_capacity_threshold:
+                logger.warning(
+                    f"Album '{current_album_key}' ({current_album_name}) reached threshold ({current_album_item_count}/{album_capacity_threshold}). Switching...")
+                album_switch_occurred_this_run = True  # Mark that a switch happened
+                next_album_name = get_next_album_name(current_album_name)
+
+                # Use the global SmugMug instance to find/create the next album
+                if smugmug.get_or_create_album_in_path(next_album_name, current_folder_name):
+                    new_album_key = smugmug.album_key
+                    new_album_uri = smugmug.album_api_uri
+                    logger.info(f"Switched to new album: '{next_album_name}' (Key: {new_album_key})")
+
+                    # Update the DB tracking table
+                    db_manager.add_or_update_album(new_album_key, next_album_name, new_album_uri, current_folder_name,
+                                                   is_current=True)
+                    # Update the main thread's state
+                    current_album_key = new_album_key
+                    current_album_name = next_album_name
+                    current_album_item_count = db_manager.get_album_item_count(
+                        new_album_key)  # Get actual count, might not be 0 if resuming
+                    if current_album_item_count < 0: current_album_item_count = 0  # Reset on error
+
+                    # Update the run config snapshot
+                    db_manager.save_config_snapshot(initial_base_album_name, new_album_key, new_album_uri,
+                                                    current_folder_name, current_google_album_arg)
                 else:
-                    logger.warning(
-                        "Failed to switch albums or another worker already did. Continuing with current album.")
+                    logger.critical(f"Failed to find or create the next album '{next_album_name}'. Stopping assignment.")
+                    assignment_interrupted = True
+                    break  # Stop processing items
 
-                # Submit the task
-                # Note: Task 4 will modify this to pass item_details['target_album_key']
-                future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args,
-                                         item_details['target_album_key'])
-                submitted_futures.append(future)
+            # Assign the current target album key to the item
+            item_details['target_album_key'] = current_album_key
+            current_album_item_count += 1  # Increment count for the next item's check
 
-            logger.info(f"Submitted {len(submitted_futures)} tasks. Waiting for completion or shutdown...")
-            processed_count_this_run = 0
-            # Only process results from the futures that were actually submitted
-            futures_to_wait_on = submitted_futures
+        # --- Task 3 End ---
 
-            # Calculate items already completed before this run
-            items_completed_before_run = total_db_items - num_submitted
+        if num_submitted == 0:
+            logger.info("No items require processing.")
+        elif assignment_interrupted:
+            logger.error("Album assignment interrupted. No tasks will be submitted.")
+        else:
+            logger.info(f"Starting {num_workers} workers to process {num_submitted} items...")
+            # --- Parallel Processing ---
+            # Create a file-based lock to coordinate between processes
+            # Create the lock file if it doesn't exist
+            if not os.path.exists(PROCESS_NEW_FILES_LOCK_PATH):
+                try:
+                    with open(PROCESS_NEW_FILES_LOCK_PATH, 'w') as f:
+                        f.write("1")  # 1 means processing is allowed
+                except Exception as e:
+                    logger.warning(f"Failed to create process new files lock: {e}")
 
-            # Use a timeout when waiting for results after shutdown is requested
-            # This allows currently running tasks to finish within the timeout
-            wait_timeout = 30  # seconds to wait for running tasks after signal
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers, thread_name_prefix='Worker') as executor:
+                submitted_futures = []
+                logger.info(
+                    f"Submitting {len(items_to_process_list)} pre-assigned items...")  # Length might change if assignment stopped
+                for item_details in items_to_process_list:
+                    # Check if we should stop processing new files or if shutdown is requested
+                    if should_abort_processing():  # Use the check function here too
+                        logger.warning(
+                            "Shutdown signalled during submission or new processing is locked. Stopping new task submission.")
+                        # When shutdown is requested, update the lock file to prevent new processing
+                        if shutdown_event.is_set():
+                            try:
+                                with open(PROCESS_NEW_FILES_LOCK_PATH, 'w') as f:
+                                    f.write("0")  # 0 means no new processing
+                            except Exception as e:
+                                logger.warning(f"Failed to update process lock on shutdown: {e}")
+                        break  # Stop submitting further tasks
 
-            try:
-                # Wait with a timeout only if shutdown is requested
-                for future in concurrent.futures.as_completed(futures_to_wait_on,
-                                                              timeout=None if not shutdown_event.is_set() else wait_timeout):
-                    processed_count_this_run += 1
-                    try:
-                        google_id, final_status = future.result()
+                    # Submit the task
+                    # Note: Task 4 will modify this to pass item_details['target_album_key']
+                    future = executor.submit(process_item_worker, item_details, google_photos, smugmug, db_manager, args,
+                                             item_details['target_album_key'])
+                    submitted_futures.append(future)
 
-                        # Update run-specific summary counters
-                        if final_status == STATUS_UPLOADED_SUCCESS:
-                            uploaded_in_run += 1
-                        elif final_status in [STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH]:
-                            duplicates_in_run += 1
-                        elif final_status in [STATUS_SKIPPED_FILTER, STATUS_SKIPPED_HEIC, STATUS_SKIPPED_BMP,
-                                              STATUS_SKIPPED_WEBP, STATUS_SKIPPED_LARGE_VIDEO]:
-                            skipped_in_run += 1
-                        # Count QUOTA as error for run summary
-                        elif final_status in ERROR_STATUSES or final_status == STATUS_ERROR_ALBUM_FULL or final_status == STATUS_ERROR_QUOTA:
-                            # Count errors only if quota flag is not set
+                logger.info(f"Submitted {len(submitted_futures)} tasks. Waiting for completion or shutdown...")
+                processed_count_this_run = 0
+                # Only process results from the futures that were actually submitted
+                futures_to_wait_on = submitted_futures
+
+                # Calculate items already completed before this run
+                items_completed_before_run = total_db_items - num_submitted
+
+                # Use a timeout when waiting for results after shutdown is requested
+                # This allows currently running tasks to finish within the timeout
+                wait_timeout = 30  # seconds to wait for running tasks after signal
+
+                try:
+                    # Wait with a timeout only if shutdown is requested
+                    for future in concurrent.futures.as_completed(futures_to_wait_on,
+                                                                  timeout=None if not shutdown_event.is_set() else wait_timeout):
+                        processed_count_this_run += 1
+                        try:
+                            google_id, final_status = future.result()
+
+                            # Update run-specific summary counters
+                            if final_status == STATUS_UPLOADED_SUCCESS:
+                                uploaded_in_run += 1
+                            elif final_status in [STATUS_DUPLICATE_FILENAME, STATUS_DUPLICATE_HASH]:
+                                duplicates_in_run += 1
+                            elif final_status in [STATUS_SKIPPED_FILTER, STATUS_SKIPPED_HEIC, STATUS_SKIPPED_BMP,
+                                                  STATUS_SKIPPED_WEBP, STATUS_SKIPPED_LARGE_VIDEO]:
+                                skipped_in_run += 1
+                            # Count QUOTA as error for run summary
+                            elif final_status in ERROR_STATUSES or final_status == STATUS_ERROR_ALBUM_FULL or final_status == STATUS_ERROR_QUOTA:
+                                # Count errors only if quota flag is not set
+                                if not quota_exceeded_flag.is_set():
+                                    errors_in_run += 1
+
+                            # --- Calculate and Log Overall Progress & Stats ---
+                            overall_completed_count = items_completed_before_run + processed_count_this_run
+                            percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
+                            last_id_short = f"{google_id[:8]}..." if google_id else "N/A"
+
+                            # Calculate cumulative totals for logging
+                            current_total_uploaded = initial_uploaded_count + uploaded_in_run
+                            current_total_duplicates = initial_duplicate_count + duplicates_in_run
+                            current_total_skipped = initial_skipped_count + skipped_in_run
+                            # Add run errors to initial errors for cumulative display
+                            current_total_errors = initial_error_count + errors_in_run
+
+                            logger.progress(
+                                f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) "
+                                f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} "  # Show overall stats
+                                f"| Last: {final_status} (ID: {last_id_short})"
+                            )
+                            # --- End Overall Progress Logging ---
+
+                        except Exception as exc:
+                            logger.error(f"Exception retrieving worker result: {exc}", exc_info=True)
+                            # Count exception as error only if quota flag is not set
                             if not quota_exceeded_flag.is_set():
                                 errors_in_run += 1
+                            # Log overall progress even on error
+                            overall_completed_count = items_completed_before_run + processed_count_this_run
+                            percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
+                            # Calculate cumulative totals for logging on error
+                            current_total_uploaded = initial_uploaded_count + uploaded_in_run
+                            current_total_duplicates = initial_duplicate_count + duplicates_in_run
+                            current_total_skipped = initial_skipped_count + skipped_in_run
+                            current_total_errors = initial_error_count + errors_in_run
+                            logger.error(
+                                f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) "
+                                f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} "
+                                f"| Last: ERROR retrieving future result"
+                            )
 
-                        # --- Calculate and Log Overall Progress & Stats ---
-                        overall_completed_count = items_completed_before_run + processed_count_this_run
-                        percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
-                        last_id_short = f"{google_id[:8]}..." if google_id else "N/A"
+                        if shutdown_event.is_set():
+                            logger.warning(
+                                "Shutdown requested. Breaking from processing results and attempting to wait for remaining tasks via executor cleanup.")
+                            break
 
-                        # Calculate cumulative totals for logging
-                        current_total_uploaded = initial_uploaded_count + uploaded_in_run
-                        current_total_duplicates = initial_duplicate_count + duplicates_in_run
-                        current_total_skipped = initial_skipped_count + skipped_in_run
-                        # Add run errors to initial errors for cumulative display
-                        current_total_errors = initial_error_count + errors_in_run
+                except concurrent.futures.TimeoutError:
+                    # This outer timeout catches if as_completed itself times out while waiting for *any* task
+                    logger.error(
+                        f"Overall timeout waiting for submitted tasks to complete after shutdown signal (waited {wait_timeout}s). Some tasks may not have finished gracefully.")
+                    # The executor.__exit__ will still attempt to shutdown the workers
 
-                        logger.progress(
-                            f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) "
-                            f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} "  # Show overall stats
-                            f"| Last: {final_status} (ID: {last_id_short})"
-                        )
-                        # --- End Overall Progress Logging ---
+                logger.info("Worker processing loop finished or interrupted.")
 
-                    except Exception as exc:
-                        logger.error(f"Exception retrieving worker result: {exc}", exc_info=True)
-                        # Count exception as error only if quota flag is not set
-                        if not quota_exceeded_flag.is_set():
-                            errors_in_run += 1
-                        # Log overall progress even on error
-                        overall_completed_count = items_completed_before_run + processed_count_this_run
-                        percentage = (overall_completed_count / total_db_items) * 100 if total_db_items > 0 else 0
-                        # Calculate cumulative totals for logging on error
-                        current_total_uploaded = initial_uploaded_count + uploaded_in_run
-                        current_total_duplicates = initial_duplicate_count + duplicates_in_run
-                        current_total_skipped = initial_skipped_count + skipped_in_run
-                        current_total_errors = initial_error_count + errors_in_run
-                        logger.error(
-                            f"Progress: {overall_completed_count}/{total_db_items} ({percentage:.1f}%) "
-                            f"| Totals: Up={current_total_uploaded} Dup={current_total_duplicates} Skip={current_total_skipped} Err={current_total_errors} "
-                            f"| Last: ERROR retrieving future result"
-                        )
+        # --- Final Summary ---
+        total_duration = time.time() - start_time
+        logger.info("=" * 60)
+        logger.info("Run Summary (This Execution):")  # Clarify summary scope
+        # logger.info(f"  Items Submitted This Run:      {num_submitted}") # Not useful
+        logger.info(f"  Items Processed This Run (Completed):   {processed_count_this_run}")
+        logger.info(f"  Uploaded this Run:           {uploaded_in_run}")
+        logger.info(f"  Marked as Duplicate this Run: {duplicates_in_run}")
+        logger.info(f"  Skipped this Run:            {skipped_in_run}")
+        logger.info(
+            f"  Errors this Run:             {errors_in_run}{' (excluding quota-related)' if quota_exceeded_flag.is_set() else ''}")
+        logger.info(f"  Total processing time:       {total_duration:.2f} seconds")
+        logger.info("-" * 60)
+        logger.info("Overall Database Stats (Cumulative):")  # Clarify summary scope
+        final_stats = db_manager.get_stats() if db_manager else {}
+        final_total_db_items = sum(final_stats.values())
+        logger.info(f"  Total Items in DB:           {final_total_db_items}")
+        for status, count in sorted(final_stats.items()):
+            logger.info(f"  - {status}: {count}")
+        logger.info("=" * 60)
 
-                    if shutdown_event.is_set():
-                        logger.warning(
-                            "Shutdown requested. Breaking from processing results and attempting to wait for remaining tasks via executor cleanup.")
-                        break
+        # logger.info("--- Concise Run Summary ---")
+        # logger.info(f"- Items Submitted: {num_submitted}") # Not useful
+        # logger.info(f"- Items Processed: {processed_count_this_run}")
+        # logger.info(f"- Uploaded{' (Dry Run)' if args.dry_run else ''}:      {uploaded_in_run}")
+        # logger.info(f"- Duplicates Found: {duplicates_in_run}")
+        # logger.info(f"- Skipped:          {skipped_in_run}")
+        # logger.info(f"- Errors:           {errors_in_run}")
 
-            except concurrent.futures.TimeoutError:
-                # This outer timeout catches if as_completed itself times out while waiting for *any* task
-                logger.error(
-                    f"Overall timeout waiting for submitted tasks to complete after shutdown signal (waited {wait_timeout}s). Some tasks may not have finished gracefully.")
-                # The executor.__exit__ will still attempt to shutdown the workers
+        final_db_filename = args.db_file
+        # Check for persistent errors (excluding album full and quota, as they indicate rerun needed)
+        final_error_count_for_exit = sum(
+            final_stats.get(s, 0) for s in ERROR_STATUSES if s not in [STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA]) + \
+                                     final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
+        album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL,
+                                                      0) > 0 if 'final_stats' in locals() else False
+        quota_error_occurred_final = quota_exceeded_flag.is_set() or (
+            final_stats.get(STATUS_ERROR_QUOTA, 0) > 0 if 'final_stats' in locals() else False)
 
-            logger.info("Worker processing loop finished or interrupted.")
+        run_completed_successfully = (final_error_count_for_exit == 0 and not shutdown_requested)
 
-    # --- Final Summary ---
-    total_duration = time.time() - start_time
-    logger.info("=" * 60)
-    logger.info("Run Summary (This Execution):")  # Clarify summary scope
-    # logger.info(f"  Items Submitted This Run:      {num_submitted}") # Not useful
-    logger.info(f"  Items Processed This Run (Completed):   {processed_count_this_run}")
-    logger.info(f"  Uploaded this Run:           {uploaded_in_run}")
-    logger.info(f"  Marked as Duplicate this Run: {duplicates_in_run}")
-    logger.info(f"  Skipped this Run:            {skipped_in_run}")
-    logger.info(
-        f"  Errors this Run:             {errors_in_run}{' (excluding quota-related)' if quota_exceeded_flag.is_set() else ''}")
-    logger.info(f"  Total processing time:       {total_duration:.2f} seconds")
-    logger.info("-" * 60)
-    logger.info("Overall Database Stats (Cumulative):")  # Clarify summary scope
-    final_stats = db_manager.get_stats() if db_manager else {}
-    final_total_db_items = sum(final_stats.values())
-    logger.info(f"  Total Items in DB:           {final_total_db_items}")
-    for status, count in sorted(final_stats.items()):
-        logger.info(f"  - {status}: {count}")
-    logger.info("=" * 60)
-
-    # logger.info("--- Concise Run Summary ---")
-    # logger.info(f"- Items Submitted: {num_submitted}") # Not useful
-    # logger.info(f"- Items Processed: {processed_count_this_run}")
-    # logger.info(f"- Uploaded{' (Dry Run)' if args.dry_run else ''}:      {uploaded_in_run}")
-    # logger.info(f"- Duplicates Found: {duplicates_in_run}")
-    # logger.info(f"- Skipped:          {skipped_in_run}")
-    # logger.info(f"- Errors:           {errors_in_run}")
-
-    final_db_filename = args.db_file
-    # Check for persistent errors (excluding album full and quota, as they indicate rerun needed)
-    final_error_count_for_exit = sum(
-        final_stats.get(s, 0) for s in ERROR_STATUSES if s not in [STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA]) + \
-                                 final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
-    album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL,
-                                                  0) > 0 if 'final_stats' in locals() else False
-    quota_error_occurred_final = quota_exceeded_flag.is_set() or (
-        final_stats.get(STATUS_ERROR_QUOTA, 0) > 0 if 'final_stats' in locals() else False)
-
-    run_completed_successfully = (final_error_count_for_exit == 0 and not shutdown_requested)
-
-    if quota_error_occurred_final and not shutdown_requested:
-        logger.critical("- Status: STOPPED DUE TO GOOGLE API QUOTA LIMIT.")
-        logger.critical(">>> Please wait until your quota resets (usually next day) and run again. <<<")
-    elif shutdown_requested and quota_exceeded_flag.is_set():
-        logger.critical("- Status: STOPPED DUE TO GOOGLE API QUOTA LIMIT.")
-        logger.critical(">>> Please wait until your quota resets (usually next day) and run again. <<<")
-    elif shutdown_requested:
-        logger.warning("- Status: STOPPED DUE TO USER TERMINATION.")
-        logger.warning(">>> Program was terminated by user signal (CTRL-C). <<<")
-    elif run_completed_successfully and not album_switch_occurred_this_run:
-        logger.info("- Status: Completed run without persistent errors or album switches")
-        remaining_items_count = final_total_db_items - sum(final_stats.get(s, 0) for s in TERMINAL_STATUSES)
-        if remaining_items_count == 0:
-            logger.info("All items processed successfully. Run complete.")
-            logger.info("Attempting to rename completed database file...")
-            if db_manager_global:
-                db_manager_global.close()
-                logger.info("Closed DB before rename.")
-                db_manager_global = None
-            else:
-                logger.warning("DB manager not found for closing before rename.")
-            base_db_name, db_ext = os.path.splitext(args.db_file)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            new_db_filename = f"{base_db_name}_completed_{timestamp}{db_ext}"
-            try:
-                if os.path.exists(args.db_file):
-                    os.rename(args.db_file, new_db_filename)
-                    logger.info(f"Successfully renamed database to: {new_db_filename}")
-                    final_db_filename = new_db_filename
-                    cleanup_handled_in_try = True
-                    release_lock()
+        if quota_error_occurred_final and not shutdown_requested:
+            logger.critical("- Status: STOPPED DUE TO GOOGLE API QUOTA LIMIT.")
+            logger.critical(">>> Please wait until your quota resets (usually next day) and run again. <<<")
+        elif shutdown_requested and quota_exceeded_flag.is_set():
+            logger.critical("- Status: STOPPED DUE TO GOOGLE API QUOTA LIMIT.")
+            logger.critical(">>> Please wait until your quota resets (usually next day) and run again. <<<")
+        elif shutdown_requested:
+            logger.warning("- Status: STOPPED DUE TO USER TERMINATION.")
+            logger.warning(">>> Program was terminated by user signal (CTRL-C). <<<")
+        elif run_completed_successfully and not album_switch_occurred_this_run:
+            logger.info("- Status: Completed run without persistent errors or album switches")
+            remaining_items_count = final_total_db_items - sum(final_stats.get(s, 0) for s in TERMINAL_STATUSES)
+            if remaining_items_count == 0:
+                logger.info("All items processed successfully. Run complete.")
+                logger.info("Attempting to rename completed database file...")
+                if db_manager_global:
+                    db_manager_global.close()
+                    logger.info("Closed DB before rename.")
+                    db_manager_global = None
                 else:
-                    logger.warning(f"DB file {args.db_file} not found for renaming.")
-            except OSError as e:
-                logger.error(f"Failed rename DB: {e}", exc_info=True)
-                print(f"\nERROR: Failed rename DB: {e}", file=sys.stderr)
+                    logger.warning("DB manager not found for closing before rename.")
+                base_db_name, db_ext = os.path.splitext(args.db_file)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_db_filename = f"{base_db_name}_completed_{timestamp}{db_ext}"
+                try:
+                    if os.path.exists(args.db_file):
+                        os.rename(args.db_file, new_db_filename)
+                        logger.info(f"Successfully renamed database to: {new_db_filename}")
+                        final_db_filename = new_db_filename
+                        cleanup_handled_in_try = True
+                        release_lock()
+                    else:
+                        logger.warning(f"DB file {args.db_file} not found for renaming.")
+                except OSError as e:
+                    logger.error(f"Failed rename DB: {e}", exc_info=True)
+                    print(f"\nERROR: Failed rename DB: {e}", file=sys.stderr)
+            else:
+                logger.warning(
+                    f"Run completed without persistent errors, but {remaining_items_count} items remain. DB not renamed.")
+        elif album_switch_occurred_this_run:
+            album_full_count = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0)
+            logger.warning(f"- Status: Album switched during run. {album_full_count} items marked 'ERROR_ALBUM_FULL'.")
+            logger.warning(">>> Please re-run the script to continue processing with the new album. <<<")
+        elif shutdown_requested:
+            logger.warning("- Status: Terminated by user")
         else:
-            logger.warning(
-                f"Run completed without persistent errors, but {remaining_items_count} items remain. DB not renamed.")
-    elif album_switch_occurred_this_run:
-        album_full_count = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0)
-        logger.warning(f"- Status: Album switched during run. {album_full_count} items marked 'ERROR_ALBUM_FULL'.")
-        logger.warning(">>> Please re-run the script to continue processing with the new album. <<<")
-    elif shutdown_requested:
-        logger.warning("- Status: Terminated by user")
-    else:
-        logger.error(f"- Status: Completed run with {final_error_count_for_exit} persistent errors")
+            logger.error(f"- Status: Completed run with {final_error_count_for_exit} persistent errors")
 
-    logger.info(f"- Run Time: {total_duration:.2f} sec")
-    logger.info("-" * 60)
-    logger.info("Overall Database Stats (Final):")
-    for status, count in sorted(final_stats.items()):
-        if count > 0:
-            logger.info(f"- {status}: {count}")
-    logger.info(f"- Detailed Log File: {LOG_FILE}")
-    logger.info(f"- Database File: {final_db_filename}")
-    logger.info("=" * 60)
+        logger.info(f"- Run Time: {total_duration:.2f} sec")
+        logger.info("-" * 60)
+        logger.info("Overall Database Stats (Final):")
+        for status, count in sorted(final_stats.items()):
+            if count > 0:
+                logger.info(f"- {status}: {count}")
+        logger.info(f"- Detailed Log File: {LOG_FILE}")
+        logger.info(f"- Database File: {final_db_filename}")
+        logger.info("=" * 60)
 
-except KeyboardInterrupt:
-# This except block catches KeyboardInterrupt (Ctrl+C)
-if not shutdown_requested:
-    log_func = getattr(logger, 'warning', print)
-    log_func("Keyboard interrupt. Shutting down...")
-    shutdown_event.set()
-    shutdown_requested = True
-    # Do NOT set quota_exceeded_flag here - that's only for actual quota errors
+    except KeyboardInterrupt:
+        # This except block catches KeyboardInterrupt (Ctrl+C)
+        if not shutdown_requested:
+            log_func = getattr(logger, 'warning', print)
+            log_func("Keyboard interrupt. Shutting down...")
+            shutdown_event.set()
+            shutdown_requested = True
+            # Do NOT set quota_exceeded_flag here - that's only for actual quota errors
+
+            # Update the process new files lock to prevent new processing
+            try:
+                with open(PROCESS_NEW_FILES_LOCK_PATH, 'w') as f:
+                    f.write("0")  # 0 means no new processing
+            except Exception as e:
+                log_func(f"Failed to update process new files lock: {e}")
+    except Exception as e:
+        # This except block catches any other unexpected exceptions
+        log_func = getattr(logger, 'critical', lambda msg, exc_info: print(msg, file=sys.stderr))
+        log_func(f"Critical unexpected error: {e}", exc_info=True)
+        print(f"\nCritical Error: {e}. Check log '{LOG_FILE}'.", file=sys.stderr)
+        shutdown_event.set()
+        shutdown_requested = True
+        # Do NOT set quota_exceeded_flag here - that's only for actual quota errors
 
     # Update the process new files lock to prevent new processing
     try:
@@ -1805,61 +1818,46 @@ if not shutdown_requested:
             f.write("0")  # 0 means no new processing
     except Exception as e:
         log_func(f"Failed to update process new files lock: {e}")
-except Exception as e:
-# This except block catches any other unexpected exceptions
-log_func = getattr(logger, 'critical', lambda msg, exc_info: print(msg, file=sys.stderr))
-log_func(f"Critical unexpected error: {e}", exc_info=True)
-print(f"\nCritical Error: {e}. Check log '{LOG_FILE}'.", file=sys.stderr)
-shutdown_event.set()
-shutdown_requested = True
-# Do NOT set quota_exceeded_flag here - that's only for actual quota errors
 
-# Update the process new files lock to prevent new processing
-try:
-    with open(PROCESS_NEW_FILES_LOCK_PATH, 'w') as f:
-        f.write("0")  # 0 means no new processing
-except Exception as e:
-    log_func(f"Failed to update process new files lock: {e}")
+    finally:
+        # This finally block executes regardless of whether an exception occurred
+        log_func_info = getattr(logger, 'info', print)
+        log_func_info("Executing final cleanup...")
+        shutdown_event.set()  # Ensure shutdown event is set in finally
 
-finally:
-# This finally block executes regardless of whether an exception occurred
-log_func_info = getattr(logger, 'info', print)
-log_func_info("Executing final cleanup...")
-shutdown_event.set()  # Ensure shutdown event is set in finally
+        # Clean up the process new files lock
+        if os.path.exists(PROCESS_NEW_FILES_LOCK_PATH):
+            try:
+                os.remove(PROCESS_NEW_FILES_LOCK_PATH)
+                log_func_info(f"Removed process new files lock: {PROCESS_NEW_FILES_LOCK_PATH}")
+            except Exception as e:
+                log_func_info(f"Failed to remove process new files lock: {e}")
 
-# Clean up the process new files lock
-if os.path.exists(PROCESS_NEW_FILES_LOCK_PATH):
-    try:
-        os.remove(PROCESS_NEW_FILES_LOCK_PATH)
-        log_func_info(f"Removed process new files lock: {PROCESS_NEW_FILES_LOCK_PATH}")
-    except Exception as e:
-        log_func_info(f"Failed to remove process new files lock: {e}")
+        # Perform general cleanup
+        if not cleanup_handled_in_try:
+            cleanup(google_photos_instance_global, db_manager_global)
+        else:
+            log_func_info("Skipping normal cleanup as DB rename handled it.")
 
-# Perform general cleanup
-if not cleanup_handled_in_try:
-    cleanup(google_photos_instance_global, db_manager_global)
-else:
-    log_func_info("Skipping normal cleanup as DB rename handled it.")
+        # Code outside the try...except...finally block executes after the block finishes.
+        # This is where the final exit code determination and sys.exit() should be.
 
-# Code outside the try...except...finally block executes after the block finishes.
-# This is where the final exit code determination and sys.exit() should be.
+        # Adjust exit code: Exit 0 only if run completed successfully AND no album switch/quota error happened
+        # Use the final_stats captured before the except/finally blocks
+        final_error_count_for_exit = sum(
+            final_stats.get(s, 0) for s in ERROR_STATUSES if s not in [STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA]) + \
+                                     final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
+        album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) > 0 if 'final_stats' in locals() else False
+        quota_error_occurred_final = quota_exceeded_flag.is_set() or (
+            final_stats.get(STATUS_ERROR_QUOTA, 0) > 0 if 'final_stats' in locals() else False)
 
-# Adjust exit code: Exit 0 only if run completed successfully AND no album switch/quota error happened
-# Use the final_stats captured before the except/finally blocks
-final_error_count_for_exit = sum(
-    final_stats.get(s, 0) for s in ERROR_STATUSES if s not in [STATUS_ERROR_ALBUM_FULL, STATUS_ERROR_QUOTA]) + \
-                             final_stats.get(STATUS_ERROR_MISSING_DATA, 0) if 'final_stats' in locals() else 1
-album_switch_occurred_final = final_stats.get(STATUS_ERROR_ALBUM_FULL, 0) > 0 if 'final_stats' in locals() else False
-quota_error_occurred_final = quota_exceeded_flag.is_set() or (
-    final_stats.get(STATUS_ERROR_QUOTA, 0) > 0 if 'final_stats' in locals() else False)
+        exit_code = 0
+        if final_error_count_for_exit > 0 or shutdown_requested or album_switch_occurred_final or quota_error_occurred_final:
+            exit_code = 1
 
-exit_code = 0
-if final_error_count_for_exit > 0 or shutdown_requested or album_switch_occurred_final or quota_error_occurred_final:
-    exit_code = 1
-
-log_func_info(f"Exiting script with code {exit_code}.")
-logging.shutdown()
-sys.exit(exit_code)
+        log_func_info(f"Exiting script with code {exit_code}.")
+        logging.shutdown()
+        sys.exit(exit_code)
 
 
 # --- Helper Functions (e.g., Album Naming) ---
