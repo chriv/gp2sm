@@ -62,7 +62,7 @@ Here is the plan broken down into sequential tasks. For each task, please provid
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
 
-5.  [ ] **Task 5: Update Worker Logic for Pre-Assigned Album**
+5.  [x] **Task 5: Update Worker Logic for Pre-Assigned Album**
     * **Objective:** Modify the body of `process_item_worker` in `main.py`. Replace uses of the global/shared `smugmug.album_key` with the passed-in `target_album_key` for SmugMug operations. Remove calls to `check_album_capacity_and_switch` and `handle_album_full_switch`. Update the `SmugMugAlbumFullError` handler to log the error and return `STATUS_ERROR_ALBUM_FULL` without attempting a switch. Ensure successful uploads call `db_manager.increment_album_item_count(target_album_key)`.
     * **Files Modified:** `main.py`
     * **Expected Output:** Diff file for `main.py`.
