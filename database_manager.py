@@ -9,39 +9,39 @@
 import sqlite3
 import logging
 import os
-import json # To store complex metadata if needed
-import datetime # For timestamp updates
+import json  # To store complex metadata if needed
+import datetime  # For timestamp updates
 
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
 DB_FILE_DEFAULT = "gp2sm_transfer_state.db"
 MEDIA_TABLE_NAME = "media_items"
-CONFIG_TABLE_NAME = "run_config" # Table for config snapshot
-ALBUMS_TABLE_NAME = "smugmug_albums" # Table for tracking all albums
+CONFIG_TABLE_NAME = "run_config"  # Table for config snapshot
+ALBUMS_TABLE_NAME = "smugmug_albums"  # Table for tracking all albums
 
 # --- Status Codes ---
 STATUS_PENDING = "PENDING"
-STATUS_HASHED = "HASHED" # MD5 calculated (for images)
+STATUS_HASHED = "HASHED"  # MD5 calculated (for images)
 STATUS_SMUGMUG_CHECKED_NOT_FOUND = "SMUGMUG_CHECKED_NOT_FOUND"
-STATUS_DOWNLOADED_FOR_UPLOAD = "DOWNLOADED_FOR_UPLOAD" # File ready in temp dir
-STATUS_UPLOAD_ATTEMPTED = "UPLOAD_ATTEMPTED" # Upload POST request sent
+STATUS_DOWNLOADED_FOR_UPLOAD = "DOWNLOADED_FOR_UPLOAD"  # File ready in temp dir
+STATUS_UPLOAD_ATTEMPTED = "UPLOAD_ATTEMPTED"  # Upload POST request sent
 STATUS_UPLOADED_SUCCESS = "UPLOADED_SUCCESS"
 STATUS_DUPLICATE_HASH = "DUPLICATE_HASH"
 STATUS_DUPLICATE_FILENAME = "DUPLICATE_FILENAME"
-STATUS_SKIPPED_FILTER = "SKIPPED_FILTER" # e.g., --ignore-photos
+STATUS_SKIPPED_FILTER = "SKIPPED_FILTER"  # e.g., --ignore-photos
 STATUS_SKIPPED_HEIC = "SKIPPED_HEIC"
 STATUS_SKIPPED_BMP = "SKIPPED_BMP"
 STATUS_SKIPPED_WEBP = "SKIPPED_WEBP"
 STATUS_SKIPPED_LARGE_VIDEO = "SKIPPED_LARGE_VIDEO"
 STATUS_ERROR_DOWNLOAD = "ERROR_DOWNLOAD"
 STATUS_ERROR_HASHING = "ERROR_HASHING"
-STATUS_ERROR_SMUGMUG_API = "ERROR_SMUGMUG_API" # General SM API error during check/upload
-STATUS_ERROR_UPLOAD_FAILED = "ERROR_UPLOAD_FAILED" # Upload POST failed
-STATUS_ERROR_ALBUM_FULL = "ERROR_ALBUM_FULL" # SmugMug album limit reached
-STATUS_ERROR_QUOTA = "ERROR_QUOTA" # Google API Quota Exceeded
+STATUS_ERROR_SMUGMUG_API = "ERROR_SMUGMUG_API"  # General SM API error during check/upload
+STATUS_ERROR_UPLOAD_FAILED = "ERROR_UPLOAD_FAILED"  # Upload POST failed
+STATUS_ERROR_ALBUM_FULL = "ERROR_ALBUM_FULL"  # SmugMug album limit reached
+STATUS_ERROR_QUOTA = "ERROR_QUOTA"  # Google API Quota Exceeded
 STATUS_ERROR_UNKNOWN = "ERROR_UNKNOWN"
-STATUS_ERROR_MISSING_DATA = "ERROR_MISSING_DATA" # Item lacks essential fields
+STATUS_ERROR_MISSING_DATA = "ERROR_MISSING_DATA"  # Item lacks essential fields
 
 # List of terminal success/skip statuses (won't be retried by default)
 TERMINAL_STATUSES = [
@@ -53,7 +53,7 @@ TERMINAL_STATUSES = [
     STATUS_SKIPPED_BMP,
     STATUS_SKIPPED_WEBP,
     STATUS_SKIPPED_LARGE_VIDEO,
-    STATUS_ERROR_MISSING_DATA, # Treat missing data as terminal unless manually reset
+    STATUS_ERROR_MISSING_DATA,  # Treat missing data as terminal unless manually reset
 ]
 
 # List of statuses indicating an error occurred (will now be retried by default)
@@ -72,6 +72,7 @@ ERROR_STATUSES = [
 
 placeholders = ', '.join('?' * len(TERMINAL_STATUSES))
 
+
 class DatabaseManager:
     """Manages the SQLite database for transfer state."""
 
@@ -80,7 +81,7 @@ class DatabaseManager:
         self.db_file = db_file
         self.conn = None
         self._connect()
-        self._create_tables() # Create tables if they don't exist
+        self._create_tables()  # Create tables if they don't exist
 
     def _connect(self):
         """Establishes a connection to the SQLite database."""
@@ -152,15 +153,18 @@ class DatabaseManager:
                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} ADD COLUMN initial_album_name TEXT")
                 # Rename old columns if they exist (for backward compatibility)
                 if 'smugmug_album_key' in columns and 'current_album_key' not in columns:
-                     logger.warning(f"Renaming 'smugmug_album_key' to 'current_album_key' in {CONFIG_TABLE_NAME}.")
-                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_album_key TO current_album_key")
+                    logger.warning(f"Renaming 'smugmug_album_key' to 'current_album_key' in {CONFIG_TABLE_NAME}.")
+                    self.conn.execute(
+                        f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_album_key TO current_album_key")
                 if 'smugmug_album_uri' in columns and 'current_album_uri' not in columns:
-                     logger.warning(f"Renaming 'smugmug_album_uri' to 'current_album_uri' in {CONFIG_TABLE_NAME}.")
-                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_album_uri TO current_album_uri")
+                    logger.warning(f"Renaming 'smugmug_album_uri' to 'current_album_uri' in {CONFIG_TABLE_NAME}.")
+                    self.conn.execute(
+                        f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_album_uri TO current_album_uri")
                 if 'smugmug_folder_name' in columns and 'current_folder_name' not in columns:
-                     logger.warning(f"Renaming 'smugmug_folder_name' to 'current_folder_name' in {CONFIG_TABLE_NAME}.")
-                     self.conn.execute(f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_folder_name TO current_folder_name")
-                
+                    logger.warning(f"Renaming 'smugmug_folder_name' to 'current_folder_name' in {CONFIG_TABLE_NAME}.")
+                    self.conn.execute(
+                        f"ALTER TABLE {CONFIG_TABLE_NAME} RENAME COLUMN smugmug_folder_name TO current_folder_name")
+
                 # --- Albums Tracking Table ---
                 self.conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {ALBUMS_TABLE_NAME} (
@@ -229,7 +233,8 @@ class DatabaseManager:
             logger.error(f"Error adding item batch to database: {e}", exc_info=True)
             return 0
 
-    def update_item_status(self, google_id, status, error_message=None, md5_hash=None, increment_attempt=False, smugmug_album_key=None):
+    def update_item_status(self, google_id, status, error_message=None, md5_hash=None, increment_attempt=False,
+                           smugmug_album_key=None):
         """Updates the status and optionally the error message, hash, or target album key of a media item."""
         if not self.conn:
             logger.error(f"Cannot update status for {google_id}: No database connection.")
@@ -299,9 +304,9 @@ class DatabaseManager:
         if not self.conn:
             logger.error("Cannot get items: No database connection.")
             return []
-        
+
         terminal_placeholders = ', '.join('?' * len(TERMINAL_STATUSES))
-        
+
         # Modified SQL query with custom ORDER BY clause to group HEIC files with their JPG/JPEG counterparts
         sql = f"""
             SELECT * FROM {MEDIA_TABLE_NAME}
@@ -316,7 +321,7 @@ class DatabaseManager:
                     ELSE 3
                 END
         """
-        
+
         try:
             cursor = self.conn.execute(sql, TERMINAL_STATUSES)
             items = [dict(row) for row in cursor.fetchall()]
@@ -377,7 +382,8 @@ class DatabaseManager:
         try:
             with self.conn:
                 self.conn.execute(sql, params)
-            logger.info(f"Saved/Updated config snapshot: Base='{initial_album_name}', Key='{album_key}', Folder='{folder_name}', Source='{google_album_id or 'Library'}'")
+            logger.info(
+                f"Saved/Updated config snapshot: Base='{initial_album_name}', Key='{album_key}', Folder='{folder_name}', Source='{google_album_id or 'Library'}'")
             return True
         except sqlite3.Error as e:
             logger.error(f"Error saving config snapshot: {e}", exc_info=True)
@@ -430,10 +436,10 @@ class DatabaseManager:
         if not self.conn:
             logger.error("Cannot restart items: No DB conn.")
             return 0
-        
+
         logger.warning("Resetting ALL items to PENDING status, keeping MD5 hashes but clearing album assignments...")
         now_timestamp = datetime.datetime.now()
-        
+
         sql = f"""
             UPDATE {MEDIA_TABLE_NAME}
             SET status = ?,
@@ -443,7 +449,7 @@ class DatabaseManager:
                 last_processed_timestamp = ?
         """
         params = [STATUS_PENDING, now_timestamp]
-        
+
         try:
             with self.conn:
                 cursor = self.conn.execute(sql, params)
@@ -453,7 +459,7 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error resetting all items: {e}", exc_info=True)
             return 0
-    
+
     def close(self):
         """Closes the database connection."""
         if self.conn:
@@ -469,7 +475,7 @@ class DatabaseManager:
         if not self.conn:
             logger.error("Cannot add/update album: No database connection.")
             return False
-        
+
         # Check if album already exists
         try:
             cursor = self.conn.execute(
@@ -477,7 +483,7 @@ class DatabaseManager:
                 (album_key,)
             )
             existing_album = cursor.fetchone()
-            
+
             if existing_album:
                 # Update existing album
                 sql = f"""
@@ -486,7 +492,7 @@ class DatabaseManager:
                     WHERE album_key = ?
                 """
                 params = [album_name, album_uri, folder_name, 1 if is_current else 0, album_key]
-                
+
                 # If marking as current, ensure all others are not current
                 if is_current:
                     with self.conn:
@@ -495,7 +501,7 @@ class DatabaseManager:
                 else:
                     with self.conn:
                         self.conn.execute(sql, params)
-                
+
                 logger.info(f"Updated album in tracking table: {album_name} (Key: {album_key})")
                 return True
             else:
@@ -506,7 +512,7 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?)
                 """
                 params = [album_key, album_name, album_uri, folder_name, 1 if is_current else 0]
-                
+
                 # If marking as current, ensure all others are not current
                 if is_current:
                     with self.conn:
@@ -515,19 +521,19 @@ class DatabaseManager:
                 else:
                     with self.conn:
                         self.conn.execute(sql, params)
-                
+
                 logger.info(f"Added new album to tracking table: {album_name} (Key: {album_key})")
                 return True
         except sqlite3.Error as e:
             logger.error(f"Error adding/updating album {album_key}: {e}", exc_info=True)
             return False
-    
+
     def get_all_albums(self):
         """Retrieves all albums from the tracking table."""
         if not self.conn:
             logger.error("Cannot get albums: No database connection.")
             return []
-        
+
         try:
             cursor = self.conn.execute(f"SELECT * FROM {ALBUMS_TABLE_NAME} ORDER BY creation_timestamp")
             albums = [dict(row) for row in cursor.fetchall()]
@@ -535,13 +541,13 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error retrieving albums: {e}", exc_info=True)
             return []
-    
+
     def get_current_album(self):
         """Retrieves the current album from the tracking table."""
         if not self.conn:
             logger.error("Cannot get current album: No database connection.")
             return None
-        
+
         try:
             cursor = self.conn.execute(f"SELECT * FROM {ALBUMS_TABLE_NAME} WHERE is_current = 1")
             row = cursor.fetchone()
@@ -552,55 +558,55 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error retrieving current album: {e}", exc_info=True)
             return None
-    
+
     def mark_album_as_current(self, album_key):
         """Marks an album as the current album and ensures all others are not current."""
         if not self.conn:
             logger.error("Cannot mark album as current: No database connection.")
             return False
-        
+
         try:
             with self.conn:
                 # First, set all albums to not current
                 self.conn.execute(f"UPDATE {ALBUMS_TABLE_NAME} SET is_current = 0")
-                
+
                 # Then, set the specified album as current
                 self.conn.execute(
                     f"UPDATE {ALBUMS_TABLE_NAME} SET is_current = 1 WHERE album_key = ?",
                     (album_key,)
                 )
-            
+
             logger.info(f"Marked album {album_key} as current")
             return True
         except sqlite3.Error as e:
             logger.error(f"Error marking album {album_key} as current: {e}", exc_info=True)
             return False
-    
+
     def increment_album_item_count(self, album_key):
         """Increments the item count for an album."""
         if not self.conn:
             logger.error("Cannot increment album item count: No database connection.")
             return False
-        
+
         try:
             with self.conn:
                 self.conn.execute(
                     f"UPDATE {ALBUMS_TABLE_NAME} SET item_count = item_count + 1 WHERE album_key = ?",
                     (album_key,)
                 )
-            
+
             logger.debug(f"Incremented item count for album {album_key}")
             return True
         except sqlite3.Error as e:
             logger.error(f"Error incrementing item count for album {album_key}: {e}", exc_info=True)
             return False
-    
+
     def get_album_item_count(self, album_key):
         """Gets the current item count for an album."""
         if not self.conn:
             logger.error("Cannot get album item count: No database connection.")
             return -1
-        
+
         try:
             cursor = self.conn.execute(
                 f"SELECT item_count FROM {ALBUMS_TABLE_NAME} WHERE album_key = ?",
@@ -614,7 +620,7 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error getting item count for album {album_key}: {e}", exc_info=True)
             return -1
-    
+
     def is_album_near_capacity(self, album_key, capacity_threshold=0.8, max_capacity=5000):
         """
         Checks if an album is approaching the capacity threshold (default 80%).
@@ -623,27 +629,46 @@ class DatabaseManager:
         if not self.conn:
             logger.error("Cannot check album capacity: No database connection.")
             return True  # Conservative approach: assume near capacity if can't check
-        
+
         try:
             item_count = self.get_album_item_count(album_key)
             if item_count < 0:
                 logger.error(f"Error getting item count for album {album_key}")
                 return True  # Conservative approach
-            
+
             threshold_count = int(max_capacity * capacity_threshold)
             is_near = item_count >= threshold_count
-            
+
             if is_near:
                 logger.warning(f"Album {album_key} is at {item_count}/{max_capacity} items "
-                              f"(≥{capacity_threshold*100}% threshold of {threshold_count})")
-            
+                               f"(≥{capacity_threshold * 100}% threshold of {threshold_count})")
+
             return is_near
         except Exception as e:
             logger.error(f"Error checking album capacity for {album_key}: {e}", exc_info=True)
             return True  # Conservative approach
-    
+
     def __del__(self):
         """Ensure connection is closed when the object is garbage collected."""
         if self.conn:
             logger.warning("DBManager deleted without explicit close. Closing now.")
             self.close()
+
+
+    def get_album_info(self, album_key):
+        cursor = self.conn.execute("""
+                                   SELECT album_key, album_name, album_uri, item_count, folder_name, is_current
+                                   FROM albums
+                                   WHERE album_key = ?
+                                   """, (album_key,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "album_key": row[0],
+                "album_name": row[1],
+                "album_uri": row[2],
+                "item_count": row[3],
+                "folder_name": row[4],
+                "is_current": bool(row[5])
+            }
+        return None

@@ -1245,6 +1245,59 @@ def main():
             logger.critical("SmugMug auth/config check failed.")
             sys.exit(1)
         logger.info("SmugMug init OK.")
+        # Initialize album tracking variables
+        current_album_key = smugmug.album_key
+        current_album_name = smugmug.album_name
+        current_album_item_count = db_manager.get_album_item_count(current_album_key)
+
+        if not current_album_key or not current_album_name or current_album_item_count == 0:
+            logger.warning("Incomplete album configuration detected. Attempting recovery using SmugMug API...")
+
+            album_key = smugmug.album_key or current_album_key
+            album_info = smugmug.get_album_details_from_api(album_key)
+            if not album_info:
+                logger.critical("Failed to recover album details from SmugMug. Cannot continue.")
+                sys.exit(1)
+
+            current_album_key = album_info['key']
+            current_album_name = album_info['name']
+            current_album_item_count = album_info['media_count']
+            smugmug.album_api_uri = album_info['uri']
+
+            db_manager.add_or_update_album(
+                album_key=current_album_key,
+                album_name=current_album_name,
+                album_uri=smugmug.album_api_uri,
+                item_count=current_album_item_count,
+                is_current=True
+            )
+            db_manager.save_config_snapshot(current_album_key, current_album_name, current_album_item_count)
+
+        # --- Attempt to fetch current album state from DB ---
+        current_album_key = db_manager.get_current_album_key()
+        current_album_name = db_manager.get_album_name(current_album_key) if current_album_key else None
+        current_album_item_count = db_manager.get_album_item_count(current_album_key) if current_album_key else None
+        if not current_album_key or not current_album_name or not current_album_item_count:
+            logger.warning("Incomplete album configuration detected. Attempting recovery using SmugMug API...")
+            album_key = smugmug.album_key or current_album_key
+
+            album_info = smugmug.get_album_info(album_key)
+            if not album_info:
+                logger.critical("Failed to recover album details from SmugMug. Cannot continue.")
+                sys.exit(1)
+
+            current_album_key = album_info['key']
+            current_album_name = album_info['name']
+            current_album_item_count = album_info['media_count']
+            smugmug.album_api_uri = album_info['uri']
+
+            db_manager.add_or_update_album(
+                album_key=current_album_key,
+                album_name=current_album_name,
+                album_uri=smugmug.album_api_uri,
+                is_current=True
+            )
+            db_manager.save_config_snapshot(current_album_key, current_album_name, current_album_item_count)
 
         # --- DB Population / Config Check ---
         is_initial_run = False  # Flag if DB was initially empty

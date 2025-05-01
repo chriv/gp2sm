@@ -735,6 +735,26 @@ class SmugMug:
                   logger.error(f"Failed creating album '{album_name}' under {parent_node_uri}.{smugmug_error}")
                   return False
 
+    def get_album_details_from_api(self, album_key):
+        """Fetch album details using SmugMug API."""
+        try:
+            endpoint = f"/api/v2/album/{album_key}"
+            response = self._make_api_request("GET", endpoint)
+            album_data = response.get("Album")
+            if not album_data:
+                logger.warning(f"Album not found via API for key: {album_key}")
+                return None
+
+            return {
+                "key": album_data.get("AlbumKey"),
+                "name": album_data.get("Title"),
+                "uri": album_data.get("Uri"),
+                "media_count": album_data.get("ImageCount", 0)
+            }
+        except Exception as e:
+            logger.error(f"Failed to retrieve album info from SmugMug: {e}")
+            return None
+
     @staticmethod
     def calculate_file_hash(file_path, hash_algorithm='md5'):
         """Calculates the hash of a file (default: md5)."""
@@ -762,4 +782,3 @@ class SmugMug:
         except Exception as e:
             logger.error(f"Error hashing {file_path}: {e}", exc_info=True)
             return None
-
