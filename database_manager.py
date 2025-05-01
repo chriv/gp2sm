@@ -70,7 +70,7 @@ ERROR_STATUSES = [
     # STATUS_ERROR_MISSING_DATA is excluded here as it's less likely to be auto-resolved
 ]
 
-        placeholders = ', '.join('?' * len(TERMINAL_STATUSES))
+placeholders = ', '.join('?' * len(TERMINAL_STATUSES))
 
 class DatabaseManager:
     """Manages the SQLite database for transfer state."""
