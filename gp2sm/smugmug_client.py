@@ -1,0 +1,254 @@
+"""SmugMug API v2 client.
+
+Every behavior relied on here is recorded in docs/smugmug-api.md. Notable traps this client handles:
+- list endpoints use different response keys (e.g. !images -> "AlbumImage", not "Image")
+- upload/API failures can arrive as HTTP 200 with stat="fail"
+- 401 "nonce_used" after slow requests is retryable
+- batch moves are all-or-nothing (400 moves nothing)
+- a 504/timeout on a write may still have been applied server-side, so writes are never blindly
+  retried after one (a retried move then fails with 400 because the images already moved)
+"""
+
+import json
+import logging
+import re
+import threading
+import time
+
+import requests
+from requests_oauthlib import OAuth1Session
+
+API = "https://api.smugmug.com"
+log = logging.getLogger(__name__)
+
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+class SmugMugError(Exception):
+    """An API call failed in a way that retrying will not fix."""
+
+    def __init__(self, message, http_status=None, code=None, body=None, ambiguous=False):
+        super().__init__(message)
+        self.http_status = http_status
+        self.code = code
+        self.body = body
+        self.ambiguous = ambiguous  # a write whose outcome is unknown (timeout/5xx/network)
+
+
+class NotFound(SmugMugError):
+    """HTTP 404."""
+
+
+def url_name_for(name):
+    """SmugMug UrlName: alphanumerics and dashes, starting with an uppercase letter."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")
+    if not slug:
+        slug = "Album"
+    if not slug[0].isalpha():
+        slug = "A-" + slug
+    return slug[0].upper() + slug[1:]
+
+
+class SmugMugClient:
+    def __init__(self, api_key, api_secret, token, token_secret, *, max_retries=6, page_size=100,
+                 session_factory=None, sleep=time.sleep, min_ratelimit_remaining=200):
+        self._creds = (api_key, api_secret, token, token_secret)
+        self._local = threading.local()
+        self._session_factory = session_factory or self._default_session
+        self.max_retries = max_retries
+        self.page_size = page_size
+        self._sleep = sleep
+        self.min_ratelimit_remaining = min_ratelimit_remaining
+        self.ratelimit_remaining = None
+
+    @classmethod
+    def from_config_file(cls, path, **kw):
+        """Build from a smugmug_config.json (api_key, api_secret, oauth_token, oauth_token_secret)."""
+        with open(path) as f:
+            cfg = json.load(f)
+        return cls(cfg["api_key"], cfg["api_secret"], cfg["oauth_token"], cfg["oauth_token_secret"], **kw)
+
+    def _default_session(self):
+        api_key, api_secret, token, token_secret = self._creds
+        return OAuth1Session(api_key, client_secret=api_secret, resource_owner_key=token,
+                             resource_owner_secret=token_secret)
+
+    @property
+    def session(self):
+        """One OAuth1 session per thread."""
+        if not hasattr(self._local, "session"):
+            self._local.session = self._session_factory()
+        return self._local.session
+
+    # ------------------------------------------------------------------ core
+
+    def request(self, method, path, *, params=None, json_body=None, timeout=90):
+        """Perform an API call and return the parsed JSON body.
+
+        Retries 429 and 401 nonce_used (the request was rejected, so retrying is safe). Network errors
+        and 5xx are retried only for read methods; for writes they raise SmugMugError(ambiguous=True)
+        because the server may already have applied the change. Raises NotFound on 404 and
+        SmugMugError on any other failure (including HTTP 200 with stat="fail").
+        """
+        url = path if path.startswith("http") else API + path
+        safe = method.upper() in SAFE_METHODS
+        last_error = None
+        for attempt in range(self.max_retries):
+            if attempt:
+                self._sleep(min(60, 3 * 2 ** (attempt - 1)))
+            try:
+                r = self.session.request(method, url, params=params, json=json_body, timeout=timeout,
+                                         headers={"Accept": "application/json"})
+            except requests.RequestException as e:
+                last_error = SmugMugError(f"{method} {url}: network error {e!r}", ambiguous=not safe)
+                log.warning("%s (attempt %d)", last_error, attempt + 1)
+                if not safe:
+                    raise last_error
+                continue
+            self._note_ratelimit(r)
+            try:
+                body = r.json()
+            except ValueError:
+                body = {"_text": r.text[:500]}
+            log.debug("%s %s -> %s %s", method, url, r.status_code, json.dumps(body, default=str)[:2000])
+
+            rejected = r.status_code == 429 or (r.status_code == 401 and "nonce_used" in r.text)
+            if rejected or r.status_code in RETRY_STATUSES:
+                last_error = SmugMugError(f"{method} {url}: HTTP {r.status_code} {self._message(body)}",
+                                          http_status=r.status_code, body=body, ambiguous=not (safe or rejected))
+                log.warning("%s (attempt %d)", last_error, attempt + 1)
+                if last_error.ambiguous:
+                    raise last_error
+                continue
+            if r.status_code == 404:
+                raise NotFound(f"{method} {url}: not found", http_status=404, body=body)
+            if r.status_code >= 400:
+                raise SmugMugError(f"{method} {url}: HTTP {r.status_code} {self._message(body)}",
+                                   http_status=r.status_code, code=body.get("Code"), body=body)
+            if isinstance(body, dict) and body.get("stat") == "fail":
+                raise SmugMugError(f"{method} {url}: stat=fail code={body.get('code')} {body.get('message')}",
+                                   http_status=r.status_code, code=body.get("code"), body=body)
+            return body
+        raise last_error
+
+    @staticmethod
+    def _message(body):
+        if not isinstance(body, dict):
+            return ""
+        return body.get("Message") or body.get("message") or body.get("_text", "")
+
+    def _note_ratelimit(self, response):
+        remaining = response.headers.get("x-ratelimit-remaining")
+        if remaining is None:
+            return
+        try:
+            self.ratelimit_remaining = int(remaining)
+        except ValueError:
+            return
+        if self.ratelimit_remaining < self.min_ratelimit_remaining:
+            reset = response.headers.get("x-ratelimit-reset")
+            wait = 60
+            if reset and reset.isdigit():
+                wait = max(1, int(reset) - int(time.time()))
+            log.warning("SmugMug rate limit low (%s left); sleeping %ss", remaining, wait)
+            self._sleep(min(wait, 3600))
+
+    def paged(self, path, list_key, params=None):
+        """Yield (item, expansions) for every item of a paged list endpoint."""
+        params = dict(params or {})
+        params.setdefault("count", self.page_size)
+        url = path
+        while url:
+            body = self.request("GET", url, params=params)
+            params = None  # NextPage already carries the query string
+            resp = body.get("Response", {})
+            expansions = body.get("Expansions", {})
+            for item in resp.get(list_key, []) or []:
+                yield item, expansions
+            url = resp.get("Pages", {}).get("NextPage")
+
+    # ------------------------------------------------------------- read API
+
+    def authuser(self):
+        return self.request("GET", "/api/v2!authuser")["Response"]["User"]
+
+    def user_albums(self, nickname):
+        for album, _ in self.paged(f"/api/v2/user/{nickname}!albums", "Album"):
+            yield album
+
+    def album(self, album_key):
+        return self.request("GET", f"/api/v2/album/{album_key}")["Response"]["Album"]
+
+    def album_images(self, album_key, with_metadata=True):
+        """Yield (AlbumImage dict, ImageMetadata dict or {}) for every image in an album."""
+        params = {"_expand": "ImageMetadata"} if with_metadata else {}
+        for img, exp in self.paged(f"/api/v2/album/{album_key}!images", "AlbumImage", params):
+            md_uri = img.get("Uris", {}).get("ImageMetadata", {}).get("Uri")
+            md = exp.get(md_uri, {}).get("ImageMetadata", {}) if md_uri else {}
+            yield img, md
+
+    def node_children(self, node_uri):
+        for node, _ in self.paged(f"{node_uri}!children", "Node"):
+            yield node
+
+    def album_has_image(self, album_key, image_key, serial=0):
+        try:
+            self.request("GET", f"/api/v2/album/{album_key}/image/{image_key}-{serial}")
+            return True
+        except NotFound:
+            return False
+
+    def image_album_keys(self, image_key, serial=0):
+        body = self.request("GET", f"/api/v2/image/{image_key}-{serial}!albums")
+        return [a.get("AlbumKey") for a in body.get("Response", {}).get("Album", []) or []]
+
+    # ------------------------------------------------------------ write API
+
+    def create_node(self, parent_node_uri, node_type, name, privacy="Private"):
+        body = self.request("POST", f"{parent_node_uri}!children",
+                            json_body={"Type": node_type, "Name": name, "UrlName": url_name_for(name),
+                                       "Privacy": privacy})
+        return body["Response"]["Node"]
+
+    def find_child(self, parent_node_uri, node_type, name):
+        for node in self.node_children(parent_node_uri):
+            if node.get("Type") == node_type and node.get("Name") == name:
+                return node
+        return None
+
+    def ensure_folder_path(self, root_node_uri, path):
+        """Find or create each folder in 'A/B/C' under root; return the last folder's node URI."""
+        node_uri = root_node_uri
+        for part in [p for p in path.split("/") if p.strip()]:
+            node = self.find_child(node_uri, "Folder", part)
+            if node is None:
+                node = self.create_node(node_uri, "Folder", part)
+                log.info("created folder %r -> %s", part, node["Uri"])
+            node_uri = node["Uri"]
+        return node_uri
+
+    def ensure_album(self, parent_node_uri, name):
+        """Find or create an album by exact Name under a folder node.
+
+        Returns (album_key, album_uri, node_uri, created: bool).
+        """
+        node = self.find_child(parent_node_uri, "Album", name)
+        created = False
+        if node is None:
+            node = self.create_node(parent_node_uri, "Album", name)
+            created = True
+        album_uri = node["Uris"]["Album"]["Uri"]
+        return album_uri.rsplit("/", 1)[-1], album_uri, node["Uri"], created
+
+    def move_images(self, dest_album_key, album_image_uris):
+        """Move AlbumImages into dest album. All-or-nothing: raises SmugMugError (usually 400) if any URI is bad."""
+        self.request("POST", f"/api/v2/album/{dest_album_key}!moveimages",
+                     json_body={"MoveUris": ",".join(album_image_uris)})
+
+    def rename_album(self, album_key, name):
+        return self.request("PATCH", f"/api/v2/album/{album_key}",
+                            json_body={"Name": name, "UrlName": url_name_for(name)})["Response"]["Album"]
+
+    def delete_album(self, album_key):
+        self.request("DELETE", f"/api/v2/album/{album_key}")

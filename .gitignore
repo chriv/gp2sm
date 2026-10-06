@@ -10,3 +10,7 @@ temp_downloads/
 *.db-shm
 *.lock
 smugmugapikeyandsecret.txt
+probes/
+data/
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,54 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## State of the repo
+
+- **Legacy v2 code (`main.py`, `google_photos_module.py`, `smugmug_module.py`, `database_manager.py`) is untrusted.** It was assembled by copying and pasting from chat assistants, and probes showed core parts never worked:
+  - its SmugMug duplicate check reads the wrong response key and misuses `_filter`,
+  - its album rotation created albums in bursts,
+  - the Google Photos Library API it depends on no longer returns existing library items (403 since the March 2025 policy change).
+
+  Don't fix it in place. New work goes in the `gp2sm/` package.
+- `docs/PLAN.md` is the current plan. `docs/smugmug-api.md` records SmugMug behavior **confirmed by probes**. Check it before relying on any SmugMug endpoint, and add anything newly confirmed.
+- The repo is meant to become public. Keep personal names, account details and real album names out of tracked files. They belong in gitignored config (`data/`, `*.json`).
+
+## Commands
+
+```bash
+.venv/bin/python -m pytest -q tests                      # all unit tests
+.venv/bin/python -m pytest -q tests/test_planning.py -k heic   # single test
+.venv/bin/python -m gp2sm.consolidate --help             # consolidation CLI (config: data/consolidate.json)
+```
+
+Consolidation pipeline (each step can be rerun; state lives in `data/consolidation.db`):
+`inventory → import-legacy → match → plan → report → apply [--dry-run|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
+
+## Architecture (`gp2sm/`)
+
+- `smugmug_client.py`: the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging via `Pages.NextPage`, per-endpoint list keys (`AlbumImage` vs `Image` vs `Node`), and rate-limit headers. Batch `!moveimages` is all-or-nothing.
+- `planning.py`: pure logic, no I/O, unit tested.
+  - Matches SmugMug images to legacy Google items (MD5 → filename / HEIC-stem `.JPG` with a dimension check). For photos, a known dimension mismatch rules a match out.
+  - Groups byte-identical duplicates by `ArchivedMD5` (SmugMug's video re-encoding is deterministic, so this works for videos too) and picks a keeper.
+  - Assigns each item a target album, with soft-cap splitting into `- Part N`.
+- `state.py`: the SQLite schema. `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`.
+- `consolidate.py`: CLI orchestration. Before each batch, items are marked `in_progress`. After the move, the batch is checked by the target's `ImageCount` change, falling back to per-image lookups. Any leftover `in_progress` or `unknown` items are reconciled with `image!albums` at the start of the next run. Duplicates are moved to a review album, never deleted.
+
+## Probes
+
+`probes/` (gitignored) holds standalone scripts that exercise real APIs. Outputs, logs and copies of credentials go in `probes/out/`. Probes always work on **copies** of credential files, because the legacy modules rewrite or delete them on failure. Write tests go only into a private `gp2sm-sandbox` folder, which the probe deletes afterwards.
+
+## Gotchas
+
+- Google: the daily quotas are unpublished, and once you hit one you're blocked until the reset. Treat a 429 as "stop for the day", not something to retry.
+- SmugMug converts HEIC to JPEG on upload (`NAME.HEIC` becomes `NAME.JPG`, and the original isn't kept). It re-encodes videos, rejects WebP/ICO/BMP and tiny videos (code 64 or 6), and silently accepts duplicate uploads.
+- `AlbumImage.Date` is the upload time. Capture time comes from `ImageMetadata.DateTimeCreated` (use `_expand=ImageMetadata` on `!images`).
+- Legacy conversion uploads lost their EXIF. Their capture dates come from the legacy transfer DBs (`media_items.creation_timestamp`), joined in `matches`.
+
+## Code style (carried over from `constraints.md`)
+
+- Don't change `__version__` or TODO comments unless asked.
+- One statement per line. Never put a block body on the same line as `if`/`for`/`with`/`try`.
+- Use `logging`, not `print`, except for CLI output and interactive prompts.
+- Never wrap imports in try/except.
+- Keep each API's code in its own module.
