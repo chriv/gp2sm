@@ -6,6 +6,25 @@ import sqlite3
 
 SCHEMA_VERSION = 1
 
+# TODO(schema, ROADMAP A1): this schema is SmugMug- and Google-shaped. That's acceptable while each
+# database tracks one job, but long-term tracking needs a neutral, versioned schema with a
+# backward-compatible migration. Specifically:
+#   1. Rename service-shaped columns to neutral names, and add a `service` column wherever an id is stored:
+#        images.image_key -> item_id, images.serial -> (fold into item_ref),
+#        images.src_album_key/current_album_key -> src_collection_id/current_collection_id,
+#        images.src_album_image_uri -> src_item_ref, images.archived_md5/archived_size -> stored_md5/stored_size,
+#        images.capture_dt_smug -> capture_time_dest, images.raw_image/raw_metadata -> raw_item/raw_meta (JSON);
+#        source_albums -> source_collections(collection_id, ref, name, path, item_count, ...);
+#        targets.album_key/album_uri/node_uri -> collection_id/collection_ref/parent_ref;
+#        plan.image_key, dup_groups.image_key/keeper_image_key, matches.image_key -> item_id/keeper_item_id;
+#        uploads.image_key/album_image_uri -> dest_item_id/dest_item_ref.
+#   2. Source-side ids: matches.google_id and legacy_items/legacy_md5 belong to a Google "legacy bridge"
+#      plugin. Move them to plugin-owned tables (source_items(service, source_id, ...)) keyed by service.
+#   3. Make migrations real: bump SCHEMA_VERSION, keep ordered migration steps (ALTER/rename/copy), and
+#      test each step against a synthetic DB of the previous version. _add_missing_columns() is only a stopgap.
+#   4. Keep `events` append-only and service-neutral (`detail` JSON already is), so history stays readable
+#      across migrations.
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 

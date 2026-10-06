@@ -24,7 +24,6 @@ import sys
 import tarfile
 import tempfile
 
-import requests
 from PIL import Image, ImageOps
 
 from gp2sm import planning
@@ -179,11 +178,7 @@ def hash_smug(idx, client, keys, workers):
     log.info("SmugMug images to hash: %d (%d cached)", len(todo), len(keys) - len(todo))
 
     def one(key):
-        sizes = client.request("GET", f"/api/v2/image/{key}-0!sizes")["Response"]["ImageSizes"]
-        url = sizes.get("SmallImageUrl") or sizes.get("MediumImageUrl") or sizes.get("LargestImageUrl")
-        r = requests.get(url, timeout=60)
-        r.raise_for_status()
-        return dhash(Image.open(io.BytesIO(r.content)))
+        return dhash(Image.open(io.BytesIO(client.preview_bytes(key))))
 
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
         futures = {pool.submit(one, k): k for k in todo}

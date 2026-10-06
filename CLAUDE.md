@@ -40,7 +40,8 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 ## Modularity rule (until Stage A1 adds the service layer)
 
 The goal is a plugin architecture with any photo service on either end (see `docs/ROADMAP.md` A1). Don't add to the existing coupling:
-- Only `smugmug_client.py` may build SmugMug URLs, make HTTP calls to SmugMug, or know SmugMug quirks. If logic needs something new from SmugMug, add a client method instead of a raw `request()`/`requests.get` call elsewhere.
+- Only `smugmug_client.py` may build SmugMug URLs, make HTTP calls to SmugMug, or know SmugMug field names and quirks. Everything else uses its **neutral surface** (`list_albums`, `list_album_items`, `item_ref`, `move_items`, `album_contains`, `item_album_ids`, `album_item_count`, `upload_file`, `remove_item`, `preview_bytes`, `root_folder`, `set_sort_by_filename`, `ensure_folder_path`, `ensure_album`, `delete_album`), which returns plain dicts (`item_id`, `item_ref`, `name`, `md5`, `size`, `width`, `height`, `is_video`, `duration_s`, `capture_time`, …). If logic needs something new, add a neutral method there.
+- The state schema is still SmugMug-/Google-shaped (see the TODO in `state.py`). Map columns to neutral names at the boundary (`SELECT image_key AS item_id`) rather than spreading service names into logic.
 - Only the `takeout_*` modules may know Google Takeout layout and metadata formats.
 - New decision logic goes in pure functions that take neutral values (names, timestamps, hashes, dimensions), not service field names.
 

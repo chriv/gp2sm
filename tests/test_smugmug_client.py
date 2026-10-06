@@ -139,3 +139,29 @@ def test_idempotent_write_is_retried_after_503():
     c, s = client([FakeResponse(503, {}), FakeResponse(200, {"Response": {"Album": {"SortMethod": "Filename"}}})])
     assert c.set_album_sort("K")["SortMethod"] == "Filename"
     assert len(s.calls) == 2
+
+
+def test_neutral_item_mapping_hides_smugmug_field_names():
+    md_uri = "/api/v2/image/abc-0!metadata"
+    c, _ = client([FakeResponse(200, {
+        "Response": {"AlbumImage": [{"ImageKey": "abc", "Serial": 0, "Uri": "/api/v2/album/AL/image/abc-0",
+                                     "FileName": "IMG_1.JPG", "Format": "JPG", "IsVideo": False,
+                                     "ArchivedMD5": "m", "ArchivedSize": 10, "OriginalWidth": 4, "OriginalHeight": 3,
+                                     "DateTimeUploaded": "2025-01-01", "Uris": {"ImageMetadata": {"Uri": md_uri}}}]},
+        "Expansions": {md_uri: {"ImageMetadata": {"DateTimeCreated": "2020-01-02T03:04:05", "Duration": "6.08 s"}}}})])
+    (it,) = list(c.list_album_items("AL", with_metadata=True))
+    assert (it["item_id"], it["name"], it["md5"], it["size"], it["width"], it["height"]) == ("abc", "IMG_1.JPG", "m", 10, 4, 3)
+    assert it["item_ref"] == "/api/v2/album/AL/image/abc-0" and it["is_video"] is False
+    assert it["capture_time"] == "2020-01-02T03:04:05" and it["duration_s"] == 6.08
+    assert "Uris" not in it["raw"]
+
+
+def test_item_ref_and_upload_file_result():
+    c, s = client([FakeResponse(200, {"stat": "ok", "Image": {"ImageUri": "/api/v2/image/K9-0",
+                                                               "AlbumImageUri": "/api/v2/album/AL/image/K9-0"}})])
+    assert c.item_ref("AL", "K9") == "/api/v2/album/AL/image/K9-0"
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+        f.write(b"x"); f.flush()
+        assert c.upload_file("AL", f.name, "a.jpg", "image/jpeg") == {"item_id": "K9", "item_ref": "/api/v2/album/AL/image/K9-0"}
+    assert s.calls[0][2]["headers"]["X-Smug-AlbumUri"] == "/api/v2/album/AL"

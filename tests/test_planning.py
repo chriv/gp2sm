@@ -15,7 +15,7 @@ def legacy(gid, filename, ts, w=100, h=50):
 
 
 def img(key, filename, md5=None, is_video=0, w=100, h=50, uploaded="2025-01-01T00:00:00"):
-    return {"image_key": key, "filename": filename, "archived_md5": md5, "is_video": is_video,
+    return {"item_id": key, "filename": filename, "md5": md5, "is_video": is_video,
             "width": w, "height": h, "uploaded": uploaded}
 
 
@@ -102,7 +102,7 @@ def test_group_keeper_prefers_confidence_then_upload_time():
               img("c", "y.jpg", md5="n")]
     matches = {"a": {"confidence": "high"}, "b": {"confidence": "low"}, "c": {"confidence": "none"}}
     g = planning.group_duplicates(images, matches)
-    assert g["a"]["is_keeper"] == 1 and g["b"]["is_keeper"] == 0 and g["b"]["keeper_image_key"] == "a"
+    assert g["a"]["is_keeper"] == 1 and g["b"]["is_keeper"] == 0 and g["b"]["keeper_item_id"] == "a"
     assert g["c"]["group_size"] == 1 and g["c"]["is_keeper"] == 1
 
 
@@ -119,7 +119,7 @@ def test_plan_targets_duplicates_and_capacity_split():
                for i, k in enumerate("acd", 1)}
     matches["v"] = {"capture_local": "2021-07-04T00:00:00", "confidence": "low", "method": "filename"}
     groups = planning.group_duplicates(images, matches)
-    rows = {r["image_key"]: r for r in planning.plan_actions(images, matches, groups, CFG)}
+    rows = {r["item_id"]: r for r in planning.plan_actions(images, matches, groups, CFG)}
     assert rows["b"]["action"] == "park_duplicate" and rows["b"]["target_name"] == "Dupes"
     assert [rows[k]["target_name"] for k in "acd"] == ["P 2023-05", "P 2023-05", "P 2023-05 - Part 2"]
     assert rows["v"]["target_name"] == "V 2021"
@@ -131,7 +131,7 @@ def test_duplicate_member_dates_the_keeper():
     matches = {"b": {"capture_local": "2020-02-02T00:00:00", "confidence": "medium", "method": "filename"}}
     groups = planning.group_duplicates(images, matches)
     keeper = [k for k, g in groups.items() if g["is_keeper"]][0]
-    rows = {r["image_key"]: r for r in planning.plan_actions(images, matches, groups, CFG)}
+    rows = {r["item_id"]: r for r in planning.plan_actions(images, matches, groups, CFG)}
     assert rows[keeper]["target_name"] == "P 2020-02"
 
 

@@ -285,6 +285,94 @@ class SmugMugClient:
         return self.request("PATCH", f"/api/v2/album/{album_key}", idempotent=True,
                             json_body={"SortMethod": method, "SortDirection": direction})["Response"]["Album"]
 
+    # ------------------------------------------------------------------
+    # Neutral surface. The rest of gp2sm uses only these methods and the plain dicts they return, never
+    # SmugMug URLs or field names. (They'll become the SmugMug adapter's PhotoDestination implementation
+    # in ROADMAP A1.)
+    #
+    # item dict:  item_id, serial, item_ref, name, format, is_video, md5, size, width, height,
+    #             duration_s, uploaded, capture_time, raw, raw_metadata
+    # album dict: album_id, ref, name, path, item_count, raw
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _duration_s(value):
+        import re as _re
+        m = _re.search(r"[\d.]+", str(value or ""))
+        return float(m.group()) if m else None
+
+    @classmethod
+    def _neutral_item(cls, img, md=None):
+        md = md or {}
+        return {
+            "item_id": img.get("ImageKey"), "serial": img.get("Serial") or 0, "item_ref": img.get("Uri"),
+            "name": img.get("FileName"), "format": img.get("Format"), "is_video": bool(img.get("IsVideo")),
+            "md5": img.get("ArchivedMD5"), "size": img.get("ArchivedSize"),
+            "width": img.get("OriginalWidth"), "height": img.get("OriginalHeight"),
+            "duration_s": cls._duration_s(md.get("Duration")), "uploaded": img.get("DateTimeUploaded"),
+            "capture_time": md.get("DateTimeCreated") or None,
+            "raw": {k: v for k, v in img.items() if k != "Uris"}, "raw_metadata": md or None,
+        }
+
+    def root_folder(self):
+        """Reference of the account's root folder."""
+        return self.request("GET", "/api/v2!authuser")["Response"]["User"]["Uris"]["Node"]["Uri"]
+
+    def list_albums(self):
+        nickname = self.authuser()["NickName"]
+        for a in self.user_albums(nickname):
+            yield {"album_id": a.get("AlbumKey"), "ref": a.get("Uri"), "name": a.get("Name"),
+                   "path": a.get("UrlPath"), "item_count": a.get("ImageCount"), "raw": a}
+
+    def album_ref(self, album_id):
+        return f"/api/v2/album/{album_id}"
+
+    def item_ref(self, album_id, item_id, serial=0):
+        """Reference to an item *in a specific album* (what moves and removals operate on)."""
+        return f"/api/v2/album/{album_id}/image/{item_id}-{serial or 0}"
+
+    def album_item_count(self, album_id):
+        return self.album(album_id).get("ImageCount", 0) or 0
+
+    def list_album_items(self, album_id, with_metadata=False, ids_only=False):
+        """Yield neutral item dicts for an album. ids_only fetches minimal fields (fast; only item_id is set)."""
+        if ids_only:
+            for img, _ in self.album_images(album_id, with_metadata=False, fields="ImageKey"):
+                yield {"item_id": img.get("ImageKey")}
+            return
+        for img, md in self.album_images(album_id, with_metadata=with_metadata):
+            yield self._neutral_item(img, md)
+
+    def album_contains(self, album_id, item_id, serial=0):
+        return self.album_has_image(album_id, item_id, serial)
+
+    def item_album_ids(self, item_id, serial=0):
+        return self.image_album_keys(item_id, serial)
+
+    def move_items(self, dest_album_id, item_refs):
+        """All-or-nothing on SmugMug: a rejected batch (HTTP 400) moves nothing."""
+        self.move_images(dest_album_id, item_refs)
+
+    def remove_item(self, item_ref):
+        """Remove an item from the album its ref points into (deletes it if that's its only album)."""
+        self.request("DELETE", item_ref)
+
+    def upload_file(self, album_id, path, filename, content_type):
+        """Upload; returns {'item_id', 'item_ref'}. Raises SmugMugError(ambiguous=True) if the outcome is unknown."""
+        image = self.upload(self.album_ref(album_id), path, filename, content_type)
+        return {"item_id": image["ImageUri"].rsplit("/", 1)[-1].split("-")[0], "item_ref": image.get("AlbumImageUri")}
+
+    def preview_bytes(self, item_id, serial=0):
+        """A small rendition of the item (for perceptual matching)."""
+        sizes = self.request("GET", f"/api/v2/image/{item_id}-{serial or 0}!sizes")["Response"]["ImageSizes"]
+        url = sizes.get("SmallImageUrl") or sizes.get("MediumImageUrl") or sizes.get("LargestImageUrl")
+        r = requests.get(url, timeout=60)
+        r.raise_for_status()
+        return r.content
+
+    def set_sort_by_filename(self, album_id):
+        return self.set_album_sort(album_id, "FileName")
+
     def rename_album(self, album_key, name):
         return self.request("PATCH", f"/api/v2/album/{album_key}", idempotent=True,
                             json_body={"Name": name, "UrlName": url_name_for(name)})["Response"]["Album"]

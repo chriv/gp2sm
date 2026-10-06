@@ -8,7 +8,7 @@ the existing JPEG.
   plan     decide what to upload, target albums and exact filenames (idempotent)
   stage    stream the archives: HEIC -> JPEG (sips, EXIF kept; missing capture date filled from the
            Takeout sidecar, losslessly) and write clips as-is into data/stage/
-  upload   create albums, set filename sort, upload staged files; records ImageKey per file and
+  upload   create albums, set filename sort, upload staged files; records the item id per file and
            reconciles ambiguous outcomes against the album before any retry
   verify   compare each touched album on the server with the recorded uploads
   remove   delete specific uploads made by this tool (by id; dry run unless --yes)
@@ -285,10 +285,10 @@ class PairingError(Exception):
 
 
 def find_in_album(client, album_key, filename, md5=None):
-    """Return (image_key, album_image_uri) of an image named `filename` in the album, or None."""
-    for img, _ in client.album_images(album_key, with_metadata=False):
-        if (img.get("FileName") or "").lower() == filename.lower() and (md5 is None or img.get("ArchivedMD5") == md5):
-            return img["ImageKey"], img["Uri"]
+    """Return (item_id, item_ref) of an item named `filename` (and, if given, with this md5) in the album."""
+    for it in client.list_album_items(album_key):
+        if (it["name"] or "").lower() == filename.lower() and (md5 is None or it["md5"] == md5):
+            return it["item_id"], it["item_ref"]
     return None
 
 
@@ -327,18 +327,17 @@ def cmd_upload(st, cfg, client, args):
         log.warning("stop requested; finishing in-flight uploads (Ctrl-C again to abort)")
     signal.signal(signal.SIGINT, handler)
 
-    root = client.authuser()["Uris"]["Node"]["Uri"]
-    folder_uri = client.ensure_folder_path(root, cfg["target_folder"])
+    folder_uri = client.ensure_folder_path(client.root_folder(), cfg["target_folder"])
     albums = {}
     for name in sorted({r["target_name"] for r in rows}):
         key = ensure_target(st, cfg, client, folder_uri, name)
         st.db.commit()
-        albums[name] = (key, st.one("SELECT album_uri FROM targets WHERE name=?", name) or f"/api/v2/album/{key}")
+        albums[name] = key
     log.info("uploading %d files into %d albums", len(rows), len(albums))
 
     def one(r):
         ext = os.path.splitext(r["upload_name"])[1].upper()
-        return client.upload(albums[r["target_name"]][1], r["staged_path"], r["upload_name"], CONTENT_TYPES[ext])
+        return client.upload_file(albums[r["target_name"]], r["staged_path"], r["upload_name"], CONTENT_TYPES[ext])
 
     totals = {"uploaded": 0, "failed": 0, "unknown": 0}
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
@@ -362,10 +361,9 @@ def cmd_upload(st, cfg, client, args):
             fut = next(concurrent.futures.as_completed(inflight))
             r = inflight.pop(fut)
             try:
-                img = fut.result()
-                key = img["ImageUri"].rsplit("/", 1)[-1].split("-")[0]
+                item = fut.result()
                 st.db.execute("UPDATE uploads SET status='done', image_key=?, album_image_uri=?, last_error=NULL, "
-                              "updated_at=? WHERE upload_id=?", (key, img.get("AlbumImageUri"), now(), r["upload_id"]))
+                              "updated_at=? WHERE upload_id=?", (item["item_id"], item["item_ref"], now(), r["upload_id"]))
                 totals["uploaded"] += 1
             except SmugMugError as e:
                 status = "unknown" if e.ambiguous else "failed"
@@ -383,9 +381,9 @@ def cmd_upload(st, cfg, client, args):
         totals["reconciled"] = reconcile_uploads(st, client, unknown)
     # Filename sort keeps each Live Photo's JPEG and clip side by side. Applied after uploading so it can
     # never block uploads; it's an album setting, so re-running is harmless.
-    for name, (key, _) in albums.items():
+    for name, key in albums.items():
         try:
-            client.set_album_sort(key, "FileName")
+            client.set_sort_by_filename(key)
         except SmugMugError as e:
             log.warning("could not set filename sort on %s: %s", name, e)
             st.event("album_sort_failed", level="warning", album_key=key, name=name, error=str(e))
@@ -409,7 +407,7 @@ def cmd_remove(st, cfg, client, args):
             log.info("dry run: would remove %s from %s", r["upload_name"], r["target_name"])
             continue
         try:
-            client.request("DELETE", r["album_image_uri"])
+            client.remove_item(r["album_image_uri"])
         except NotFound:
             log.info("%s already gone", r["upload_name"])
         new_status = "needs_pairing" if r["role"] == "clip" else "staged"
@@ -427,7 +425,7 @@ def cmd_remove(st, cfg, client, args):
 def cmd_verify(st, cfg, client, args):
     """Confirm uploads on the server. Incremental: only uploads without verified_at (unless --all).
 
-    Lists each affected album once, asking only for ImageKey, with a few albums in parallel.
+    Lists each affected album once (item ids only), with a few albums in parallel.
     """
     where = "status='done'" + ("" if args.all else " AND verified_at IS NULL")
     rows = st.q(f"SELECT upload_id, target_name, image_key FROM uploads WHERE {where}")
@@ -440,8 +438,7 @@ def cmd_verify(st, cfg, client, args):
     album_keys = {name: st.one("SELECT album_key FROM targets WHERE name=?", name) for name in by_album}
 
     def listing(name):  # runs in a worker thread: no database access here
-        return name, {img["ImageKey"] for img, _ in client.album_images(album_keys[name], with_metadata=False,
-                                                                        fields="ImageKey")}
+        return name, {it["item_id"] for it in client.list_album_items(album_keys[name], ids_only=True)}
 
     out = {"albums_ok": 0, "albums_bad": 0, "uploads_verified": 0, "uploads_missing": 0}
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:

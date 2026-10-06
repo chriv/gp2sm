@@ -1,4 +1,4 @@
-"""Pure consolidation logic: match SmugMug images to Google items, group exact duplicates,
+"""Pure consolidation logic: match destination items to source items, group exact duplicates,
 and decide each image's destination album. No I/O here, so it can be unit tested.
 """
 
@@ -41,7 +41,7 @@ def dims_match(w1, h1, w2, h2):
 
 class LegacyIndex:
     """Lookups over legacy Google items: by MD5, by filename, and by HEIC-stem.jpg
-    (SmugMug converts NAME.HEIC to NAME.JPG on upload)."""
+    (the destination may store NAME.HEIC as NAME.JPG)."""
 
     def __init__(self, items, md5_rows):
         self.items = {it["google_id"]: it for it in items}
@@ -60,7 +60,7 @@ class LegacyIndex:
 
 
 def match_image(img, index, tz_name):
-    """Tie one SmugMug image to a Google item.
+    """Tie one destination item to a source (legacy Google) item.
 
     Returns dict(google_id, method, confidence, capture_ts_utc, capture_local, candidates, notes).
     Confidence: high = byte-identical (MD5); medium = unique filename with matching dimensions;
@@ -75,12 +75,12 @@ def match_image(img, index, tz_name):
                       capture_local=to_local(ts, tz_name), candidates=candidates, notes=notes)
         return result
 
-    if not img["is_video"] and img.get("archived_md5") in index.by_md5:
-        gids = sorted(index.by_md5[img["archived_md5"]], key=lambda g: index.items[g]["creation_ts"] or "")
+    if not img["is_video"] and img.get("md5") in index.by_md5:
+        gids = sorted(index.by_md5[img["md5"]], key=lambda g: index.items[g]["creation_ts"] or "")
         return finish(gids[0], "md5" if len(gids) == 1 else "md5_multi", "high", len(gids))
 
     # Candidates: same filename, plus (for NAME.JPG) Google items named NAME.HEIC/.HEIF, since
-    # SmugMug renames converted HEICs. Both kinds are considered together: an identically named
+    # the destination may rename converted HEICs. Both kinds are considered together: an identically named
     # JPEG is often a different photo than the HEIC this file was converted from.
     name = (img.get("filename") or "").lower()
     cands = list(index.by_name.get(name, []))
@@ -125,26 +125,26 @@ def match_image(img, index, tz_name):
 # ------------------------------------------------------------------ grouping
 
 def group_duplicates(images, matches):
-    """Group images by ArchivedMD5 and choose one keeper per group.
+    """Group items by content hash (md5) and choose one keeper per group.
 
-    SmugMug's video re-encoding is deterministic, so identical uploads share an ArchivedMD5 for
-    videos too. Keeper: best match confidence, then earliest upload, then image_key.
-    Returns {image_key: dict(group_key, group_size, keeper_image_key, is_keeper)}.
+    The destination's video re-encoding is deterministic, so identical uploads share a stored hash for
+    videos too. Keeper: best match confidence, then earliest upload, then item_id.
+    Returns {item_id: dict(group_key, group_size, keeper_item_id, is_keeper)}.
     """
     groups = defaultdict(list)
     for img in images:
-        key = img.get("archived_md5") or f"nomd5:{img['image_key']}"
+        key = img.get("md5") or f"nomd5:{img['item_id']}"
         groups[key].append(img)
 
     out = {}
     for key, members in groups.items():
         def rank(img):
-            m = matches.get(img["image_key"], {})
-            return (-CONFIDENCE_RANK.get(m.get("confidence"), 0), img.get("uploaded") or "", img["image_key"])
+            m = matches.get(img["item_id"], {})
+            return (-CONFIDENCE_RANK.get(m.get("confidence"), 0), img.get("uploaded") or "", img["item_id"])
         keeper = min(members, key=rank)
         for img in members:
-            out[img["image_key"]] = {"group_key": key, "group_size": len(members),
-                                     "keeper_image_key": keeper["image_key"],
+            out[img["item_id"]] = {"group_key": key, "group_size": len(members),
+                                     "keeper_item_id": keeper["item_id"],
                                      "is_keeper": int(img is keeper)}
     return out
 
@@ -153,8 +153,8 @@ def group_capture(groups, matches):
     """Best-known capture time per group: identical bytes are the same item, so any member's
     match can date the keeper. Returns {group_key: match dict}."""
     best = {}
-    for image_key, g in groups.items():
-        m = matches.get(image_key)
+    for item_id, g in groups.items():
+        m = matches.get(item_id)
         if not m or not m.get("capture_local"):
             continue
         cur = best.get(g["group_key"])
@@ -187,24 +187,24 @@ def plan_actions(images, matches, groups, cfg, existing=None):
     Keepers move to a dated (or undated) album; non-keepers move to the duplicates album, which
     is reversible (nothing is deleted). Targets over cfg['album_soft_cap'] split into
     '<name> - Part N' in capture order. Items whose plan status is already 'done' keep their target.
-    Returns list of dict(image_key, action, target_name, kind, reason).
+    Returns list of dict(item_id, action, target_name, kind, reason).
     """
     existing = existing or {}
     gcap = group_capture(groups, matches)
     rows = []
     for img in images:
-        g = groups[img["image_key"]]
+        g = groups[img["item_id"]]
         if g["is_keeper"]:
-            m = gcap.get(g["group_key"]) or matches.get(img["image_key"], {})
+            m = gcap.get(g["group_key"]) or matches.get(img["item_id"], {})
             base, kind = base_target(img["is_video"], m.get("capture_local"), cfg)
             reason = f"keeper; date via {m.get('method', 'none')} ({m.get('confidence', 'none')})"
-            rows.append({"image_key": img["image_key"], "action": "move", "base": base, "kind": kind,
-                         "sort": (m.get("capture_local") or "", img["image_key"]), "reason": reason})
+            rows.append({"item_id": img["item_id"], "action": "move", "base": base, "kind": kind,
+                         "sort": (m.get("capture_local") or "", img["item_id"]), "reason": reason})
         else:
-            rows.append({"image_key": img["image_key"], "action": "park_duplicate",
+            rows.append({"item_id": img["item_id"], "action": "park_duplicate",
                          "base": cfg["duplicates_album"], "kind": "duplicates",
-                         "sort": (g["group_key"], img["image_key"]),
-                         "reason": f"duplicate of {g['keeper_image_key']} ({g['group_size']} copies)"})
+                         "sort": (g["group_key"], img["item_id"]),
+                         "reason": f"duplicate of {g['keeper_item_id']} ({g['group_size']} copies)"})
 
     cap = cfg["album_soft_cap"]
     by_base = defaultdict(list)
@@ -213,9 +213,9 @@ def plan_actions(images, matches, groups, cfg, existing=None):
     for base, members in by_base.items():
         members.sort(key=lambda r: r["sort"])
         for i, r in enumerate(members):
-            prior = existing.get(r["image_key"])
+            prior = existing.get(r["item_id"])
             if prior and prior["status"] == "done":
                 r["target_name"] = prior["target_name"]
             else:
                 r["target_name"] = part_name(base, i // cap + 1)
-    return [{k: r[k] for k in ("image_key", "action", "target_name", "kind", "reason")} for r in rows]
+    return [{k: r[k] for k in ("item_id", "action", "target_name", "kind", "reason")} for r in rows]

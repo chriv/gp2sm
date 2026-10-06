@@ -78,41 +78,34 @@ def setup_logging(log_file, debug=False):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def album_image_uri(album_key, image_key, serial):
-    return f"/api/v2/album/{album_key}/image/{image_key}-{serial or 0}"
-
-
 # ---------------------------------------------------------------- inventory
 
 def cmd_inventory(st, cfg, client, args):
-    user = client.authuser()
-    nick = user["NickName"]
     patterns = [p.lower() for p in cfg["source_album_patterns"]]
     if not patterns:
         raise SystemExit("config: source_album_patterns is empty")
     target_prefix = "/" + cfg["target_folder"].strip("/").lower() + "/"
-    albums = [a for a in client.user_albums(nick)
-              if any(p in (a.get("UrlPath") or "").lower() for p in patterns)
-              and not (a.get("UrlPath") or "").lower().startswith(target_prefix)]
+    albums = [a for a in client.list_albums()
+              if any(p in (a["path"] or "").lower() for p in patterns)
+              and not (a["path"] or "").lower().startswith(target_prefix)]
     log.info("%d source albums match %s", len(albums), cfg["source_album_patterns"])
     for a in albums:
         st.db.execute("INSERT INTO source_albums(album_key, album_uri, name, url_path, image_count) VALUES(?,?,?,?,?) "
                       "ON CONFLICT(album_key) DO UPDATE SET name=excluded.name, url_path=excluded.url_path, "
                       "image_count=excluded.image_count",
-                      (a["AlbumKey"], a["Uri"], a.get("Name"), a.get("UrlPath"), a.get("ImageCount")))
+                      (a["album_id"], a["ref"], a["name"], a["path"], a["item_count"]))
     st.db.commit()
 
     def fetch(album):
-        return album, list(client.album_images(album["AlbumKey"]))
+        return album, list(client.list_album_items(album["album_id"], with_metadata=True))
 
     total = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="inv") as pool:
-        for album, rows in pool.map(fetch, [a for a in albums if a.get("ImageCount")]):
-            key = album["AlbumKey"]
+        for album, items in pool.map(fetch, [a for a in albums if a["item_count"]]):
+            key = album["album_id"]
             ts = now()
             with st.db:
-                for img, md in rows:
-                    raw = {k: v for k, v in img.items() if k != "Uris"}
+                for it in items:
                     st.db.execute(
                         "INSERT INTO images(image_key, serial, src_album_key, src_album_image_uri, current_album_key,"
                         " filename, format, is_video, archived_md5, archived_size, width, height, duration_s,"
@@ -121,19 +114,17 @@ def cmd_inventory(st, cfg, client, args):
                         " ON CONFLICT(image_key) DO UPDATE SET current_album_key=excluded.current_album_key,"
                         " archived_md5=excluded.archived_md5, raw_image=excluded.raw_image,"
                         " raw_metadata=excluded.raw_metadata, last_seen=excluded.last_seen",
-                        (img["ImageKey"], img.get("Serial") or 0, key, img.get("Uri"), key, img.get("FileName"),
-                         img.get("Format"), int(bool(img.get("IsVideo"))), img.get("ArchivedMD5"),
-                         img.get("ArchivedSize"), img.get("OriginalWidth"), img.get("OriginalHeight"),
-                         planning.parse_duration(md.get("Duration")), img.get("DateTimeUploaded"),
-                         md.get("DateTimeCreated") or None, json.dumps(raw), json.dumps(md) if md else None,
-                         ts, ts))
+                        (it["item_id"], it["serial"], key, it["item_ref"], key, it["name"], it["format"],
+                         int(it["is_video"]), it["md5"], it["size"], it["width"], it["height"], it["duration_s"],
+                         it["uploaded"], it["capture_time"], json.dumps(it["raw"]),
+                         json.dumps(it["raw_metadata"]) if it["raw_metadata"] else None, ts, ts))
                 st.db.execute("UPDATE source_albums SET rows_stored=?, inventoried_at=? WHERE album_key=?",
-                              (len(rows), ts, key))
-                st.event("inventory_album", album_key=key, commit=False, rows=len(rows),
-                         image_count=album.get("ImageCount"), url_path=album.get("UrlPath"))
-            flag = "" if len(rows) == album.get("ImageCount") else f" (ImageCount says {album.get('ImageCount')})"
-            log.info("inventoried %s %s: %d%s", key, album.get("UrlPath"), len(rows), flag)
-            total += len(rows)
+                              (len(items), ts, key))
+                st.event("inventory_album", album_key=key, commit=False, rows=len(items),
+                         item_count=album["item_count"], path=album["path"])
+            flag = "" if len(items) == album["item_count"] else f" (album reports {album['item_count']})"
+            log.info("inventoried %s %s: %d%s", key, album["path"], len(items), flag)
+            total += len(items)
     return {"albums": len(albums), "images": total}
 
 
@@ -179,15 +170,15 @@ def cmd_import_legacy(st, cfg, client, args):
 # -------------------------------------------------------------------- match
 
 def load_images(st):
-    return [dict(r) for r in st.q("SELECT image_key, filename, is_video, archived_md5, width, height, uploaded "
-                                  "FROM images")]
+    return [dict(r) for r in st.q("SELECT image_key AS item_id, filename, is_video, archived_md5 AS md5, width, height, "
+                                  "uploaded FROM images")]
 
 
 def cmd_match(st, cfg, client, args):
     index = planning.LegacyIndex([dict(r) for r in st.q("SELECT * FROM legacy_items")],
                                  [dict(r) for r in st.q("SELECT google_id, md5 FROM legacy_md5")])
     images = load_images(st)
-    matches = {img["image_key"]: planning.match_image(img, index, cfg["timezone"]) for img in images}
+    matches = {img["item_id"]: planning.match_image(img, index, cfg["timezone"]) for img in images}
     groups = planning.group_duplicates(images, matches)
     with st.db:
         st.db.execute("DELETE FROM matches")
@@ -196,7 +187,7 @@ def cmd_match(st, cfg, client, args):
                             m["capture_local"], m["candidates"], m["notes"]) for k, m in matches.items()])
         st.db.execute("DELETE FROM dup_groups")
         st.db.executemany("INSERT INTO dup_groups VALUES(?,?,?,?,?)",
-                          [(k, g["group_key"], g["group_size"], g["keeper_image_key"], g["is_keeper"])
+                          [(k, g["group_key"], g["group_size"], g["keeper_item_id"], g["is_keeper"])
                            for k, g in groups.items()])
     summary = {r[0]: r[1] for r in st.q("SELECT method, COUNT(*) FROM matches GROUP BY method")}
     summary["keepers"] = st.one("SELECT COUNT(*) FROM dup_groups WHERE is_keeper=1")
@@ -208,29 +199,31 @@ def cmd_match(st, cfg, client, args):
 # --------------------------------------------------------------------- plan
 
 def cmd_plan(st, cfg, client, args):
-    images = [dict(r) for r in st.q("SELECT image_key, filename, is_video, archived_md5, uploaded FROM images")]
+    images = [dict(r) for r in st.q("SELECT image_key AS item_id, filename, is_video, archived_md5 AS md5, uploaded "
+                                    "FROM images")]
     matches = {r["image_key"]: dict(r) for r in st.q("SELECT * FROM matches")}
-    groups = {r["image_key"]: dict(r) for r in st.q("SELECT * FROM dup_groups")}
+    groups = {r["item_id"]: dict(r) for r in st.q(
+        "SELECT image_key AS item_id, group_key, group_size, keeper_image_key AS keeper_item_id, is_keeper FROM dup_groups")}
     if not groups:
         raise SystemExit("run `match` first")
-    existing = {r["image_key"]: dict(r) for r in st.q("SELECT image_key, status, target_name FROM plan")}
+    existing = {r["item_id"]: dict(r) for r in st.q("SELECT image_key AS item_id, status, target_name FROM plan")}
     rows = planning.plan_actions(images, matches, groups, cfg, existing)
     ts = now()
     changed = 0
     with st.db:
         for r in rows:
-            prior = existing.get(r["image_key"])
+            prior = existing.get(r["item_id"])
             if prior and prior["status"] in ("done", "in_progress", "unknown"):
                 continue  # never re-plan work that has started
             if prior and prior["target_name"] == r["target_name"] and prior["status"] in ("pending", "failed"):
                 st.db.execute("UPDATE plan SET action=?, reason=? WHERE image_key=?",
-                              (r["action"], r["reason"], r["image_key"]))
+                              (r["action"], r["reason"], r["item_id"]))
                 continue
             st.db.execute("INSERT INTO plan(image_key, action, target_name, reason, status, planned_at, updated_at)"
                           " VALUES(?,?,?,?,'pending',?,?) ON CONFLICT(image_key) DO UPDATE SET"
                           " action=excluded.action, target_name=excluded.target_name, reason=excluded.reason,"
                           " status='pending', updated_at=excluded.updated_at",
-                          (r["image_key"], r["action"], r["target_name"], r["reason"], ts, ts))
+                          (r["item_id"], r["action"], r["target_name"], r["reason"], ts, ts))
             changed += 1
         kinds = {r["target_name"]: r["kind"] for r in rows}
         for name, planned in st.q("SELECT target_name, COUNT(*) FROM plan GROUP BY target_name"):
@@ -309,7 +302,7 @@ def reconcile_keys(st, client, keys):
                    "FROM plan p JOIN images i USING(image_key) LEFT JOIN targets t ON t.name=p.target_name "
                    "WHERE p.image_key=?", key)[0]
         try:
-            where = client.image_album_keys(key, row["serial"])
+            where = client.item_album_ids(key, row["serial"])
         except NotFound:
             where = []
         if row["target_key"] and row["target_key"] in where:
@@ -333,10 +326,10 @@ def move_batch(st, client, target_key, items, batch_id):
     keys = [r["image_key"] for r in items]
     st.set_plan_status(keys, "in_progress", batch_id=batch_id, bump_attempts=True)
     st.db.commit()
-    uris = [album_image_uri(r["current_album_key"], r["image_key"], r["serial"]) for r in items]
-    before = client.album(target_key).get("ImageCount", 0)
+    refs = [client.item_ref(r["current_album_key"], r["image_key"], r["serial"]) for r in items]
+    before = client.album_item_count(target_key)
     try:
-        client.move_images(target_key, uris)
+        client.move_items(target_key, refs)
     except SmugMugError as e:
         if e.http_status == 400 and not e.ambiguous:
             # Batch moves are all-or-nothing: nothing moved. Isolate the bad item(s).
@@ -366,13 +359,13 @@ def move_batch(st, client, target_key, items, batch_id):
         # 'pending' ones (still in source) are simply retried on a later run
         return [k for k in keys if status[k] == "done"], [k for k in keys if status[k] == "failed"]
 
-    after = client.album(target_key).get("ImageCount", 0)
+    after = client.album_item_count(target_key)
     if after - before == len(items):
         done = keys
     else:
         st.event("count_mismatch", level="warning", album_key=target_key, commit=False,
                  batch_id=batch_id, before=before, after=after, size=len(items))
-        done = [r["image_key"] for r in items if client.album_has_image(target_key, r["image_key"], r["serial"])]
+        done = [r["image_key"] for r in items if client.album_contains(target_key, r["image_key"], r["serial"])]
     failed = [k for k in keys if k not in done]
     st.set_plan_status(done, "done")
     st.db.executemany("UPDATE images SET current_album_key=? WHERE image_key=?", [(target_key, k) for k in done])
@@ -408,8 +401,7 @@ def cmd_apply(st, cfg, client, args):
         return None
 
     _install_sigint()
-    root = client.authuser()["Uris"]["Node"]["Uri"]
-    folder_uri = client.ensure_folder_path(root, cfg["target_folder"])
+    folder_uri = client.ensure_folder_path(client.root_folder(), cfg["target_folder"])
     totals = {"moved": 0, "failed": 0, "albums": 0}
     consecutive_failures = 0
     for t in targets:
@@ -417,7 +409,7 @@ def cmd_apply(st, cfg, client, args):
             break
         target_key = ensure_target(st, cfg, client, folder_uri, t["name"])
         st.db.commit()
-        server_count = client.album(target_key).get("ImageCount", 0)
+        server_count = client.album_item_count(target_key)
         rows = [dict(r) for r in st.q(
             "SELECT p.image_key, i.serial, i.current_album_key FROM plan p JOIN images i USING(image_key) "
             "WHERE p.target_name=? AND p.status='pending' ORDER BY i.current_album_key, p.image_key", t["name"])]
@@ -447,7 +439,7 @@ def cmd_apply(st, cfg, client, args):
             if consecutive_failures >= cfg["max_consecutive_failures"]:
                 log.error("too many consecutive failed batches; stopping")
                 Stop.requested = True
-        count = client.album(target_key).get("ImageCount")
+        count = client.album_item_count(target_key)
         st.db.execute("UPDATE targets SET server_count=?, checked_at=? WHERE name=?", (count, now(), t["name"]))
         st.db.commit()
         log.info("   %s now has %s items (moved so far %d, failed %d)", t["name"], count, totals["moved"],
@@ -476,7 +468,7 @@ def cmd_verify(st, cfg, client, args):
         log.info("verify %d/%d: %s", n, len(targets), t["name"])
         expected = {r[0] for r in st.q("SELECT image_key FROM plan WHERE target_name=? AND status='done'", t["name"])}
         try:
-            server = {img["ImageKey"] for img, _ in client.album_images(t["album_key"], with_metadata=False)}
+            server = {it["item_id"] for it in client.list_album_items(t["album_key"], ids_only=True)}
         except NotFound:
             if expected:
                 raise
@@ -497,7 +489,7 @@ def cmd_verify(st, cfg, client, args):
     for s in st.q("SELECT album_key, url_path FROM source_albums WHERE rows_stored IS NOT NULL"):
         expected = st.one("SELECT COUNT(*) FROM images WHERE current_album_key=?", s["album_key"])
         try:
-            actual = client.album(s["album_key"]).get("ImageCount")
+            actual = client.album_item_count(s["album_key"])
         except NotFound:
             actual = 0  # deleted by delete-empty-sources; fine as long as nothing is expected there
         ok = expected == actual
@@ -523,7 +515,7 @@ def cmd_delete_duplicates(st, cfg, client, args):
     for t in targets:
         expected = {r[0] for r in st.q("SELECT image_key FROM plan WHERE target_name=? AND action='park_duplicate' "
                                        "AND status='done'", t["name"])}
-        server = {img["ImageKey"] for img, _ in client.album_images(t["album_key"], with_metadata=False)}
+        server = {it["item_id"] for it in client.list_album_items(t["album_key"], ids_only=True)}
         if server != expected:
             raise SystemExit(f"{t['name']}: server contents differ from plan "
                              f"({len(server - expected)} unexpected, {len(expected - server)} missing); not deleting")
@@ -560,7 +552,7 @@ def cmd_delete_empty_sources(st, cfg, client, args):
     out = {"deleted": [], "kept_nonempty": []}
     for s in st.q("SELECT album_key, url_path FROM source_albums ORDER BY url_path"):
         try:
-            count = client.album(s["album_key"]).get("ImageCount")
+            count = client.album_item_count(s["album_key"])
         except NotFound:
             log.info("%s already gone", s["url_path"])
             continue
@@ -591,7 +583,7 @@ def cmd_undo(st, cfg, client, args):
         group = [r for r in rows if r["src_album_key"] == src]
         for i in range(0, len(group), cfg["move_batch_size"]):
             batch = group[i:i + cfg["move_batch_size"]]
-            client.move_images(src, [album_image_uri(r["target_key"], r["image_key"], r["serial"]) for r in batch])
+            client.move_items(src, [client.item_ref(r["target_key"], r["image_key"], r["serial"]) for r in batch])
             keys = [r["image_key"] for r in batch]
             st.set_plan_status(keys, "pending")
             st.db.executemany("UPDATE images SET current_album_key=? WHERE image_key=?", [(src, k) for k in keys])

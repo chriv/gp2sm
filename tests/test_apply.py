@@ -6,17 +6,22 @@ from gp2sm.state import State
 
 
 class FakeSmug:
-    """In-memory albums: {album_key: set(image_key)}. Mirrors verified SmugMug semantics."""
+    """In-memory destination implementing the neutral client surface: {album_id: set(item_id)}.
+    Mirrors verified SmugMug semantics (all-or-nothing batch moves, 400 on a bad ref, ambiguous 504s)."""
 
     def __init__(self, albums, bad=(), fail_network=0):
         self.albums = {k: set(v) for k, v in albums.items()}
         self.bad = set(bad)
         self.fail_network = fail_network
 
-    def album(self, key):
-        return {"ImageCount": len(self.albums[key])}
+    @staticmethod
+    def item_ref(album_id, item_id, serial=0):
+        return f"/api/v2/album/{album_id}/image/{item_id}-{serial or 0}"
 
-    def move_images(self, dest, uris):
+    def album_item_count(self, key):
+        return len(self.albums[key])
+
+    def move_items(self, dest, uris):
         moves = []
         for uri in uris:
             parts = uri.split("/")
@@ -34,10 +39,10 @@ class FakeSmug:
             self.albums[src].discard(k)
             self.albums[dest].add(k)
 
-    def album_has_image(self, album_key, image_key, serial=0):
+    def album_contains(self, album_key, image_key, serial=0):
         return image_key in self.albums[album_key]
 
-    def image_album_keys(self, image_key, serial=0):
+    def item_album_ids(self, image_key, serial=0):
         found = [a for a, keys in self.albums.items() if image_key in keys]
         if not found:
             raise NotFound("gone", http_status=404)
@@ -101,8 +106,8 @@ def test_reconcile_sets_pending_when_still_in_source(st):
 class TimeoutAfterApplying(FakeSmug):
     """Server applies the move but the client sees a 504 (what happened in the 2023-07 batch)."""
 
-    def move_images(self, dest, uris):
-        FakeSmug.move_images(self, dest, uris)
+    def move_items(self, dest, uris):
+        FakeSmug.move_items(self, dest, uris)
         raise SmugMugError("504", http_status=504, ambiguous=True)
 
 
