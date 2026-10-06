@@ -44,7 +44,7 @@ Known limitations that the stages below remove:
 
 Everything that makes gp2sm a better tool: import, organize, album naming and settings management, and release.
 
-### Stage A0: Repo cleanup and packaging baseline
+### Stage A0: Repo cleanup and packaging baseline. ✅ Done (2026-10-06)
 
 - **Goal:** a clean, installable repository with CI.
 - **Deliverables:**
