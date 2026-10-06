@@ -473,11 +473,19 @@ def cmd_verify(st, cfg, client, args):
     out = {"targets_ok": 0, "targets_bad": 0, "sources_ok": 0, "sources_bad": 0}
     for t in st.q("SELECT name, album_key FROM targets WHERE album_key IS NOT NULL ORDER BY name"):
         expected = {r[0] for r in st.q("SELECT image_key FROM plan WHERE target_name=? AND status='done'", t["name"])}
-        server = {img["ImageKey"] for img, _ in client.album_images(t["album_key"], with_metadata=False)}
+        try:
+            server = {img["ImageKey"] for img, _ in client.album_images(t["album_key"], with_metadata=False)}
+        except NotFound:
+            if expected:
+                raise
+            out.setdefault("targets_deleted", 0)
+            out["targets_deleted"] += 1  # e.g. a duplicates album removed by delete-duplicates
+            continue
         missing, extra = expected - server, server - expected
         ok = not missing and not extra
         out["targets_ok" if ok else "targets_bad"] += 1
         st.db.execute("UPDATE targets SET server_count=?, checked_at=? WHERE name=?", (len(server), now(), t["name"]))
+        st.db.commit()  # don't hold the write lock across a long, network-bound verify
         if not ok:
             problems += 1
             log.error("%s: %d expected, %d on server; missing %s; unexpected %s", t["name"], len(expected),
@@ -486,7 +494,10 @@ def cmd_verify(st, cfg, client, args):
                      missing=sorted(missing), extra=sorted(extra))
     for s in st.q("SELECT album_key, url_path FROM source_albums WHERE rows_stored IS NOT NULL"):
         expected = st.one("SELECT COUNT(*) FROM images WHERE current_album_key=?", s["album_key"])
-        actual = client.album(s["album_key"]).get("ImageCount")
+        try:
+            actual = client.album(s["album_key"]).get("ImageCount")
+        except NotFound:
+            actual = 0  # deleted by delete-empty-sources; fine as long as nothing is expected there
         ok = expected == actual
         out["sources_ok" if ok else "sources_bad"] += 1
         if not ok:

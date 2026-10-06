@@ -33,6 +33,10 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 
 - **`_expand=ImageMetadata` on `!images`** returns each item's metadata in one call. It's in the top-level `Expansions` map, keyed by the item's `Uris.ImageMetadata.Uri`. A 49-item page took 1.3 s. This avoids one `!metadata` call per image. (Don't combine it with `_filteruri=`, which removes the URIs used as keys.)
 
+- **`_expand=ImageMetadata` can return stale, empty metadata for recently uploaded images.** (Observed on 2026-10-06: 18 of 27 new uploads still showed `DateTimeCreated` empty through `_expand` after more than 4 minutes, while a direct `GET {ImageUri}!metadata` returned the correct dates.) Use direct calls when verifying fresh uploads.
+- `GET /api/v2/image/{key}-{serial}` also returns `DateTimeOriginal`, which isn't in the `!images` listing. SmugMug converts EXIF local time to UTC there **without** using `OffsetTimeOriginal` (a −04:00 photo came back +7 h), so treat it as display-only. `!metadata`'s `DateTimeCreated` keeps the original local time.
+- Album `SortMethod` can be set with `PATCH /api/v2/album/{key}` (`{"SortMethod":"FileName","SortDirection":"Ascending"}`). It's echoed back as `"Filename"`.
+
 ## Search
 - `GET /api/v2/image!search?Scope=<album uri>&Text=<exact filename>` returned **0 results for a file known to be in the album**. Don't use it for existence checks. Use a local inventory built from `!images` listings.
 

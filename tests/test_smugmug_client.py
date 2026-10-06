@@ -133,3 +133,9 @@ def test_write_retried_after_nonce_used_and_429():
                    FakeResponse(200, {"Response": {}})])
     c.request("POST", "/x")
     assert len(s.calls) == 3
+
+
+def test_idempotent_write_is_retried_after_503():
+    c, s = client([FakeResponse(503, {}), FakeResponse(200, {"Response": {"Album": {"SortMethod": "Filename"}}})])
+    assert c.set_album_sort("K")["SortMethod"] == "Filename"
+    assert len(s.calls) == 2

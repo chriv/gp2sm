@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - the Google Photos Library API it depends on no longer returns existing library items (403 since the March 2025 policy change).
 
   Don't fix it in place. New work goes in the `gp2sm/` package.
-- `docs/PLAN.md` is the current plan. `docs/smugmug-api.md` records SmugMug behavior **confirmed by probes**. Check it before relying on any SmugMug endpoint, and add anything newly confirmed.
+- `docs/ROADMAP.md` is the staged plan (do one stage at a time). `docs/smugmug-api.md` records SmugMug behavior **confirmed by probes**. Check it before relying on any SmugMug endpoint, and add anything newly confirmed.
 - The repo is meant to become public. Keep personal names, account details and real album names out of tracked files. They belong in gitignored config (`data/`, `*.json`).
 
 ## Commands
@@ -23,6 +23,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Consolidation pipeline (each step can be rerun; state lives in `data/consolidation.db`):
 `inventory → import-legacy → match → plan → report → apply [--dry-run|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
+
+Takeout pipeline (archives in `data/takeout/`, all gitignored):
+`python -m gp2sm.takeout_index data/takeout/*.tgz` → `python -m gp2sm.takeout_match` → `python -m gp2sm.content_match [--apply]` → `python -m gp2sm.takeout_upload plan|stage|upload|verify|report|remove`.
 
 ## Architecture (`gp2sm/`)
 

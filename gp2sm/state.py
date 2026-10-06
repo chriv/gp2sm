@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS plan(
   status TEXT, attempts INT DEFAULT 0, last_error TEXT, batch_id TEXT,
   planned_at TEXT, updated_at TEXT);
 CREATE INDEX IF NOT EXISTS plan_status ON plan(status, target_name);
+
+-- Files uploaded from Google Takeout (Live Photo stills converted to JPEG, and motion clips).
+-- status: planned -> staged -> uploading -> done | failed | unknown ; needs_review ; skipped
+CREATE TABLE IF NOT EXISTS uploads(
+  upload_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INT, role TEXT, archive TEXT, src_path TEXT,
+  upload_name TEXT, target_name TEXT, reason TEXT,
+  staged_path TEXT, staged_size INT, staged_md5 TEXT, exif_note TEXT,
+  status TEXT, image_key TEXT, album_image_uri TEXT,
+  attempts INT DEFAULT 0, last_error TEXT, updated_at TEXT,
+  UNIQUE(item_id, role));
+CREATE INDEX IF NOT EXISTS uploads_status ON uploads(status, target_name);
 """
 
 

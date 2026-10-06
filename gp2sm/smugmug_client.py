@@ -19,6 +19,7 @@ import requests
 from requests_oauthlib import OAuth1Session
 
 API = "https://api.smugmug.com"
+UPLOAD_URL = "https://upload.smugmug.com/"
 log = logging.getLogger(__name__)
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
@@ -83,23 +84,24 @@ class SmugMugClient:
 
     # ------------------------------------------------------------------ core
 
-    def request(self, method, path, *, params=None, json_body=None, timeout=90):
+    def request(self, method, path, *, params=None, json_body=None, data=None, headers=None, timeout=90,
+                idempotent=False):
         """Perform an API call and return the parsed JSON body.
 
         Retries 429 and 401 nonce_used (the request was rejected, so retrying is safe). Network errors
-        and 5xx are retried only for read methods; for writes they raise SmugMugError(ambiguous=True)
+        and 5xx are retried only for read methods and writes marked idempotent=True; for writes they raise SmugMugError(ambiguous=True)
         because the server may already have applied the change. Raises NotFound on 404 and
         SmugMugError on any other failure (including HTTP 200 with stat="fail").
         """
         url = path if path.startswith("http") else API + path
-        safe = method.upper() in SAFE_METHODS
+        safe = method.upper() in SAFE_METHODS or idempotent  # idempotent: setting absolute values
         last_error = None
         for attempt in range(self.max_retries):
             if attempt:
                 self._sleep(min(60, 3 * 2 ** (attempt - 1)))
             try:
-                r = self.session.request(method, url, params=params, json=json_body, timeout=timeout,
-                                         headers={"Accept": "application/json"})
+                r = self.session.request(method, url, params=params, json=json_body, data=data, timeout=timeout,
+                                         headers={"Accept": "application/json", **(headers or {})})
             except requests.RequestException as e:
                 last_error = SmugMugError(f"{method} {url}: network error {e!r}", ambiguous=not safe)
                 log.warning("%s (attempt %d)", last_error, attempt + 1)
@@ -246,8 +248,36 @@ class SmugMugClient:
         self.request("POST", f"/api/v2/album/{dest_album_key}!moveimages",
                      json_body={"MoveUris": ",".join(album_image_uris)})
 
+    def upload(self, album_uri, path, filename, content_type, timeout=600):
+        """Upload a file into an album. Returns the response's Image dict (ImageUri, AlbumImageUri, ...).
+
+        Not idempotent: on timeout/5xx/network errors this raises SmugMugError(ambiguous=True); the caller
+        must check the album before retrying. Failures such as unsupported types arrive as HTTP 200 with
+        stat="fail" and raise SmugMugError(code=...).
+        """
+        import hashlib
+        with open(path, "rb") as f:
+            data = f.read()
+        headers = {
+            "X-Smug-AlbumUri": album_uri,
+            "X-Smug-FileName": filename,
+            "X-Smug-ResponseType": "JSON",
+            "X-Smug-Version": "v2",
+            "Content-MD5": hashlib.md5(data).hexdigest(),
+            "Content-Type": content_type,
+        }
+        body = self.request("POST", UPLOAD_URL, data=data, headers=headers, timeout=timeout)
+        image = body.get("Image")
+        if not image:
+            raise SmugMugError(f"upload {filename}: no Image in response", body=body, ambiguous=True)
+        return image
+
+    def set_album_sort(self, album_key, method="FileName", direction="Ascending"):
+        return self.request("PATCH", f"/api/v2/album/{album_key}", idempotent=True,
+                            json_body={"SortMethod": method, "SortDirection": direction})["Response"]["Album"]
+
     def rename_album(self, album_key, name):
-        return self.request("PATCH", f"/api/v2/album/{album_key}",
+        return self.request("PATCH", f"/api/v2/album/{album_key}", idempotent=True,
                             json_body={"Name": name, "UrlName": url_name_for(name)})["Response"]["Album"]
 
     def delete_album(self, album_key):
