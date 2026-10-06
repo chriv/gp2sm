@@ -37,6 +37,13 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 - `state.py`: the SQLite schema. `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`.
 - `consolidate.py`: CLI orchestration. Before each batch, items are marked `in_progress`. After the move, the batch is checked by the target's `ImageCount` change, falling back to per-image lookups. Any leftover `in_progress` or `unknown` items are reconciled with `image!albums` at the start of the next run. Duplicates are moved to a review album, never deleted.
 
+## Modularity rule (until Stage A1 adds the service layer)
+
+The goal is a plugin architecture with any photo service on either end (see `docs/ROADMAP.md` A1). Don't add to the existing coupling:
+- Only `smugmug_client.py` may build SmugMug URLs, make HTTP calls to SmugMug, or know SmugMug quirks. If logic needs something new from SmugMug, add a client method instead of a raw `request()`/`requests.get` call elsewhere.
+- Only the `takeout_*` modules may know Google Takeout layout and metadata formats.
+- New decision logic goes in pure functions that take neutral values (names, timestamps, hashes, dimensions), not service field names.
+
 ## Probes
 
 `probes/` (gitignored) holds standalone scripts that exercise real APIs. Outputs, logs and copies of credentials go in `probes/out/`. Probes always work on **copies** of credential files, because the legacy modules rewrite or delete them on failure. Write tests go only into a private `gp2sm-sandbox` folder, which the probe deletes afterwards.

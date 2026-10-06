@@ -56,9 +56,19 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 - **Tests:** the existing 50 tests move onto the shared fakes. A test checks that the fixture generator is deterministic.
 - **Exit:** `pipx install .` gives a working `gp2sm --help`. CI is green on all three operating systems. No legacy files remain on the default branch.
 
-### Stage A1: Modular core
+### Stage A1: Modular core and service plugins
 
-- **Goal:** separate the existing code into stable modules without changing behavior.
+- **Goal:** separate the existing code into stable modules without changing behavior, and make photo services pluggable on both ends (sources and destinations), so services other than Google Takeout and SmugMug can be added later without a redesign.
+- **Service layer:**
+  - **Neutral models:** `MediaItem` (id, name, kind, capture time, size, hash, dimensions, duration, opaque service ref, raw extras) and `Collection` (album/folder).
+  - **Interfaces:**
+    - `PhotoSource`: iterate items, open their bytes, metadata
+    - `PhotoDestination`: list/create collections, upload, move, delete, locate an item, read/set collection properties
+  - **Capability flags declared by each service,** read by the core instead of hard-coding one service's behavior. Examples: atomic batch moves, stores original bytes per type, server-side format conversion, max items per collection, rejected media rules, whether a write can succeed despite a timeout.
+  - **Adapters own everything service-specific:** SmugMug (URLs, field names, quirks such as HEIC→JPG renaming and tiny-video rejection) and Google Takeout (archive layout, metadata files, Live Photo pairing). Core modules never import an adapter directly.
+  - **Plugin discovery** via Python entry points (`gp2sm.services`), so `pip install gp2sm-<service>` can add a service.
+  - **Contract tests:** one shared conformance suite that every adapter must pass against its own fake.
+- **State:** a neutral schema (`service` + opaque item/collection refs, service extras as JSON) with a migration from the current SmugMug-/Google-shaped columns.
 - **Layout:**
   - `gp2sm/smugmug/` (client, models)
   - `gp2sm/takeout/` (index, sidecars, pairing)
