@@ -10,7 +10,7 @@ Part A builds the tool; Part B applies it. The work is split into **stages that 
 
 ## Principles (apply to every stage)
 
-- **Safe by default.** Every command that writes is a dry run unless `--yes` is given. Deletions check the server's state immediately before acting. A write whose outcome is unknown (timeout/5xx) is never retried blindly; the server is checked first (see `docs/smugmug-api.md`). Nothing is deleted while a reversible alternative exists (e.g. park duplicates, then delete).
+- **Safe by default.** Every command that writes is a dry run unless `--yes` is given. Reversible actions (moves, uploads, dating, pairing) can be automated freely as long as they're state-tracked and verified. Deletion is gated, with one automatable exception: an album the tool itself created, that the server confirms is empty, and that has nothing planned for it. Deletions check the server's state immediately before acting. A write whose outcome is unknown (timeout/5xx) is never retried blindly; the server is checked first (see `docs/smugmug-api.md`). Nothing is deleted while a reversible alternative exists (e.g. park duplicates, then delete).
 - **Easy to use.** One config file per project. `gp2sm init` writes a commented config. Every command explains what it will do and how to undo it. `gp2sm status` always answers "where am I?".
 - **State, not memory.** Every decision and action is recorded in a per-project SQLite database with an append-only event log. Runs resume, and `verify` compares the server with the database.
 - **Modular.** The SmugMug client, Takeout reading, media handling, planning and the CLI are separate packages. Planning logic is pure, with no I/O, so it can be unit tested.

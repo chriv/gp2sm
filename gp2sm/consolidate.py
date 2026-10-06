@@ -13,6 +13,7 @@ Pipeline (each step is idempotent and recorded in the state DB):
   undo           move a target album's items back to their source albums
   delete-duplicates     delete the duplicates album(s) after server-side checks (--yes)
   delete-empty-sources  delete source albums the server reports as empty (--yes)
+  delete-empty-targets  delete albums this tool created that are empty and have nothing planned (--yes)
 
 Usage: python -m gp2sm.consolidate [--config data/consolidate.json] <command> [options]
 """
@@ -570,6 +571,38 @@ def cmd_delete_empty_sources(st, cfg, client, args):
     return out
 
 
+def cmd_delete_empty_targets(st, cfg, client, args):
+    """Delete albums this tool created (targets.created_at set) that the server reports as empty and that no
+    plan/upload still points to. Albums the tool merely found and reused are never deleted. Requires --yes."""
+    out = {"deleted": [], "kept": []}
+    rows = st.q("SELECT name, album_key FROM targets WHERE album_key IS NOT NULL AND created_at IS NOT NULL ORDER BY name")
+    for t in rows:
+        if args.name and not any(fnmatch.fnmatch(t["name"], pat) for pat in args.name):
+            continue
+        planned = st.one("SELECT COUNT(*) FROM plan WHERE target_name=? AND status IN ('pending','in_progress','done')",
+                         t["name"]) + st.one("SELECT COUNT(*) FROM uploads WHERE target_name=? AND status!='skipped'",
+                                             t["name"])
+        try:
+            count = client.album_item_count(t["album_key"])
+        except NotFound:
+            continue
+        if count or planned:
+            if args.name:
+                out["kept"].append((t["name"], count, planned))
+            continue
+        if not args.yes:
+            log.info("dry run: would delete empty target album %s", t["name"])
+            continue
+        client.delete_album(t["album_key"])
+        st.db.execute("UPDATE targets SET album_key=NULL, album_uri=NULL, node_uri=NULL, server_count=0, checked_at=? "
+                      "WHERE name=?", (now(), t["name"]))
+        st.event("album_deleted", album_key=t["album_key"], commit=False, name=t["name"], reason="empty target album")
+        st.db.commit()
+        log.info("deleted empty target album %s", t["name"])
+        out["deleted"].append(t["name"])
+    return out
+
+
 # --------------------------------------------------------------------- undo
 
 def cmd_undo(st, cfg, client, args):
@@ -599,8 +632,10 @@ COMMANDS = {
     "inventory": cmd_inventory, "import-legacy": cmd_import_legacy, "match": cmd_match, "plan": cmd_plan,
     "report": cmd_report, "apply": cmd_apply, "reconcile": cmd_reconcile, "verify": cmd_verify, "undo": cmd_undo,
     "delete-duplicates": cmd_delete_duplicates, "delete-empty-sources": cmd_delete_empty_sources,
+    "delete-empty-targets": cmd_delete_empty_targets,
 }
-NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-duplicates", "delete-empty-sources"}
+NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-duplicates", "delete-empty-sources",
+                "delete-empty-targets"}
 
 
 def main(argv=None):
@@ -625,9 +660,11 @@ def main(argv=None):
     s = sub.add_parser("reconcile")
     s.add_argument("--include-failed", action="store_true")
     sub.add_parser("verify")
-    for name in ("delete-duplicates", "delete-empty-sources"):
+    for name in ("delete-duplicates", "delete-empty-sources", "delete-empty-targets"):
         s = sub.add_parser(name)
         s.add_argument("--yes", action="store_true", help="actually delete (permanent); default is a dry run")
+        if name == "delete-empty-targets":
+            s.add_argument("--name", action="append", help="only target albums matching this glob (repeatable)")
     s = sub.add_parser("undo")
     s.add_argument("target", help="exact target album name to move back out")
     args = p.parse_args(argv)
