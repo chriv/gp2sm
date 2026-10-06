@@ -370,6 +370,22 @@ class SmugMugClient:
         r.raise_for_status()
         return r.content
 
+    def download_item(self, item_id, serial=0, is_video=False):
+        """Bytes of the largest available rendition (fallback source when no original is available locally).
+        Note: SmugMug re-encodes videos, so this is not the original file."""
+        loc = "!largestvideo" if is_video else "!largestimage"
+        body = self.request("GET", f"/api/v2/image/{item_id}-{serial or 0}{loc}")["Response"]
+        url = (body.get("LargestVideo") or body.get("LargestImage") or {}).get("Url")
+        r = requests.get(url, timeout=300)
+        r.raise_for_status()
+        return r.content
+
+    def video_info(self, item_id, serial=0):
+        """{'duration_s', 'width', 'height'} of a video's largest rendition (None values if unavailable)."""
+        body = self.request("GET", f"/api/v2/image/{item_id}-{serial or 0}!largestvideo")["Response"]
+        v = body.get("LargestVideo") or {}
+        return {"duration_s": self._duration_s(v.get("Duration")), "width": v.get("Width"), "height": v.get("Height")}
+
     def set_sort_by_filename(self, album_id):
         return self.set_album_sort(album_id, "FileName")
 

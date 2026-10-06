@@ -70,10 +70,16 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - Capture time is in `GET {ImageUri}!metadata`: `DateTimeCreated` (EXIF DateTimeOriginal for images, container `creation_time` for videos), with no timezone. It survives the HEIC→JPEG conversion.
 - `GET {ImageUri}!largestvideo` → `Duration` (seconds, as a string), `Size`, `MD5`, `Width`, `Height` of the *re-encoded* rendition.
 
+## Renaming images
+- **`FileName` can't be changed.** (Verified 2026-10-06 for both JPEG and MOV.) `PATCH /api/v2/image/{key}-0` with `{"FileName": ...}` returns **HTTP 200 "Ok" but leaves `FileName` unchanged**: a silent no-op. `Title` *can* be changed this way.
+- Filename sort uses `FileName`, so the only way to change an item's sort position by name is to re-upload it under the new name and remove the old copy.
+
 ## Reorganizing
 - Move: `POST /api/v2/album/{dest}!moveimages` with JSON `{"MoveUris": "<AlbumImage uri>[,<uri>...]"}` removes the image from the source album.
 - Collect: `POST /api/v2/album/{dest}!collectimages` with JSON `{"CollectUris": "<AlbumImage uri>"}` keeps it in the source too, and counts toward the destination's `ImageCount`.
 - Delete from an album: `DELETE <AlbumImage uri>` → 200.
+- **Moving an item that's still processing is silently ignored.** (Observed 2026-10-06.) A video stuck in `Status: "Preprocess"`, `Processing: true` hours after upload: `!moveimages` returned `200 Ok`, but the item stayed in its source album, repeatably. **Always confirm a move on the server** (`image!albums`, or the target's `ImageCount` delta) instead of trusting the response, and retry once processing has finished.
+- Moves occasionally fail with HTTP 500 without being applied. Once the server confirms the item didn't move, retrying is safe. (6 of 6 succeeded on retry.)
 
 ## Matching strategy implied by the above
 - JPEG/PNG/GIF: MD5 of the source file == `ArchivedMD5`.

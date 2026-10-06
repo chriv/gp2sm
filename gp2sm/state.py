@@ -95,6 +95,27 @@ CREATE TABLE IF NOT EXISTS uploads(
   verified_at TEXT,  -- when verify last confirmed this upload on the server
   UNIQUE(item_id, role));
 CREATE INDEX IF NOT EXISTS uploads_status ON uploads(status, target_name);
+
+-- Unsorted clips placed beside their still by capture time + aspect ratio. Because the destination may not
+-- support renames, placing means: upload the clip again under the still's name in the still's album,
+-- verify it, then remove the old copy (that removal is gated by --yes).
+-- status: planned -> uploaded -> verified -> done ; failed ; unknown
+-- Items in an undated album that got a date from evidence, and their move to a dated album.
+-- kind: image (from the consolidation `plan`) | upload (from `uploads`).
+-- status: planned -> done ; unresolved ; failed
+CREATE TABLE IF NOT EXISTS datings(
+  dating_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT, ref_id TEXT, item_id TEXT, serial INT, name TEXT, is_video INT, role TEXT,
+  from_album TEXT, method TEXT, capture_ts INT, capture_local TEXT, target_name TEXT, evidence TEXT,
+  status TEXT, last_error TEXT, updated_at TEXT, UNIQUE(kind, ref_id));
+
+CREATE TABLE IF NOT EXISTS placements(
+  placement_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upload_id INT UNIQUE,                       -- the clip's row in uploads
+  old_target TEXT, old_item_id TEXT, old_item_ref TEXT, old_name TEXT,
+  still_name TEXT, new_target TEXT, new_name TEXT, seconds_apart INT, candidates INT,
+  source_path TEXT, source_kind TEXT,          -- staged | takeout | destination
+  status TEXT, new_item_id TEXT, new_item_ref TEXT, last_error TEXT, updated_at TEXT);
 """
 
 
