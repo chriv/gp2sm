@@ -4,8 +4,9 @@ gp2sm moves photo libraries into SmugMug and keeps them organized:
 
 - **Import from Google Takeout.** This includes Live Photos (JPEG still and motion clip side by side), HEIC conversion, and dates from Takeout metadata.
 - **Organize existing SmugMug content.** It consolidates scattered or auto-upload albums into dated albums, removes byte-identical duplicates, and keeps state so every run can be resumed and undone.
+- **Manage albums.** It standardizes album names (e.g. `YYYY-MM Subject`), audits album settings against preferred policies (downloads, original sizes, watermarks, privacy, sort order), and fixes drift in bulk, with undo.
 
-The work is split into **stages that can be done one at a time**. Each stage has a goal, deliverables, the tests it adds, and exit criteria. Don't start a stage until the previous one's exit criteria are met.
+Part A builds the tool; Part B applies it. The work is split into **stages that can be done one at a time**. Each stage has a goal, deliverables, the tests it adds, and exit criteria. Don't start a stage until the previous one's exit criteria are met.
 
 ## Principles (apply to every stage)
 
@@ -39,7 +40,9 @@ Known limitations that the stages below remove:
 
 ---
 
-## Part A: A tool others can use (do this first)
+## Part A: Building the tool (do this first)
+
+Everything that makes gp2sm a better tool: import, organize, album naming and settings management, and release.
 
 ### Stage A0: Repo cleanup and packaging baseline
 
@@ -100,6 +103,20 @@ Known limitations that the stages below remove:
     - rejected types (WebP/BMP/ICO/very small videos): convert or skip
     - album naming and size caps
   - The old-database bridge moves to an optional `gp2sm.contrib.legacy_bridge`.
+  - **Automatic decisions, with a narrow review band.** People only see what the checks below can't decide.
+    - **Name collisions** (a Takeout photo vs. a same-named photo already in the target album) are settled by a content check, not held by default:
+      - dHash ≤ 6 → same photo, skip
+      - ≥ 19 → different photo, upload
+      - 7–18 → review
+
+      (Validated 2026-10-06: 16 of 16 human-judged collisions scored 21–31 and were all "different".)
+    - **Live Photo clip pairing** uses each clip's own capture time (Apple `creationdate`, falling back to `mvhd`) and its aspect ratio, searched across *all* stills, not just the same-named one:
+      - within 60 s with the same aspect ratio → paired automatically (closest first, one-to-one)
+      - no candidate → unsorted-videos album
+
+      (Validated: 143 of 149 held clips re-paired, 135 within 1 s. This caught clips that a name-based pairing had swapped between items, e.g. `RenderedImage` and reused `IMG_####` names.)
+    - **Burst frames** (near-identical shots, e.g. `lp_image`) are paired one-to-one by closeness, ignoring the margin rule, because only the moment/month matters.
+  - **Review output, when needed, is flat and drag-sortable:** `<check>/` holds same-named files side by side, with `good/`/`bad/` (or `same/`/`different/`) subfolders, and decisions are read back from where files end up.
 - **Tests:**
   - end to end on a synthetic Takeout tree against the fake, including:
     - pairs split across two archives
@@ -125,7 +142,54 @@ Known limitations that the stages below remove:
 - **Tests:** a planning matrix (date-source precedence, rule matching, cap splitting, keeping done items in place, collect vs move) and fake-backed apply/undo/verify.
 - **Exit:** a dry-run plan on a real account looks right to its owner. A one-month pilot passes verify.
 
-### Stage A5: Documentation and release
+
+**Album management:** bulk audit and repair of album **names** and **settings**, using the same model: inventory → plan (dry run, readable report) → apply with `--yes` → verify. Every change records the album's previous values, so `undo` restores them.
+
+### Stage A5: Probe what can be changed (album settings)
+
+- **Goal:** confirm which album and folder properties the API can read and change, before building on them.
+- **Method:** sandbox-album probes. For each property, read, `PATCH`, read back, then restore. Properties include:
+  - `Name`/`UrlName`
+  - `Privacy`, `SmugSearchable`/`WorldSearchable`
+  - `AllowDownloads`, `LargestSize`/original-size access
+  - `Watermark`/`Watermarked`
+  - `Share`, `Comments`, `CanRank`
+  - `SortMethod`/`SortDirection`
+  - `Date`, `Description`/`Keywords`
+
+  Also check whether a `UrlName` change breaks existing links, and how URL collisions are reported.
+- **Deliverables:** an "album settings" section in `docs/smugmug-api.md` listing each property's allowed values, account-level requirements (e.g. Pro-only features) and quirks.
+- **Exit:** every property the later stages use is confirmed.
+
+### Stage A6: Naming conventions
+
+- **Goal:** consistent, date-sortable album names (default template `{yyyy}-{mm} {subject}`, configurable).
+- **Deliverables:**
+  - **Name parsing:** a date parser for common patterns — `Subject MM-YYYY`, `MM-YYYY Subject`, `YYYY-MM-DD Subject`, `Subject YYYY`, `Month YYYY Subject`, two-digit years, mixed separators. Each result carries a confidence level.
+  - **Names with no date:** derive one from the album's images (median capture date, falling back to upload dates). Flag low-spread vs. wide-spread date ranges, e.g. an album covering years.
+  - **Scope rules:** which folders/albums to include or exclude, whether to keep day precision, and how to clean up the subject (trim, title case off by default).
+  - **Report:** a proposed-rename table (old → new, date source, confidence). Only proposals at or above the confidence threshold are auto-applied; the rest are listed for review. `UrlName` follows the new name only if configured, because it changes album links.
+- **Tests:** a large parser table (ambiguous `03-04`, two-digit years, names that contain numbers but aren't dates), image-date fallback, collision handling. All with synthetic names.
+- **Exit:** a dry-run report on a real account looks right. A small batch rename passes verify and can be undone.
+
+### Stage A7: Settings policy (audit and bulk fix)
+
+- **Goal:** state the preferred album settings once, and find and fix drift.
+- **Deliverables:**
+  - **Config `policies`:** an ordered list of scope → desired settings. For example: public albums allow downloads up to a given size with no originals; private family albums allow originals; watermark on for public; sort by date taken.
+  - **Commands:**
+    - `gp2sm albums audit`: a drift report (CSV/HTML) per album and per setting
+    - `gp2sm albums fix`: idempotent `PATCH` calls in batches, recording before-values
+    - `gp2sm albums undo`: restores those recorded values
+  - **Other checks** in the same audit:
+    - empty albums
+    - albums near or over the item cap
+    - albums whose sort method breaks Live Photo pairing
+    - albums whose name date disagrees with their contents
+- **Tests:** policy precedence and scope matching, drift computation, apply/undo against the SmugMug fake.
+- **Exit:** an audit on a real account, then a fix on one scope, then verify (re-audit shows no drift), then undo works on that scope.
+
+### Stage A8: Documentation and release
 
 - **Deliverables:**
   - **README:** what it does, install, a 10-minute quickstart.
@@ -142,7 +206,9 @@ Known limitations that the stages below remove:
 
 ---
 
-## Part B: Organizing phone auto-upload albums (uses Part A)
+## Part B: Applying the tool to a real account (uses Part A)
+
+Each step below is its own project (separate config and state), so results stay separate and each can be re-run.
 
 ### Stage B0: How the uploader app behaves
 
@@ -154,12 +220,17 @@ Known limitations that the stages below remove:
 - **Deliverables:** findings added to `docs/smugmug-api.md` (an "uploader app" section), and the choice of `move` vs `collect` for auto-upload sources.
 - **Exit:** all three questions answered, and the test images removed.
 
-### Stage B1: Dry-run plan for the auto-upload albums
+### Stage B1: Phone auto-upload albums
 
-- A separate project and config (so state is separate from any other project), with sources, person/device rules, and a date order that prefers each photo's own EXIF.
-- Review the plan, the duplicate groups and the "unassigned" bucket. Adjust the rules until the plan looks right.
+- Organize (A4) the uploader-app folders: sources, person/device rules, and a date order that prefers each photo's own EXIF.
+- Dry-run plan → review duplicates and the "unassigned" bucket → one-month pilot → full run → verify.
 
-### Stage B2: Pilot, then full run, then routine
+### Stage B2: Account-wide naming and settings cleanup
 
-- A one-month pilot → verify → the full run → verify.
-- Then run it periodically (e.g. monthly), skipping the most recent weeks, so new uploads are absorbed without disrupting the app.
+- Naming (A6): propose `YYYY-MM Subject` renames across chosen folders, auto-apply the confident ones, review the rest.
+- Settings policy (A7): define the preferred settings per scope, audit drift, fix it in bulk, then re-audit.
+
+### Stage B3: Routine drift checks
+
+- Run the auto-upload organize periodically, skipping the most recent weeks.
+- Run the naming and settings audits periodically as a report, applying fixes after a quick review of the drift.

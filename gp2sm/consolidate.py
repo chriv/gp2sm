@@ -471,7 +471,9 @@ def cmd_verify(st, cfg, client, args):
     """Compare every target album on the server with the plan, and source album counts with the DB."""
     problems = 0
     out = {"targets_ok": 0, "targets_bad": 0, "sources_ok": 0, "sources_bad": 0}
-    for t in st.q("SELECT name, album_key FROM targets WHERE album_key IS NOT NULL ORDER BY name"):
+    targets = st.q("SELECT name, album_key FROM targets WHERE album_key IS NOT NULL ORDER BY name")
+    for n, t in enumerate(targets, 1):
+        log.info("verify %d/%d: %s", n, len(targets), t["name"])
         expected = {r[0] for r in st.q("SELECT image_key FROM plan WHERE target_name=? AND status='done'", t["name"])}
         try:
             server = {img["ImageKey"] for img, _ in client.album_images(t["album_key"], with_metadata=False)}

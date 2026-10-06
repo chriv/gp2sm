@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS uploads(
   staged_path TEXT, staged_size INT, staged_md5 TEXT, exif_note TEXT,
   status TEXT, image_key TEXT, album_image_uri TEXT,
   attempts INT DEFAULT 0, last_error TEXT, updated_at TEXT,
+  pair_item_id INT,  -- for a re-paired clip: the Takeout item of the still it belongs next to
+  verified_at TEXT,  -- when verify last confirmed this upload on the server
   UNIQUE(item_id, role));
 CREATE INDEX IF NOT EXISTS uploads_status ON uploads(status, target_name);
 """
@@ -89,9 +91,17 @@ class State:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
+        self._add_missing_columns()
         self.db.execute("INSERT OR IGNORE INTO meta VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
         self.db.commit()
         self.run_id = None
+
+    def _add_missing_columns(self):
+        """Tiny forward migration for columns added after a DB was created."""
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(uploads)")}
+        for col, decl in (("pair_item_id", "INT"), ("verified_at", "TEXT")):
+            if col not in have:
+                self.db.execute(f"ALTER TABLE uploads ADD COLUMN {col} {decl}")
 
     # ------------------------------------------------------------- runs/events
 

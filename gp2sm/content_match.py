@@ -109,6 +109,26 @@ def assign(takeout, smug, match_max=MATCH_MAX, margin_min=MARGIN_MIN, review_max
     return out
 
 
+def assign_bursts(takeout, smug, max_dist=MATCH_MAX):
+    """One-to-one pairing for near-identical burst frames, where only the moment (month) matters.
+
+    takeout: {item_id: [4 rotation hashes]}; smug: {image_key: hash}. Pairs are taken closest-first with
+    no margin requirement; each side is used at most once. Returns ({item_id: (image_key, dist)}, unpaired_ids).
+    """
+    pairs = sorted((min(hamming(x, h) for x in hs), item_id, key)
+                   for item_id, hs in takeout.items() for key, h in smug.items())
+    used_items, used_keys, out = set(), set(), {}
+    for dist, item_id, key in pairs:
+        if dist > max_dist:
+            break
+        if item_id in used_items or key in used_keys:
+            continue
+        used_items.add(item_id)
+        used_keys.add(key)
+        out[item_id] = (key, dist)
+    return out, sorted(set(takeout) - used_items)
+
+
 # ------------------------------------------------------------------- I/O parts
 
 def render_hashes(data, ext):
@@ -258,6 +278,55 @@ def cmd_apply(idx, args):
     return summary
 
 
+def cmd_burst_apply(idx, args):
+    """Resolve 'review' items of a burst-prone name group (default lp_image): pair frames one-to-one,
+    date + re-target the paired SmugMug copies, and release unpaired Takeout stills for upload."""
+    import datetime
+    cfg = __import__("gp2sm.consolidate", fromlist=["load_config"]).load_config(args.config)
+    st = State(args.state)
+    st.start_run("content_match.burst_apply", vars(args))
+    grp = args.burst_group
+    tk = {r[0]: [int(x, 16) for x in r[1:5]] for r in idx.execute(
+        "SELECT cm.item_id, ph.h0, ph.h1, ph.h2, ph.h3 FROM content_matches cm JOIN items it USING(item_id) "
+        "JOIN phash_takeout ph USING(item_id) WHERE cm.decision='review' AND cm.applied_at IS NULL")
+        if group_key(idx.execute("SELECT filename FROM items WHERE item_id=?", (r[0],)).fetchone()[0]) == grp}
+    sm = {r[0]: int(r[1], 16) for r in idx.execute(
+        "SELECT s.image_key, s.h FROM phash_smug s JOIN c.plan p USING(image_key) JOIN c.images i USING(image_key) "
+        "WHERE s.h IS NOT NULL AND p.status='done' AND p.target_name LIKE '%Undated'")
+        if group_key(st.one("SELECT filename FROM images WHERE image_key=?", r[0])) == grp}
+    paired, unpaired = assign_bursts(tk, sm)
+    for item_id, (image_key, dist) in paired.items():
+        taken_ts, google_id = idx.execute("SELECT taken_ts, google_id FROM items WHERE item_id=?", (item_id,)).fetchone()
+        ts_utc = datetime.datetime.fromtimestamp(taken_ts, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        local = planning.to_local(ts_utc, cfg["timezone"])
+        target, kind = planning.base_target(False, local, cfg)
+        st.db.execute("UPDATE matches SET google_id=COALESCE(?, google_id), method='content_burst', confidence='low', "
+                      "capture_ts_utc=?, capture_local=?, notes=? WHERE image_key=?",
+                      (google_id, ts_utc, local, f"burst frame ~ takeout item {item_id}, dHash {dist}", image_key))
+        st.db.execute("INSERT OR IGNORE INTO targets(name, kind, planned) VALUES(?,?,0)", (target, kind))
+        st.db.execute("UPDATE plan SET target_name=?, status='pending', reason=?, updated_at=? WHERE image_key=?",
+                      (target, f"dated via burst sibling in Takeout (dHash {dist})", now(), image_key))
+        st.db.execute("UPDATE uploads SET status='skipped', reason=?, updated_at=? WHERE item_id=? AND role='still' "
+                      "AND status='needs_review'", (f"burst frame already on SmugMug as {image_key}", now(), item_id))
+        idx.execute("UPDATE items SET status='on_smugmug_burst', smug_image_key=?, smug_album=?, "
+                    "smug_match_method='content_burst', smug_confidence='low' WHERE item_id=?", (image_key, target, item_id))
+        idx.execute("UPDATE content_matches SET decision='burst_match', image_key=?, dist=?, applied_at=? "
+                    "WHERE item_id=?", (image_key, dist, now(), item_id))
+    for item_id in unpaired:
+        st.db.execute("UPDATE uploads SET status='planned', reason='burst frame with no SmugMug copy left to pair', "
+                      "updated_at=? WHERE item_id=? AND role='still' AND status='needs_review'", (now(), item_id))
+        idx.execute("UPDATE content_matches SET decision='burst_unpaired', applied_at=? WHERE item_id=?", (now(), item_id))
+    st.db.execute("UPDATE targets SET planned=(SELECT COUNT(*) FROM plan WHERE target_name=targets.name)")
+    st.event("burst_apply", commit=False, group=grp, paired=len(paired), unpaired=len(unpaired),
+             smug_candidates=len(sm))
+    st.db.commit()
+    idx.commit()
+    summary = {"group": grp, "takeout_review_items": len(tk), "smug_undated_candidates": len(sm),
+               "paired_and_retargeted": len(paired), "released_for_upload": len(unpaired)}
+    st.finish_run("ok", summary)
+    return summary
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--index", default="data/takeout_index.db")
@@ -267,6 +336,8 @@ def main(argv=None):
     p.add_argument("--smugmug-config", default="smugmug_config.json")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--apply", action="store_true")
+    p.add_argument("--burst-apply", action="store_true", help="resolve burst-frame review items (see cmd_burst_apply)")
+    p.add_argument("--burst-group", default="lp_image")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
     for noisy in ("urllib3", "requests_oauthlib", "oauthlib"):
@@ -274,7 +345,12 @@ def main(argv=None):
     idx = sqlite3.connect(args.index)
     idx.executescript(SCHEMA)
     idx.execute(f"ATTACH '{os.path.abspath(args.state)}' AS c")
-    summary = cmd_apply(idx, args) if args.apply else cmd_compute(idx, args)
+    if args.burst_apply:
+        summary = cmd_burst_apply(idx, args)
+    elif args.apply:
+        summary = cmd_apply(idx, args)
+    else:
+        summary = cmd_compute(idx, args)
     print(summary)
     return 0
 

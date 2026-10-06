@@ -182,9 +182,18 @@ class SmugMugClient:
     def album(self, album_key):
         return self.request("GET", f"/api/v2/album/{album_key}")["Response"]["Album"]
 
-    def album_images(self, album_key, with_metadata=True):
-        """Yield (AlbumImage dict, ImageMetadata dict or {}) for every image in an album."""
-        params = {"_expand": "ImageMetadata"} if with_metadata else {}
+    def album_images(self, album_key, with_metadata=True, fields=None):
+        """Yield (AlbumImage dict, ImageMetadata dict or {}) for every image in an album.
+
+        fields: optional comma-separated AlbumImage field names (via _filter) for much smaller, faster pages;
+        ignored when with_metadata is True (the expansion needs the Uris block).
+        """
+        if with_metadata:
+            params = {"_expand": "ImageMetadata"}
+        elif fields:
+            params = {"_filter": fields, "_filteruri": ""}
+        else:
+            params = {}
         for img, exp in self.paged(f"/api/v2/album/{album_key}!images", "AlbumImage", params):
             md_uri = img.get("Uris", {}).get("ImageMetadata", {}).get("Uri")
             md = exp.get(md_uri, {}).get("ImageMetadata", {}) if md_uri else {}

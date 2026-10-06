@@ -228,7 +228,7 @@ def cmd_stage(st, cfg, args):
                                  taken.get(row["item_id"]), cfg["timezone"])
         else:
             clip_ts = clip_creation_ts(data)
-            still_ts = taken.get(row["item_id"])
+            still_ts = taken.get(row.get("pair_item_id") or row["item_id"])  # re-paired clips use their new still
             paired = row["target_name"] != cfg["undated_video_album"]  # unsorted clips aren't next to a still
             if paired and clip_ts and still_ts and abs(clip_ts - still_ts) > MAX_CLIP_SKEW:
                 raise PairingError(f"clip created {clip_ts - still_ts:+d}s from its still; likely not its pair")
@@ -425,22 +425,43 @@ def cmd_remove(st, cfg, client, args):
 # ---------------------------------------------------------------------- verify
 
 def cmd_verify(st, cfg, client, args):
-    out = {"albums_ok": 0, "albums_bad": 0}
-    names = [r[0] for r in st.q("SELECT DISTINCT target_name FROM uploads WHERE status='done'")]
-    if args.target:
-        names = [n for n in names if any(fnmatch.fnmatch(n, p) for p in args.target)]
-    for name in names:
-        album_key = st.one("SELECT album_key FROM targets WHERE name=?", name)
-        expected = {r[0] for r in st.q("SELECT image_key FROM uploads WHERE target_name=? AND status='done'", name)}
-        server = {img["ImageKey"] for img, _ in client.album_images(album_key, with_metadata=False)}
-        missing = expected - server
-        if missing:
-            out["albums_bad"] += 1
-            log.error("%s: %d uploaded images missing on server: %s", name, len(missing), sorted(missing)[:10])
-            st.event("upload_verify_mismatch", level="error", album_key=album_key, commit=False, missing=sorted(missing))
-        else:
-            out["albums_ok"] += 1
-    st.db.commit()
+    """Confirm uploads on the server. Incremental: only uploads without verified_at (unless --all).
+
+    Lists each affected album once, asking only for ImageKey, with a few albums in parallel.
+    """
+    where = "status='done'" + ("" if args.all else " AND verified_at IS NULL")
+    rows = st.q(f"SELECT upload_id, target_name, image_key FROM uploads WHERE {where}")
+    by_album = {}
+    for r in rows:
+        if not args.target or any(fnmatch.fnmatch(r["target_name"], p) for p in args.target):
+            by_album.setdefault(r["target_name"], []).append((r["upload_id"], r["image_key"]))
+    log.info("verifying %d uploads in %d albums", sum(len(v) for v in by_album.values()), len(by_album))
+
+    album_keys = {name: st.one("SELECT album_key FROM targets WHERE name=?", name) for name in by_album}
+
+    def listing(name):  # runs in a worker thread: no database access here
+        return name, {img["ImageKey"] for img, _ in client.album_images(album_keys[name], with_metadata=False,
+                                                                        fields="ImageKey")}
+
+    out = {"albums_ok": 0, "albums_bad": 0, "uploads_verified": 0, "uploads_missing": 0}
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
+        futures = [pool.submit(listing, name) for name in sorted(by_album)]
+        for n, fut in enumerate(concurrent.futures.as_completed(futures), 1):
+            name, server = fut.result()
+            ok = [uid for uid, key in by_album[name] if key in server]
+            missing = [key for uid, key in by_album[name] if key not in server]
+            st.db.executemany("UPDATE uploads SET verified_at=? WHERE upload_id=?", [(now(), uid) for uid in ok])
+            out["uploads_verified"] += len(ok)
+            out["uploads_missing"] += len(missing)
+            if missing:
+                out["albums_bad"] += 1
+                log.error("%s: %d uploaded images missing on server: %s", name, len(missing), sorted(missing)[:10])
+                st.event("upload_verify_mismatch", level="error", commit=False, name=name, missing=sorted(missing))
+            else:
+                out["albums_ok"] += 1
+            st.db.commit()
+            log.info("verify %d/%d: %s (%d ok%s)", n, len(by_album), name, len(ok),
+                     f", {len(missing)} MISSING" if missing else "")
     return out
 
 
@@ -473,6 +494,7 @@ def main(argv=None):
     p.add_argument("ids", nargs="*", help="remove: upload ids")
     p.add_argument("--yes", action="store_true", help="remove: actually delete (default dry run)")
     p.add_argument("--reason", default="misplaced", help="remove: recorded reason")
+    p.add_argument("--all", action="store_true", help="verify: re-check everything, not just unverified uploads")
     p.add_argument("--target", action="append", help="only these target albums (glob; repeatable)")
     p.add_argument("--limit", type=int)
     p.add_argument("--workers", type=int, default=4)

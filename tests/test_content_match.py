@@ -44,3 +44,19 @@ def test_different_group_never_compared():
     takeout = {1: ("img_1", rot(0))}
     smug = {"A": ("img_2", 0)}
     assert assign(takeout, smug)[1]["decision"] == "none"
+
+
+def test_assign_bursts_one_to_one_closest_first():
+    from gp2sm.content_match import assign_bursts
+    takeout = {1: rot(0b0), 2: rot(0b1), 3: rot((1 << 40) - 1)}
+    smug = {"A": 0b0, "B": 0b11}
+    paired, unpaired = assign_bursts(takeout, smug)
+    assert paired[1] == ("A", 0)          # exact frame wins A
+    assert paired[2] == ("B", 1)          # next closest takes B
+    assert unpaired == [3]                # nothing left near it -> upload
+
+
+def test_assign_bursts_respects_max_dist():
+    from gp2sm.content_match import assign_bursts
+    paired, unpaired = assign_bursts({1: rot((1 << 10) - 1)}, {"A": 0}, max_dist=6)
+    assert paired == {} and unpaired == [1]

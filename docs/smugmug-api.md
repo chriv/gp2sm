@@ -61,6 +61,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 | HEIC | Accepted but **converted to JPEG**. `FileName` becomes `NAME.JPG`, and `ArchivedMD5`/`ArchivedSize` are the JPEG's. The original isn't kept. |
 | MP4, MOV (H.264 and HEVC/hvc1) | Accepted, `Format: "MP4"`. Re-encoded: `ArchivedMD5`/`ArchivedSize` don't match the original. `FileName` keeps the original name and extension. |
 | Very small videos (≤ about 40 KB) | **Rejected: code 64 "unknown file type"**, whatever the duration, extension or Content-Type. A 1.5 s / 3.4 MB MOV was accepted, and a 5 s / 4.5 KB MOV was rejected. Real camera videos aren't affected, but test fixtures must be larger than ~60 KB. |
+| Low-resolution videos (2026-10-06, real Live Photo clips) | **Rejected: code 64 "unknown file type" or code 72 "video too small"**, decided by frame size, not duration: 152×114, 156×234, 192×258, 254×118 and 234×462 HEVC clips were rejected, while full-resolution clips as short as 0.43 s were accepted. The exact threshold is unknown (somewhere around 250–460 px on the longer side). Treat codes 64/72 on video as permanent. |
 | WebP, ICO | Rejected: code 64 "unknown file type". |
 | BMP | Rejected: code 6 "wrong format (RAW uploads require the Source add-on)". |
 
