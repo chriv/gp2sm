@@ -69,6 +69,14 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - **Plugin discovery** via Python entry points (`gp2sm.services`), so `pip install gp2sm-<service>` can add a service.
   - **Contract tests:** one shared conformance suite that every adapter must pass against its own fake.
 - **State:** a neutral schema (`service` + opaque item/collection refs, service extras as JSON) with a migration from the current SmugMug-/Google-shaped columns.
+- **Housekeeping:** the local probe scripts (`probes/`, gitignored) still import the removed legacy SmugMug module for auth. Port them to the client/adapter before reusing them.
+- **Sub-stages** (one commit each; CI must pass before the next):
+  - A1.1 neutral item/album records, `PhotoSource`/`PhotoDestination` interfaces, capability flags
+  - A1.2 SmugMug adapter behind `PhotoDestination` + a shared contract test suite for destinations
+  - A1.3 Google Takeout behind `PhotoSource`
+  - A1.4 package layout (`smugmug/`, `takeout/`, `media/`, `state/`, `organize/`, `cli/`), behavior unchanged
+  - A1.5 cross-platform HEIC conversion (`pillow-heif`) with an EXIF parity test
+  - A1.6 entry-point plugin discovery + versioned state migrations
 - **Layout:**
   - `gp2sm/smugmug/` (client, models)
   - `gp2sm/takeout/` (index, sidecars, pairing)
