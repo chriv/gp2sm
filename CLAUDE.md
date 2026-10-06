@@ -27,7 +27,7 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 
 ## Architecture (`gp2sm/`)
 
-- `services/`: service-neutral `PhotoDestination`/`PhotoSource` protocols, records, and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (run against the fake in CI; opt-in live run against SmugMug).
+- `services/`: service-neutral `PhotoDestination`/`PhotoSource` protocols, records, and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (run against the fake in CI; opt-in live run against SmugMug); any source must pass `tests/contracts/source.py`. `takeout_source.TakeoutSource` is the Google Takeout source.
 
 - `smugmug_client.py`: the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging via `Pages.NextPage`, per-endpoint list keys (`AlbumImage` vs `Image` vs `Node`), and rate-limit headers. Batch `!moveimages` is all-or-nothing.
 - `planning.py`: pure logic, no I/O, unit tested.
