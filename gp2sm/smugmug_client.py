@@ -18,11 +18,28 @@ import time
 import requests
 from requests_oauthlib import OAuth1Session
 
+from gp2sm.services.base import Capabilities
+
 API = "https://api.smugmug.com"
 UPLOAD_URL = "https://upload.smugmug.com/"
 log = logging.getLogger(__name__)
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+# Behavior verified by probes (docs/smugmug-api.md), declared for the service-neutral core.
+SMUGMUG_CAPABILITIES = Capabilities(
+    name="smugmug",
+    atomic_batch_moves=True,
+    writes_may_apply_despite_error=True,
+    moves_ignored_while_processing=True,
+    can_rename_items=False,
+    allows_duplicate_uploads=True,
+    stores_original_bytes=frozenset({".jpg", ".jpeg", ".png", ".gif"}),
+    converts_on_upload=((".heic", ".jpg"), (".heif", ".jpg")),
+    rejected_extensions=frozenset({".webp", ".ico", ".bmp"}),
+    min_video_pixels=None,  # low-resolution clips are rejected; exact threshold unknown (~250-460 px long side)
+    max_items_per_album=5000,
+)
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -52,6 +69,7 @@ def url_name_for(name):
 
 
 class SmugMugClient:
+    capabilities = SMUGMUG_CAPABILITIES
     def __init__(self, api_key, api_secret, token, token_secret, *, max_retries=6, page_size=100,
                  session_factory=None, sleep=time.sleep, min_ratelimit_remaining=200):
         self._creds = (api_key, api_secret, token, token_secret)

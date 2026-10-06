@@ -10,10 +10,12 @@ Quirk switches (all off by default):
 
 import itertools
 
-from gp2sm.smugmug_client import NotFound, SmugMugError
+from gp2sm.smugmug_client import SMUGMUG_CAPABILITIES, NotFound, SmugMugError
 
 
 class FakeSmugMug:
+    capabilities = SMUGMUG_CAPABILITIES
+
     def __init__(self, albums=None, items=None, bad=(), ambiguous=0, processing=(), min_video_bytes=0):
         self.albums = {k: set(v) for k, v in (albums or {}).items()}
         self.items = dict(items or {})
@@ -107,9 +109,20 @@ class FakeSmugMug:
         if filename.lower().endswith((".mp4", ".mov")) and len(data) < self.min_video_bytes:
             raise SmugMugError("stat=fail code=72 video too small", http_status=200, code=72)
         item_id = next(self._ids)
-        self.items[item_id] = {"name": filename, "size": len(data), "is_video": content_type.startswith("video/")}
+        self.items[item_id] = {"name": filename, "size": len(data), "is_video": content_type.startswith("video/"),
+                               "data": data}
         self.albums.setdefault(album_id, set()).add(item_id)
         return {"item_id": item_id, "item_ref": self.item_ref(album_id, item_id)}
+
+    def preview_bytes(self, item_id, serial=0):
+        return self.items.get(item_id, {}).get("preview", b"")
+
+    def download_item(self, item_id, serial=0, is_video=False):
+        return self.items[item_id].get("data", b"")
+
+    def video_info(self, item_id, serial=0):
+        it = self.items.get(item_id, {})
+        return {"duration_s": it.get("duration_s"), "width": it.get("width"), "height": it.get("height")}
 
     def delete_album(self, album_id):
         self.albums.pop(album_id, None)
