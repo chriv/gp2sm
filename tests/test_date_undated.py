@@ -1,5 +1,5 @@
-from gp2sm.date_undated import pick_by_content, pick_by_video_shape, single_month, stem_key
 from gp2sm.media import mp4_duration
+from gp2sm.organize.date_undated import pick_by_content, pick_by_video_shape, single_month, stem_key
 
 
 def rot(h):
@@ -39,7 +39,7 @@ def test_stem_key_strips_download_prefix():
 
 
 def test_video_shape_rules_no_upscale_and_relative_tolerance():
-    from gp2sm.date_undated import video_shape_hits
+    from gp2sm.organize.date_undated import video_shape_hits
     # destination 360x638 (229,680 px); 108x192 candidate is far smaller -> can't be the source
     assert video_shape_hits((37.23, 1.772, 229680), [("big", 37.23, 1.769, 229320), ("tiny", 37.23, 1.778, 20736)]) == ["big"]
     # re-encode padded 11.96 s to 12.7 s: within 7%
@@ -47,5 +47,5 @@ def test_video_shape_rules_no_upscale_and_relative_tolerance():
 
 
 def test_near_matches():
-    from gp2sm.date_undated import near_matches
+    from gp2sm.organize.date_undated import near_matches
     assert sorted(near_matches(0, {"a": rot(0), "b": rot(0b1), "c": rot((1 << 30) - 1)})) == ["a", "b"]

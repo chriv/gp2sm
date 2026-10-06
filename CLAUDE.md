@@ -27,22 +27,25 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 
 ## Architecture (`gp2sm/`)
 
-- `services/`: service-neutral `PhotoDestination`/`PhotoSource` protocols, records, and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (run against the fake in CI; opt-in live run against SmugMug); any source must pass `tests/contracts/source.py`. `takeout_source.TakeoutSource` is the Google Takeout source.
-
-- `smugmug_client.py`: the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging via `Pages.NextPage`, per-endpoint list keys (`AlbumImage` vs `Image` vs `Node`), and rate-limit headers. Batch `!moveimages` is all-or-nothing.
-- `planning.py`: pure logic, no I/O, unit tested.
-  - Matches SmugMug images to legacy Google items (MD5 → filename / HEIC-stem `.JPG` with a dimension check). For photos, a known dimension mismatch rules a match out.
-  - Groups byte-identical duplicates by `ArchivedMD5` (SmugMug's video re-encoding is deterministic, so this works for videos too) and picks a keeper.
-  - Assigns each item a target album, with soft-cap splitting into `- Part N`.
-- `state.py`: the SQLite schema. `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`.
-- `consolidate.py`: CLI orchestration. Before each batch, items are marked `in_progress`. After the move, the batch is checked by the target's `ImageCount` change, falling back to per-image lookups. Any leftover `in_progress` or `unknown` items are reconciled with `image!albums` at the start of the next run. Duplicates are moved to a review album, never deleted.
+- `services/`: service-neutral `PhotoDestination`/`PhotoSource` protocols, records (`ItemRecord`, `AlbumRecord`, `SourceItem`) and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (against the fake in CI; opt-in live run against SmugMug). Any source must pass `tests/contracts/source.py`.
+- `smugmug/client.py`: the SmugMug adapter, and the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging, per-endpoint list keys, rate-limit headers, and ambiguous writes (never blindly retried). It declares `SMUGMUG_CAPABILITIES`.
+- `takeout/`: `index.py` (stream-index `.tgz`, MD5 + sidecars), `match.py` (sidecar ↔ media pairing incl. `(N)` names, Live Photo clips), `source.py` (`TakeoutSource`, the PhotoSource), `upload.py` (plan/stage/upload/verify Live Photo pairs and HEIC; HEIC→JPEG keeping EXIF, filling in missing dates; clip-time pairing guard).
+- `organize/`:
+  - `planning.py`: pure matching, duplicate grouping and album planning
+  - `consolidate.py`: inventory → match → plan → apply → verify, reconcile/undo, gated deletions
+  - `content_match.py`: dHash matching, burst pairing
+  - `place_clips.py`: unsorted clips → beside their still, by time + aspect
+  - `date_undated.py`: evidence chain for undated items, server-confirmed moves
+- `state/`: the SQLite schema. `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`. Specific TODOs for a neutral, versioned schema are in `state/__init__.py`.
+- `media/`: MP4 header parsing (duration, dimensions), aspect ratio.
+- `cli/`: the `gp2sm <command>` dispatcher.
 
 ## Modularity rule (until Stage A1 adds the service layer)
 
 The goal is a plugin architecture with any photo service on either end (see `docs/ROADMAP.md` A1). Don't add to the existing coupling:
-- Only `smugmug_client.py` may build SmugMug URLs, make HTTP calls to SmugMug, or know SmugMug field names and quirks. Everything else uses its **neutral surface** (`list_albums`, `list_album_items`, `item_ref`, `move_items`, `album_contains`, `item_album_ids`, `album_item_count`, `upload_file`, `remove_item`, `preview_bytes`, `root_folder`, `set_sort_by_filename`, `ensure_folder_path`, `ensure_album`, `delete_album`), which returns plain dicts (`item_id`, `item_ref`, `name`, `md5`, `size`, `width`, `height`, `is_video`, `duration_s`, `capture_time`, …). If logic needs something new, add a neutral method there.
-- The state schema is still SmugMug-/Google-shaped (see the TODO in `state.py`). Map columns to neutral names at the boundary (`SELECT image_key AS item_id`) rather than spreading service names into logic.
-- Only the `takeout_*` modules may know Google Takeout layout and metadata formats.
+- Only `smugmug/client.py` may build SmugMug URLs, make HTTP calls to SmugMug, or know SmugMug field names and quirks. Everything else uses its **neutral surface** (`list_albums`, `list_album_items`, `item_ref`, `move_items`, `album_contains`, `item_album_ids`, `album_item_count`, `upload_file`, `remove_item`, `preview_bytes`, `root_folder`, `set_sort_by_filename`, `ensure_folder_path`, `ensure_album`, `delete_album`), which returns plain dicts (`item_id`, `item_ref`, `name`, `md5`, `size`, `width`, `height`, `is_video`, `duration_s`, `capture_time`, …). If logic needs something new, add a neutral method there.
+- The state schema is still SmugMug-/Google-shaped (see the TODO in `state/__init__.py`). Map columns to neutral names at the boundary (`SELECT image_key AS item_id`) rather than spreading service names into logic.
+- Only `takeout/` may know Google Takeout layout and metadata formats.
 - New decision logic goes in pure functions that take neutral values (names, timestamps, hashes, dimensions), not service field names.
 
 ## Probes

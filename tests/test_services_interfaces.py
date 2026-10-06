@@ -1,5 +1,5 @@
 from gp2sm.services import Capabilities, PhotoDestination, SourceItem
-from gp2sm.smugmug_client import SMUGMUG_CAPABILITIES, SmugMugClient
+from gp2sm.smugmug.client import SMUGMUG_CAPABILITIES, SmugMugClient
 from tests.fakes.smugmug import FakeSmugMug
 
 

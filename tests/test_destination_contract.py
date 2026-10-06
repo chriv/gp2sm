@@ -21,7 +21,7 @@ class TestFakeSmugMugContract(DestinationContract):
 
 @pytest.fixture(scope="module")
 def live_sandbox():
-    from gp2sm.smugmug_client import SmugMugClient
+    from gp2sm.smugmug.client import SmugMugClient
     client = SmugMugClient.from_config_file(os.environ["GP2SM_LIVE_SMUGMUG"])
     name = "gp2sm-contract-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     folder = client.ensure_folder_path(client.root_folder(), name)

@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from gp2sm.smugmug_client import NotFound, SmugMugClient, SmugMugError, url_name_for
+from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError, url_name_for
 
 
 class FakeResponse:

@@ -14,7 +14,7 @@ the existing JPEG.
   remove   delete specific uploads made by this tool (by id; dry run unless --yes)
   report   summarize
 
-Usage: python -m gp2sm.takeout_upload [--config data/consolidate.json] <command> [--target GLOB] [--limit N]
+Usage: gp2sm takeout-upload [--config data/consolidate.json] <command> [--target GLOB] [--limit N]
 """
 
 import argparse
@@ -36,12 +36,12 @@ from zoneinfo import ZoneInfo
 
 import piexif
 
-from gp2sm import planning
-from gp2sm.consolidate import ensure_target, load_config, setup_logging
-from gp2sm.smugmug_client import NotFound, SmugMugClient, SmugMugError
+from gp2sm.organize import planning
+from gp2sm.organize.consolidate import ensure_target, load_config, setup_logging
+from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
 from gp2sm.state import State, now
 
-log = logging.getLogger("gp2sm.takeout_upload")
+log = logging.getLogger("gp2sm.takeout.upload")
 
 HEIC = (".heic", ".heif")
 ON_SMUGMUG = ("on_smugmug", "on_smugmug_content_match", "on_smugmug_by_hash", "on_smugmug_inferred_same_name_group")
@@ -481,7 +481,7 @@ def cmd_report(st, cfg, args):
 # ------------------------------------------------------------------------ main
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="gp2sm.takeout_upload", description=__doc__,
+    p = argparse.ArgumentParser(prog="gp2sm takeout-upload", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default="data/consolidate.json")
     p.add_argument("--index", default="data/takeout_index.db")

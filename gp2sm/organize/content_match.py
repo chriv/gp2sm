@@ -8,8 +8,8 @@ Candidates share a base name (e.g. `IMG_2155(1).HEIC` ~ `IMG_2155.JPG`, `lp_imag
 Decision per Takeout item: 'match' if best <= MATCH_MAX and next-best >= MARGIN_MIN (each SmugMug
 image is used at most once, closest pairs first); 'review' if best <= REVIEW_MAX; otherwise 'none'.
 
-  python -m gp2sm.content_match            # compute (resumable; hashes are cached)
-  python -m gp2sm.content_match --apply    # write matches into the takeout + consolidation DBs
+  gp2sm content-match            # compute (resumable; hashes are cached)
+  gp2sm content-match --apply    # write matches into the takeout + consolidation DBs
 """
 
 import argparse
@@ -26,11 +26,11 @@ import tempfile
 
 from PIL import Image, ImageOps
 
-from gp2sm import planning
-from gp2sm.smugmug_client import SmugMugClient
+from gp2sm.organize import planning
+from gp2sm.smugmug.client import SmugMugClient
 from gp2sm.state import State, now
 
-log = logging.getLogger("gp2sm.content_match")
+log = logging.getLogger("gp2sm.organize.content_match")
 
 MATCH_MAX = 6
 MARGIN_MIN = 12
@@ -238,7 +238,7 @@ def cmd_compute(idx, args):
 
 def cmd_apply(idx, args):
     """Record clean matches: Takeout item -> SmugMug image; date the SmugMug copy and re-target it to its month."""
-    cfg = __import__("gp2sm.consolidate", fromlist=["load_config"]).load_config(args.config)
+    cfg = __import__("gp2sm.organize.consolidate", fromlist=["load_config"]).load_config(args.config)
     st = State(args.state)
     st.start_run("content_match.apply", vars(args))
     rows = idx.execute("SELECT cm.item_id, cm.image_key, cm.dist, it.google_id, it.taken_ts FROM content_matches cm "
@@ -277,7 +277,7 @@ def cmd_burst_apply(idx, args):
     """Resolve 'review' items of a burst-prone name group (default lp_image): pair frames one-to-one,
     date + re-target the paired SmugMug copies, and release unpaired Takeout stills for upload."""
     import datetime
-    cfg = __import__("gp2sm.consolidate", fromlist=["load_config"]).load_config(args.config)
+    cfg = __import__("gp2sm.organize.consolidate", fromlist=["load_config"]).load_config(args.config)
     st = State(args.state)
     st.start_run("content_match.burst_apply", vars(args))
     grp = args.burst_group
@@ -323,7 +323,7 @@ def cmd_burst_apply(idx, args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="gp2sm content-match", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--index", default="data/takeout_index.db")
     p.add_argument("--state", default="data/consolidation.db")
     p.add_argument("--config", default="data/consolidate.json")

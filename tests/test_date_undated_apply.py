@@ -2,7 +2,7 @@ import argparse
 
 import pytest
 
-from gp2sm import date_undated
+from gp2sm.organize import date_undated
 from gp2sm.state import State
 from tests.fakes.smugmug import FakeSmugMug
 

@@ -8,7 +8,7 @@ Steps (results in the takeout index DB):
   3. match items to legacy Google items by (filename, capture time) and, through the
      consolidation DB, to the SmugMug copy placed there
 
-Usage: python -m gp2sm.takeout_match [--index data/takeout_index.db] [--state data/consolidation.db]
+Usage: gp2sm takeout-match [--index data/takeout_index.db] [--state data/consolidation.db]
 """
 
 import argparse
@@ -21,7 +21,7 @@ import sqlite3
 import sys
 from collections import defaultdict
 
-log = logging.getLogger("gp2sm.takeout_match")
+log = logging.getLogger("gp2sm.takeout.match")
 
 STILL_EXTS = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".dng", ""}
 MOTION_EXTS = {".mp4", ".mov"}
@@ -115,7 +115,7 @@ def build_items(idx):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="gp2sm takeout-match", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--index", default="data/takeout_index.db")
     p.add_argument("--state", default="data/consolidation.db")
     args = p.parse_args(argv)

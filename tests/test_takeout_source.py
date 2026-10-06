@@ -1,7 +1,7 @@
 import pytest
 
-from gp2sm import takeout_index
-from gp2sm.takeout_source import TakeoutSource
+from gp2sm.takeout import index as takeout_index
+from gp2sm.takeout.source import TakeoutSource
 from tests.contracts.source import SourceContract
 from tests.fixtures.synthetic import make_takeout, standard_takeout_entries
 

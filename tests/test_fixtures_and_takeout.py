@@ -1,10 +1,10 @@
 import hashlib
 import sqlite3
 
-from gp2sm import takeout_index
 from gp2sm.media import aspect, mp4_dims, mp4_duration
-from gp2sm.takeout_match import build_items
-from gp2sm.takeout_upload import clip_creation_ts
+from gp2sm.takeout import index as takeout_index
+from gp2sm.takeout.match import build_items
+from gp2sm.takeout.upload import clip_creation_ts
 from tests.fixtures.synthetic import jpeg_bytes, make_takeout, mp4_bytes, standard_takeout_entries
 
 

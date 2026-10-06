@@ -4,7 +4,7 @@ One streaming pass per archive records every member's path, size and MD5, and st
 text of every .json sidecar. Archives are processed in parallel; each archive is committed only
 when fully read, so an interrupted run simply re-reads that archive.
 
-Usage: python -m gp2sm.takeout_index data/takeout/*.tgz [--db data/takeout_index.db]
+Usage: gp2sm takeout-index data/takeout/*.tgz [--db data/takeout_index.db]
 """
 
 import argparse
@@ -17,7 +17,7 @@ import sys
 import tarfile
 import time
 
-log = logging.getLogger("gp2sm.takeout_index")
+log = logging.getLogger("gp2sm.takeout.index")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS archives(name TEXT PRIMARY KEY, size INT, members INT, indexed_at TEXT, seconds REAL);
@@ -62,7 +62,7 @@ def index_archive(path):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="gp2sm takeout-index", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("archives", nargs="+")
     p.add_argument("--db", default="data/takeout_index.db")
     p.add_argument("--force", action="store_true", help="re-index archives already indexed")

@@ -10,7 +10,7 @@ Quirk switches (all off by default):
 
 import itertools
 
-from gp2sm.smugmug_client import SMUGMUG_CAPABILITIES, NotFound, SmugMugError
+from gp2sm.smugmug.client import SMUGMUG_CAPABILITIES, NotFound, SmugMugError
 
 
 class FakeSmugMug:

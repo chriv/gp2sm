@@ -12,9 +12,9 @@ Evidence chain (the first confident answer wins; the method is recorded per item
 
 Moves are reversible. Live Photo clips and stills go to photo month albums; regular videos go to video albums.
 
-  python -m gp2sm.date_undated plan [--full-scan]
-  python -m gp2sm.date_undated apply
-  python -m gp2sm.date_undated report
+  gp2sm date-undated plan [--full-scan]
+  gp2sm date-undated apply
+  gp2sm date-undated report
 """
 
 import argparse
@@ -31,15 +31,15 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image
 
-from gp2sm import planning
-from gp2sm.consolidate import ensure_target, load_config, setup_logging
-from gp2sm.content_match import MARGIN_MIN, MATCH_MAX, dhash, hamming, hash_takeout
 from gp2sm.media import aspect, mp4_dims, mp4_duration
-from gp2sm.smugmug_client import SmugMugClient, SmugMugError
+from gp2sm.organize import planning
+from gp2sm.organize.consolidate import ensure_target, load_config, setup_logging
+from gp2sm.organize.content_match import MARGIN_MIN, MATCH_MAX, dhash, hamming, hash_takeout
+from gp2sm.smugmug.client import SmugMugClient, SmugMugError
 from gp2sm.state import State, now
-from gp2sm.takeout_upload import clip_creation_ts
+from gp2sm.takeout.upload import clip_creation_ts
 
-log = logging.getLogger("gp2sm.date_undated")
+log = logging.getLogger("gp2sm.organize.date_undated")
 VIDEO_EXTS = (".mp4", ".mov")
 
 
@@ -303,7 +303,7 @@ def cmd_report(st, cfg, client, args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="gp2sm.date_undated", description=__doc__,
+    p = argparse.ArgumentParser(prog="gp2sm date-undated", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["plan", "apply", "report"])
     p.add_argument("--config", default="data/consolidate.json")

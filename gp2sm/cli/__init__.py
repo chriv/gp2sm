@@ -6,13 +6,13 @@ import sys
 from gp2sm import __version__
 
 COMMANDS = {
-    "consolidate": ("gp2sm.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
-    "takeout-index": ("gp2sm.takeout_index", "index Google Takeout archives without extracting them"),
-    "takeout-match": ("gp2sm.takeout_match", "pair metadata files and Live Photo clips; compare with consolidation state"),
-    "content-match": ("gp2sm.content_match", "perceptual matching of Takeout stills to existing SmugMug copies"),
-    "takeout-upload": ("gp2sm.takeout_upload", "plan/stage/upload/verify Takeout items (Live Photo pairs, HEIC)"),
-    "place-clips": ("gp2sm.place_clips", "place unsorted clips beside their stills by capture time"),
-    "date-undated": ("gp2sm.date_undated", "date items in undated albums from evidence and move them"),
+    "consolidate": ("gp2sm.organize.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
+    "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
+    "takeout-match": ("gp2sm.takeout.match", "pair metadata files and Live Photo clips; compare with consolidation state"),
+    "content-match": ("gp2sm.organize.content_match", "perceptual matching of Takeout stills to existing SmugMug copies"),
+    "takeout-upload": ("gp2sm.takeout.upload", "plan/stage/upload/verify Takeout items (Live Photo pairs, HEIC)"),
+    "place-clips": ("gp2sm.organize.place_clips", "place unsorted clips beside their stills by capture time"),
+    "date-undated": ("gp2sm.organize.date_undated", "date items in undated albums from evidence and move them"),
 }
 
 

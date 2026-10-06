@@ -1,4 +1,4 @@
-from gp2sm import planning
+from gp2sm.organize import planning
 
 CFG = {
     "photo_album_template": "P {yyyy}-{mm}",

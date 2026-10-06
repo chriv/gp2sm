@@ -10,7 +10,7 @@ import uuid
 import pytest
 
 from gp2sm.services import PhotoDestination
-from gp2sm.smugmug_client import NotFound, SmugMugError
+from gp2sm.smugmug.client import NotFound, SmugMugError
 from tests.fixtures.synthetic import jpeg_bytes
 
 

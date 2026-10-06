@@ -1,6 +1,6 @@
 import pytest
 
-from gp2sm import consolidate
+from gp2sm.organize import consolidate
 from gp2sm.state import State
 from tests.fakes.smugmug import FakeSmugMug
 

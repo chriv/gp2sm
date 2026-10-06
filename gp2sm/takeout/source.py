@@ -1,6 +1,6 @@
 """Google Takeout as a PhotoSource.
 
-Built on the Takeout index (takeout_index) and its sidecar/Live Photo pairing (takeout_match.build_items);
+Built on the Takeout index (takeout/index.py) and its sidecar/Live Photo pairing (takeout/match.py build_items);
 independent of any destination or legacy database. Items are yielded in a stable order. Reading bytes
 streams the gzip archive; prefer iter_bytes() for many items (one pass per archive).
 """
@@ -11,7 +11,7 @@ import tarfile
 from collections import defaultdict
 
 from gp2sm.services.base import SourceItem
-from gp2sm.takeout_match import MOTION_EXTS, build_items
+from gp2sm.takeout.match import MOTION_EXTS, build_items
 
 
 def _ref(archive, path):

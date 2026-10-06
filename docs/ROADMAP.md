@@ -20,11 +20,11 @@ Part A builds the tool; Part B applies it. The work is split into **stages that 
 
 Already working and tested (`gp2sm/`, `tests/`):
 
-- `smugmug_client`: retries, ambiguous-write handling, paging, per-endpoint list keys, uploads, album sort.
-- `consolidate`: inventory → match → plan → apply → verify, plus reconcile, undo and duplicate deletion. Used to consolidate about 24k items.
-- `takeout_index` / `takeout_match`: stream-index archives without extracting them, and pair sidecars and Live Photo motion files.
-- `content_match`: perceptual (dHash) matching between Takeout originals and existing SmugMug copies.
-- `takeout_upload`:
+- `smugmug/client.py`: retries, ambiguous-write handling, paging, per-endpoint list keys, uploads, album sort.
+- `organize/consolidate.py`: inventory → match → plan → apply → verify, plus reconcile, undo and duplicate deletion. Used to consolidate about 24k items.
+- `takeout/index.py` / `takeout/match.py`: stream-index archives without extracting them, and pair sidecars and Live Photo motion files.
+- `organize/content_match.py`: perceptual (dHash) matching between Takeout originals and existing SmugMug copies.
+- `takeout/upload.py`:
   - plan / stage / upload / verify / remove
   - HEIC→JPEG with EXIF kept or filled in from Takeout metadata
   - a clip-timestamp pairing guard

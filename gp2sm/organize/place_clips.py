@@ -11,11 +11,11 @@ remove the old copy. Removal is the only irreversible step and needs --yes.
 Source for the re-upload, in order: the staged copy → re-extracted from the Takeout → downloaded from the
 destination (last resort; a re-encoded rendition, not the original).
 
-  python -m gp2sm.place_clips plan      [--album NAME] [--window 60] [--aspect-tol 0.02]
-  python -m gp2sm.place_clips upload    [--limit N]
-  python -m gp2sm.place_clips verify
-  python -m gp2sm.place_clips finalize  [--yes]       # removes the old copies (dry run without --yes)
-  python -m gp2sm.place_clips report
+  gp2sm place-clips plan      [--album NAME] [--window 60] [--aspect-tol 0.02]
+  gp2sm place-clips upload    [--limit N]
+  gp2sm place-clips verify
+  gp2sm place-clips finalize  [--yes]       # removes the old copies (dry run without --yes)
+  gp2sm place-clips report
 """
 
 import argparse
@@ -30,13 +30,13 @@ import tarfile
 
 from PIL import Image
 
-from gp2sm.consolidate import load_config, setup_logging
 from gp2sm.media import aspect, mp4_dims
-from gp2sm.smugmug_client import NotFound, SmugMugClient, SmugMugError
+from gp2sm.organize.consolidate import load_config, setup_logging
+from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
 from gp2sm.state import State, now
-from gp2sm.takeout_upload import clip_creation_ts, unique_name
+from gp2sm.takeout.upload import clip_creation_ts, unique_name
 
-log = logging.getLogger("gp2sm.place_clips")
+log = logging.getLogger("gp2sm.organize.place_clips")
 
 
 # ------------------------------------------------------------------ pure part
@@ -281,7 +281,7 @@ def cmd_report(st, cfg, client, args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="gp2sm.place_clips", description=__doc__,
+    p = argparse.ArgumentParser(prog="gp2sm place-clips", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["plan", "upload", "verify", "finalize", "report"])
     p.add_argument("--config", default="data/consolidate.json")

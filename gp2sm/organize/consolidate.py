@@ -15,7 +15,7 @@ Pipeline (each step is idempotent and recorded in the state DB):
   delete-empty-sources  delete source albums the server reports as empty (--yes)
   delete-empty-targets  delete albums this tool created that are empty and have nothing planned (--yes)
 
-Usage: python -m gp2sm.consolidate [--config data/consolidate.json] <command> [options]
+Usage: gp2sm consolidate [--config data/consolidate.json] <command> [options]
 """
 
 import argparse
@@ -29,11 +29,11 @@ import sqlite3
 import sys
 import uuid
 
-from gp2sm import planning
-from gp2sm.smugmug_client import NotFound, SmugMugClient, SmugMugError
+from gp2sm.organize import planning
+from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
 from gp2sm.state import State, now
 
-log = logging.getLogger("gp2sm.consolidate")
+log = logging.getLogger("gp2sm.organize.consolidate")
 
 DEFAULTS = {
     "smugmug_config": "smugmug_config.json",
@@ -639,7 +639,7 @@ NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-dup
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="gp2sm.consolidate", description=__doc__,
+    p = argparse.ArgumentParser(prog="gp2sm consolidate", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default="data/consolidate.json")
     p.add_argument("--debug", action="store_true")
