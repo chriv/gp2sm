@@ -28,14 +28,13 @@ import os
 import re
 import signal
 import sqlite3
-import subprocess
 import sys
 import tarfile
-import tempfile
 from zoneinfo import ZoneInfo
 
 import piexif
 
+from gp2sm.media.convert import to_jpeg
 from gp2sm.organize import planning
 from gp2sm.organize.consolidate import ensure_target, load_config, setup_logging
 from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
@@ -202,12 +201,7 @@ def select(st, statuses, args):
 
 
 def convert_still(data, src_ext, dest, taken_ts, tz_name):
-    with tempfile.TemporaryDirectory() as tmp:
-        src = os.path.join(tmp, "src" + src_ext)
-        with open(src, "wb") as f:
-            f.write(data)
-        subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "92", src, "--out", dest],
-                       check=True, capture_output=True, timeout=300)
+    to_jpeg(data, src_ext, dest, quality=92)
     return fill_exif_date(dest, taken_ts, tz_name)
 
 

@@ -19,13 +19,12 @@ import logging
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import tarfile
-import tempfile
 
-from PIL import Image, ImageOps
+from PIL import Image
 
+from gp2sm.media.convert import render_small
 from gp2sm.organize import planning
 from gp2sm.smugmug.client import SmugMugClient
 from gp2sm.state import State, now
@@ -131,15 +130,8 @@ def assign_bursts(takeout, smug, max_dist=MATCH_MAX):
 # ------------------------------------------------------------------- I/O parts
 
 def render_hashes(data, ext):
-    """Bytes of a still -> 4 rotation dHashes (HEIC via macOS sips)."""
-    with tempfile.TemporaryDirectory() as tmp:
-        src = os.path.join(tmp, "src" + ext)
-        out = os.path.join(tmp, "out.jpg")
-        with open(src, "wb") as f:
-            f.write(data)
-        subprocess.run(["sips", "-Z", "400", "-s", "format", "jpeg", src, "--out", out],
-                       check=True, capture_output=True, timeout=120)
-        return rotation_hashes(ImageOps.exif_transpose(Image.open(out)))
+    """Bytes of a still -> 4 rotation dHashes (any format Pillow + pillow-heif can open)."""
+    return rotation_hashes(render_small(data))
 
 
 def hash_takeout(idx, takeout_dir, wanted, workers):
