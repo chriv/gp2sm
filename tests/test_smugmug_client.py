@@ -156,13 +156,11 @@ def test_neutral_item_mapping_hides_smugmug_field_names():
     assert "Uris" not in it["raw"]
 
 
-def test_item_ref_and_upload_file_result():
+def test_item_ref_and_upload_file_result(tmp_path):
     c, s = client([FakeResponse(200, {"stat": "ok", "Image": {"ImageUri": "/api/v2/image/K9-0",
                                                                "AlbumImageUri": "/api/v2/album/AL/image/K9-0"}})])
     assert c.item_ref("AL", "K9") == "/api/v2/album/AL/image/K9-0"
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
-        f.write(b"x")
-        f.flush()
-        assert c.upload_file("AL", f.name, "a.jpg", "image/jpeg") == {"item_id": "K9", "item_ref": "/api/v2/album/AL/image/K9-0"}
+    path = tmp_path / "a.jpg"
+    path.write_bytes(b"x")  # a closed file: Windows can't reopen a NamedTemporaryFile that's still open
+    assert c.upload_file("AL", str(path), "a.jpg", "image/jpeg") == {"item_id": "K9", "item_ref": "/api/v2/album/AL/image/K9-0"}
     assert s.calls[0][2]["headers"]["X-Smug-AlbumUri"] == "/api/v2/album/AL"
