@@ -124,6 +124,9 @@ class FakeSmugMug:
         it = self.items.get(item_id, {})
         return {"duration_s": it.get("duration_s"), "width": it.get("width"), "height": it.get("height")}
 
+    def delete_folder(self, folder_ref):
+        pass
+
     def delete_album(self, album_id):
         self.albums.pop(album_id, None)
 

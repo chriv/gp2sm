@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .venv/bin/python -m pytest -q                            # all tests
 .venv/bin/python -m pytest -q tests/test_planning.py -k heic   # single test
 .venv/bin/ruff check gp2sm tests                         # lint (config in pyproject.toml)
+GP2SM_LIVE_SMUGMUG=smugmug_config.json .venv/bin/python -m pytest -q -m live   # destination contract vs real SmugMug (sandbox folder, cleaned up)
 .venv/bin/gp2sm --help                                   # all commands (gp2sm <command> --help for each)
 ```
 
@@ -25,6 +26,8 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 `gp2sm takeout-index data/takeout/*.tgz` → `gp2sm takeout-match` → `gp2sm content-match [--apply]` → `gp2sm takeout-upload plan|stage|upload|verify|report|remove`, then `gp2sm place-clips plan|upload|verify|finalize` and `gp2sm date-undated plan|apply`.
 
 ## Architecture (`gp2sm/`)
+
+- `services/`: service-neutral `PhotoDestination`/`PhotoSource` protocols, records, and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (run against the fake in CI; opt-in live run against SmugMug).
 
 - `smugmug_client.py`: the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging via `Pages.NextPage`, per-endpoint list keys (`AlbumImage` vs `Image` vs `Node`), and rate-limit headers. Batch `!moveimages` is all-or-nothing.
 - `planning.py`: pure logic, no I/O, unit tested.

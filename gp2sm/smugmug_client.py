@@ -411,5 +411,9 @@ class SmugMugClient:
         return self.request("PATCH", f"/api/v2/album/{album_key}", idempotent=True,
                             json_body={"Name": name, "UrlName": url_name_for(name)})["Response"]["Album"]
 
+    def delete_folder(self, folder_ref):
+        """Delete a folder node (and anything in it). Used for sandbox cleanup."""
+        self.request("DELETE", folder_ref)
+
     def delete_album(self, album_key):
         self.request("DELETE", f"/api/v2/album/{album_key}")

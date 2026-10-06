@@ -39,3 +39,4 @@ ignore = ["E501"]  # long SQL strings and log messages are clearer unwrapped
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live: talks to a real service; opt-in via environment variables (see tests/test_destination_contract.py)"]
