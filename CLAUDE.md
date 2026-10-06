@@ -4,12 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## State of the repo
 
-- **Legacy v2 code (`main.py`, `google_photos_module.py`, `smugmug_module.py`, `database_manager.py`) is untrusted.** It was assembled by copying and pasting from chat assistants, and probes showed core parts never worked:
-  - its SmugMug duplicate check reads the wrong response key and misuses `_filter`,
-  - its album rotation created albums in bursts,
-  - the Google Photos Library API it depends on no longer returns existing library items (403 since the March 2025 policy change).
-
-  Don't fix it in place. New work goes in the `gp2sm/` package.
+- The legacy v1/v2 script was removed. It's preserved at the git tag `legacy-v2`, and none of its code is trusted (core parts never worked). All work is in the `gp2sm/` package.
 - `docs/ROADMAP.md` is the staged plan (do one stage at a time). `docs/smugmug-api.md` records SmugMug behavior **confirmed by probes**. Check it before relying on any SmugMug endpoint, and add anything newly confirmed.
 - The repo is meant to become public. Keep personal names, account details and real album names out of tracked files. They belong in gitignored config (`data/`, `*.json`).
 
@@ -47,7 +42,7 @@ The goal is a plugin architecture with any photo service on either end (see `doc
 
 ## Probes
 
-`probes/` (gitignored) holds standalone scripts that exercise real APIs. Outputs, logs and copies of credentials go in `probes/out/`. Probes always work on **copies** of credential files, because the legacy modules rewrite or delete them on failure. Write tests go only into a private `gp2sm-sandbox` folder, which the probe deletes afterwards.
+`probes/` (gitignored) holds standalone scripts that exercise real APIs. Outputs, logs and copies of credentials go in `probes/out/`. Probes always work on **copies** of credential files. Note: the existing probes import the removed legacy SmugMug module for auth, so port them to `SmugMugClient` before reusing them. Write tests go only into a private `gp2sm-sandbox` folder, which the probe deletes afterwards.
 
 ## Gotchas
 
@@ -56,7 +51,7 @@ The goal is a plugin architecture with any photo service on either end (see `doc
 - `AlbumImage.Date` is the upload time. Capture time comes from `ImageMetadata.DateTimeCreated` (use `_expand=ImageMetadata` on `!images`).
 - Legacy conversion uploads lost their EXIF. Their capture dates come from the legacy transfer DBs (`media_items.creation_timestamp`), joined in `matches`.
 
-## Code style (carried over from `constraints.md`)
+## Code style
 
 - Don't change `__version__` or TODO comments unless asked.
 - One statement per line. Never put a block body on the same line as `if`/`for`/`with`/`try`.
