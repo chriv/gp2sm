@@ -1,52 +1,13 @@
 import pytest
 
 from gp2sm import consolidate
-from gp2sm.smugmug_client import NotFound, SmugMugError
 from gp2sm.state import State
+from tests.fakes.smugmug import FakeSmugMug
 
 
-class FakeSmug:
-    """In-memory destination implementing the neutral client surface: {album_id: set(item_id)}.
-    Mirrors verified SmugMug semantics (all-or-nothing batch moves, 400 on a bad ref, ambiguous 504s)."""
-
-    def __init__(self, albums, bad=(), fail_network=0):
-        self.albums = {k: set(v) for k, v in albums.items()}
-        self.bad = set(bad)
-        self.fail_network = fail_network
-
-    @staticmethod
-    def item_ref(album_id, item_id, serial=0):
-        return f"/api/v2/album/{album_id}/image/{item_id}-{serial or 0}"
-
-    def album_item_count(self, key):
-        return len(self.albums[key])
-
-    def move_items(self, dest, uris):
-        moves = []
-        for uri in uris:
-            parts = uri.split("/")
-            src, image_key = parts[4], parts[6].split("-")[0]
-            if image_key in self.bad or image_key not in self.albums.get(src, ()):
-                raise SmugMugError("bad uri", http_status=400)  # all-or-nothing
-            moves.append((src, image_key))
-        if self.fail_network:
-            self.fail_network -= 1
-            for src, k in moves:  # the move happened, but the client never heard back
-                self.albums[src].discard(k)
-                self.albums[dest].add(k)
-            raise SmugMugError("timeout", http_status=None)
-        for src, k in moves:
-            self.albums[src].discard(k)
-            self.albums[dest].add(k)
-
-    def album_contains(self, album_key, image_key, serial=0):
-        return image_key in self.albums[album_key]
-
-    def item_album_ids(self, image_key, serial=0):
-        found = [a for a, keys in self.albums.items() if image_key in keys]
-        if not found:
-            raise NotFound("gone", http_status=404)
-        return found
+def FakeSmug(albums, bad=(), fail_network=0):
+    """Shared in-memory fake (tests/fakes/smugmug.py); fail_network = moves applied then reported as 504."""
+    return FakeSmugMug(albums=albums, bad=bad, ambiguous=fail_network)
 
 
 @pytest.fixture
@@ -103,16 +64,8 @@ def test_reconcile_sets_pending_when_still_in_source(st):
     assert status(st)["a"] == "pending"
 
 
-class TimeoutAfterApplying(FakeSmug):
-    """Server applies the move but the client sees a 504 (what happened in the 2023-07 batch)."""
-
-    def move_items(self, dest, uris):
-        FakeSmug.move_items(self, dest, uris)
-        raise SmugMugError("504", http_status=504, ambiguous=True)
-
-
 def test_ambiguous_504_is_reconciled_not_failed(st):
-    fake = TimeoutAfterApplying({"SRC": "abcd", "DST": ""})
+    fake = FakeSmug({"SRC": "abcd", "DST": ""}, fail_network=1)
     done, failed = consolidate.move_batch(st, fake, "DST", rows(st), "b1")
     assert sorted(done) == list("abcd") and failed == []
 
