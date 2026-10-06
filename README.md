@@ -14,13 +14,13 @@ Tools for moving photo libraries into **SmugMug** and keeping them organized, wi
 ## Running it (current, pre-packaging)
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
+python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 cp consolidate.json.example data/consolidate.json   # then edit; data/ is gitignored
 cp smugmug_config.json.example smugmug_config.json  # then fill in credentials
 
-.venv/bin/python -m gp2sm.consolidate --help
-.venv/bin/python -m gp2sm.takeout_upload --help
-.venv/bin/python -m pytest -q tests
+.venv/bin/gp2sm --help                 # lists all commands
+.venv/bin/gp2sm consolidate --help
+.venv/bin/python -m pytest -q
 ```
 
 A single `gp2sm` command, project setup (`gp2sm init`) and interactive SmugMug sign-in are planned in the roadmap (stages A0–A2).

@@ -2,6 +2,10 @@ from gp2sm.date_undated import pick_by_content, pick_by_video_shape, single_mont
 from gp2sm.media import mp4_duration
 
 
+def rot(h):
+    return [h, (1 << 64) - 1, (1 << 64) - 1, (1 << 64) - 1]
+
+
 def test_stem_key():
     assert stem_key("IMG_0416.MOV") == stem_key("img_0416(2).mov") == "img_0416"
 
@@ -20,7 +24,6 @@ def test_video_shape_unique_match():
 
 
 def test_content_pick_with_margin():
-    rot = lambda h: [h, (1 << 64) - 1, (1 << 64) - 1, (1 << 64) - 1]
     assert pick_by_content(0, {"a": rot(0b1), "b": rot((1 << 30) - 1)})[0] == "a"
     assert pick_by_content(0, {"a": rot(0b1), "b": rot(0b11)})[0] is None          # no margin
     assert pick_by_content(0, {"a": rot((1 << 20) - 1)})[0] is None                # too far
@@ -45,5 +48,4 @@ def test_video_shape_rules_no_upscale_and_relative_tolerance():
 
 def test_near_matches():
     from gp2sm.date_undated import near_matches
-    rot = lambda h: [h, (1 << 64) - 1, (1 << 64) - 1, (1 << 64) - 1]
     assert sorted(near_matches(0, {"a": rot(0), "b": rot(0b1), "c": rot((1 << 30) - 1)})) == ["a", "b"]

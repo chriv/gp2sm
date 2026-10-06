@@ -1,8 +1,0 @@
-requests
-google-auth
-google-auth-oauthlib
-google-api-python-client
-requests-oauthlib
-colorlog
-Pillow>=9.0.0
-piexif

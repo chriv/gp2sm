@@ -11,16 +11,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q tests                      # all unit tests
+.venv/bin/pip install -e '.[dev]'                        # install (editable) with pytest + ruff
+.venv/bin/python -m pytest -q                            # all tests
 .venv/bin/python -m pytest -q tests/test_planning.py -k heic   # single test
-.venv/bin/python -m gp2sm.consolidate --help             # consolidation CLI (config: data/consolidate.json)
+.venv/bin/ruff check gp2sm tests                         # lint (config in pyproject.toml)
+.venv/bin/gp2sm --help                                   # all commands (gp2sm <command> --help for each)
 ```
 
-Consolidation pipeline (each step can be rerun; state lives in `data/consolidation.db`):
+Consolidation pipeline (`gp2sm consolidate <step>`; each step can be rerun; state lives in `data/consolidation.db`):
 `inventory → import-legacy → match → plan → report → apply [--dry-run|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
 
 Takeout pipeline (archives in `data/takeout/`, all gitignored):
-`python -m gp2sm.takeout_index data/takeout/*.tgz` → `python -m gp2sm.takeout_match` → `python -m gp2sm.content_match [--apply]` → `python -m gp2sm.takeout_upload plan|stage|upload|verify|report|remove`.
+`gp2sm takeout-index data/takeout/*.tgz` → `gp2sm takeout-match` → `gp2sm content-match [--apply]` → `gp2sm takeout-upload plan|stage|upload|verify|report|remove`, then `gp2sm place-clips plan|upload|verify|finalize` and `gp2sm date-undated plan|apply`.
 
 ## Architecture (`gp2sm/`)
 

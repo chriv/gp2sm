@@ -1,1 +1,3 @@
-"""gp2sm v3: Google Photos -> SmugMug migration tooling."""
+"""gp2sm: move photo libraries into SmugMug, state-tracked and verified."""
+
+__version__ = "3.0.0.dev0"

@@ -106,7 +106,7 @@ class SmugMugClient:
                 last_error = SmugMugError(f"{method} {url}: network error {e!r}", ambiguous=not safe)
                 log.warning("%s (attempt %d)", last_error, attempt + 1)
                 if not safe:
-                    raise last_error
+                    raise last_error from e
                 continue
             self._note_ratelimit(r)
             try:

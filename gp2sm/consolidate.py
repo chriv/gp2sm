@@ -248,9 +248,9 @@ def cmd_report(st, cfg, client, args):
             return
         cols = rows[0].keys()
         widths = [max(len(str(c)), *(len(str(r[c])) for r in rows)) for c in cols]
-        print("  " + "  ".join(str(c).ljust(w) for c, w in zip(cols, widths)))
+        print("  " + "  ".join(str(c).ljust(w) for c, w in zip(cols, widths, strict=True)))
         for r in rows:
-            print("  " + "  ".join(str(r[c]).ljust(w) for c, w in zip(cols, widths)))
+            print("  " + "  ".join(str(r[c]).ljust(w) for c, w in zip(cols, widths, strict=True)))
 
     table("Source albums", "SELECT url_path, image_count, rows_stored FROM source_albums ORDER BY url_path")
     table("Match methods", "SELECT m.method, m.confidence, SUM(i.is_video=0) photos, SUM(i.is_video) videos "

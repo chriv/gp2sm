@@ -136,7 +136,7 @@ def cmd_plan(st, cfg, args):
         "SELECT p.image_key, p.target_name, i.filename FROM plan p JOIN images i USING(image_key)")}
     # names already present (or planned) per target album, for collision-free naming
     taken = {}
-    for image_key, (target, filename) in existing_target.items():
+    for target, filename in existing_target.values():
         taken.setdefault(target, set()).add((filename or "").lower())
     for r in st.q("SELECT target_name, upload_name FROM uploads"):
         taken.setdefault(r[0], set()).add(r[1].lower())

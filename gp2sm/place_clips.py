@@ -138,7 +138,7 @@ def cmd_plan(st, cfg, client, args):
         "AND u.target_name=? AND pl.placement_id IS NULL ORDER BY u.upload_name", album)]
     os.makedirs(args.stage_dir, exist_ok=True)
     clips, meta = [], {}
-    for n, r in enumerate(clips_rows):
+    for r in clips_rows:
         data, kind = resolve_source(r, args.takeout_dir, client)
         ts, dims = clip_creation_ts(data), mp4_dims(data)
         if not ts or not dims:
