@@ -199,7 +199,31 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 - **Tests:** policy precedence and scope matching, drift computation, apply/undo against the SmugMug fake.
 - **Exit:** an audit on a real account, then a fix on one scope, then verify (re-audit shows no drift), then undo works on that scope.
 
-### Stage A8: Documentation and release
+### Stage A8: Results reporting
+
+- **Goal:** `gp2sm report` turns a project's state database into a clear, trustworthy account of what happened. Results are the point of the tool, so they get first-class output.
+- **Deliverables:**
+  - **Outcome summary:** items on the destination, how many are in dated vs. undated collections, how many are verified on the server, collections created.
+  - **Accounting, one row per file type:** every source file counted exactly once, by outcome:
+    - already present (earlier copy)
+    - uploaded and sorted
+    - uploaded but unsorted
+    - represented by a near-identical twin
+    - rejected by the destination
+    - excluded by the user
+    - left behind, with reasons
+
+    Totals must add up, and the report checks that they do.
+  - **Evidence:** how each item was dated or matched (hash, name + time, content, own timestamp, video shape, …), clip-pairing time gaps, and the items left unresolved with their evidence.
+  - **Verification status:** verified / unverified / missing, and when each was last checked.
+  - **Activity log:** runs, commands, and summaries of the event log.
+  - **Anticipated vs. final:** a report generated while work is in flight states what it assumes (e.g. replacements verified, old copies still being removed).
+- **Output formats:** Markdown (readable), self-contained HTML, and machine-readable JSON/CSV. Reports are written into the project's own (private) data directory, since they name real albums and files.
+- **Prototype:** the per-project report and file-type accounting built during the first real migration. Generalize them and remove anything account-specific.
+- **Tests:** a synthetic state DB with known outcomes produces the expected totals. The accounting invariant (each file counted once, rows sum to totals) is tested directly.
+- **Exit:** a report on a real project that its owner finds complete and accurate without asking follow-up questions.
+
+### Stage A9: Documentation and release
 
 - **Deliverables:**
   - **README:** what it does, install, a 10-minute quickstart.
