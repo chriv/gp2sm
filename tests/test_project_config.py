@@ -87,3 +87,19 @@ def test_tool_settings_cover_every_setting_the_tools_use(tmp_path):
 def test_example_configs_are_valid(example, tmp_path):
     shutil.copy(example, tmp_path / "gp2sm.toml")
     load(str(tmp_path))
+
+
+def test_takeout_policies_validate_choices_and_thresholds():
+    _, problems = validate({"takeout": {"heic": "maybe", "same_max": 20, "different_min": 19}})
+    assert any("[takeout] heic must be one of ['convert', 'keep']" in p for p in problems)
+    assert any("same_max (20) must be below different_min (19)" in p for p in problems)
+    values, problems = validate({"takeout": {"live_clips": "separate", "dedupe": "exact"}})
+    assert problems == []
+    assert values["takeout"]["live_clips"] == "separate" and values["takeout"]["unpaired_clips"] == "dated"
+
+
+def test_tool_settings_carry_takeout_policies(tmp_path):
+    (tmp_path / "gp2sm.toml").write_text('[takeout]\nheic = "keep"\n')
+    policies = load(str(tmp_path)).tool_settings()["takeout"]
+    assert policies["heic"] == "keep" and policies["pair_window"] == 60
+    assert "archives" not in policies and "index" not in policies

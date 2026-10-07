@@ -17,7 +17,8 @@ else:  # pragma: no cover - exercised on 3.10 in CI
 
 CONFIG_NAME = "gp2sm.toml"
 
-# section -> key -> (type, default, help). Types: str, int, list (of str), "template", "timezone".
+# section -> key -> (type, default, help). Types: str, int, list (of str), "template", "timezone",
+# or a tuple of allowed strings (a choice).
 SCHEMA = {
     "project": {
         "name": (str, "", "a name for this project (shown in reports)"),
@@ -44,6 +45,22 @@ SCHEMA = {
     "takeout": {
         "archives": (str, "takeout", "folder with the Google Takeout archives (.zip or .tgz)"),
         "index": (str, "takeout_index.db", "Takeout index database"),
+        "heic": (("convert", "keep"), "convert",
+                 "HEIC photos: convert to JPEG here (EXIF kept) or upload as is (the destination may convert)"),
+        "live_clips": (("pair", "separate", "skip"), "pair",
+                       "Live Photo motion clips: pair (same name, next to the still), separate (video albums), skip"),
+        "unpaired_clips": (("dated", "undated", "skip"), "dated",
+                           "clips with no matching still: dated video album by their own time, the undated album, or skip"),
+        "rejected_types": (("convert", "skip"), "convert",
+                           "photos in formats the destination rejects (e.g. WebP, BMP): convert to JPEG, or skip"),
+        "dedupe": (("content", "exact", "off"), "content",
+                   "skip items already on the destination: exact (same bytes), content (also same picture), off"),
+        "existing": (list, [], "album paths (substrings) to check for existing copies; empty = this project's "
+                               "folder, [\"/\"] = the whole account"),
+        "same_max": (int, 6, "content check: picture distance at or below this is the same photo"),
+        "different_min": (int, 19, "content check: distance at or above this is a different photo; between = review"),
+        "pair_window": (int, 60, "a clip pairs with a still taken within this many seconds"),
+        "aspect_tolerance_pct": (int, 2, "a clip pairs only with a still of the same shape, within this percent"),
     },
     "run": {
         "move_batch_size": (int, 25, "items per batch move"),
@@ -97,6 +114,7 @@ class ProjectConfig:
             "album_hard_cap": a["hard_cap"],
             "move_batch_size": self.values["run"]["move_batch_size"],
             "max_consecutive_failures": 5,
+            "takeout": takeout_policies(self.values),
         }
 
 
@@ -121,6 +139,9 @@ def _check(section, key, kind, value, problems):
         unknown = fields - {"yyyy", "mm"}
         if unknown:
             problems.append(f"{where} has unknown placeholders {sorted(unknown)}; only {{yyyy}} and {{mm}} are allowed")
+    elif isinstance(kind, tuple):
+        if value not in kind:
+            problems.append(f"{where} must be one of {list(kind)}, got {value!r}")
     elif kind == "timezone":
         try:
             ZoneInfo(value)
@@ -150,7 +171,16 @@ def validate(raw):
     a = values["albums"]
     if isinstance(a["soft_cap"], int) and isinstance(a["hard_cap"], int) and a["soft_cap"] > a["hard_cap"]:
         problems.append(f"[albums] soft_cap ({a['soft_cap']}) must not exceed hard_cap ({a['hard_cap']})")
+    t = values["takeout"]
+    if isinstance(t["same_max"], int) and isinstance(t["different_min"], int) and t["same_max"] >= t["different_min"]:
+        problems.append(f"[takeout] same_max ({t['same_max']}) must be below different_min ({t['different_min']})")
     return values, problems
+
+
+def takeout_policies(values=None):
+    """The [takeout] policy keys (defaults when no project config is in use)."""
+    t = values["takeout"] if values else {k: v[1] for k, v in SCHEMA["takeout"].items()}
+    return {k: v for k, v in t.items() if k not in ("archives", "index")}
 
 
 def load(project_dir):

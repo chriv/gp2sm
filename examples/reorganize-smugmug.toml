@@ -49,6 +49,26 @@ legacy_dbs = []
 archives = "takeout"
 # Takeout index database
 index = "takeout_index.db"
+# HEIC photos: convert to JPEG here (EXIF kept) or upload as is (the destination may convert)
+heic = "convert"
+# Live Photo motion clips: pair (same name, next to the still), separate (video albums), skip
+live_clips = "pair"
+# clips with no matching still: dated video album by their own time, the undated album, or skip
+unpaired_clips = "dated"
+# photos in formats the destination rejects (e.g. WebP, BMP): convert to JPEG, or skip
+rejected_types = "convert"
+# skip items already on the destination: exact (same bytes), content (also same picture), off
+dedupe = "content"
+# album paths (substrings) to check for existing copies; empty = this project's folder, ["/"] = the whole account
+existing = []
+# content check: picture distance at or below this is the same photo
+same_max = 6
+# content check: distance at or above this is a different photo; between = review
+different_min = 19
+# a clip pairs with a still taken within this many seconds
+pair_window = 60
+# a clip pairs only with a still of the same shape, within this percent
+aspect_tolerance_pct = 2
 
 # --- Performance
 [run]

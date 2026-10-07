@@ -9,7 +9,7 @@ import atexit
 import os
 
 from gp2sm.project import credentials
-from gp2sm.project.config import find_project, load
+from gp2sm.project.config import find_project, load, takeout_policies
 
 LEGACY_CONFIG = "data/consolidate.json"
 LEGACY_PATHS = {"index": "data/takeout_index.db", "takeout_dir": "data/takeout", "stage_dir": "data/stage",
@@ -50,6 +50,7 @@ def resolve(args):
         if not config:
             raise NoProject("no gp2sm project here: run `gp2sm init` (or pass --project DIR / --config FILE)")
         cfg = load_config(config)
+        cfg.setdefault("takeout", takeout_policies())
         paths = dict(LEGACY_PATHS, state=cfg["state_db"])
     for name, value in paths.items():
         if hasattr(args, name) and getattr(args, name) is None:
