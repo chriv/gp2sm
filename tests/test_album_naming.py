@@ -83,3 +83,20 @@ def test_page_starts_cover_the_whole_album():
     assert len(starts) == 3 and starts == page_starts(5001, 60, seed="abc")
     assert starts[0] <= 1680 < starts[1] <= 3340 < starts[2] <= 5001
     assert page_starts(15, 60, seed="x") == [1]
+
+
+def test_one_day_events_get_the_full_date():
+    day = ["2008-09-14T10:00:00"] * 3 + ["2008-09-14T16:00:00"] * 3
+    prop = naming.propose("Old House", T, photo_dates=day, today=TODAY)
+    assert (prop.new, prop.confidence) == ("2008-09-14 Old House", "medium")
+    assert naming.propose("Old House", T, photo_dates=day, keep_day=False, today=TODAY).new == "2008-09 Old House"
+
+
+def test_year_only_names_gain_the_month_from_agreeing_photos():
+    oct11 = ["2011-10-01", "2011-10-02", "2011-10-02", "2011-10-03", "2011-10-05"]
+    prop = naming.propose("Cotton Pickin 2011", T, photo_dates=oct11, today=TODAY)
+    assert (prop.new, prop.confidence, prop.auto, prop.source) == ("2011-10 Cotton Pickin", "high", True, "name+photos")
+    other_year = ["2012-03-01"] * 5                       # photos disagree with the name: keep the name's year
+    assert naming.propose("Cotton Pickin 2011", T, photo_dates=other_year, today=TODAY).new == "2011 Cotton Pickin"
+    one_day = ["2011-10-02"] * 5
+    assert naming.propose("Cotton Pickin 2011", T, photo_dates=one_day, today=TODAY).new == "2011-10-02 Cotton Pickin"

@@ -122,6 +122,9 @@ def date_from_photos(capture_dates, max_spread_days=45, min_photos=5):
     if spread > max_spread_days:
         return None, spread
     mid = days[0] + datetime.timedelta(days=round(statistics.median((d - days[0]).days for d in days)))
+    if spread == 0:   # one event on one day: the full date
+        return Parsed(mid.year, mid.month, mid.day, "day", confidence="medium", pattern="photos",
+                      note=f"all {len(days)} sampled photos were taken that day"), spread
     return Parsed(mid.year, mid.month, None, "month", confidence="medium", pattern="photos",
                   note=f"from {len(days)} photos within {spread} days"), spread
 
@@ -158,10 +161,17 @@ def spread_days(dates):
 
 def propose(name, templates, keep_day=True, min_confidence="high", photo_dates=None, max_spread_days=45,
             today=None, min_photos=5, upload_dates=None):
-    """A rename proposal for one album name. photo_dates (optional) dates an album whose name has no date, unless
-    upload_dates show the album kept growing over a long time (an uploader's album, not one event)."""
+    """A rename proposal for one album name. photo_dates (optional) date an album whose name has no date, or add
+    the month (or day) to a name with only a year when the photos fall in that year; unless upload_dates show the
+    album kept growing over a long time (an uploader's album, not one event)."""
     p = parse(name, today)
     source = "name"
+    if p.precision == "year" and photo_dates and not (spread_days(upload_dates) or 0) > max_spread_days:
+        p2, _ = date_from_photos(photo_dates, max_spread_days, min_photos)
+        if p2 is not None and p2.year == p.year:   # name and photos agree: the photos add the month (or day)
+            p = Parsed(p.year, p2.month, p2.day, p2.precision, p.subject, "high", pattern="name+photos",
+                       note=f"year from the name; {p2.note}")
+            source = "name+photos"
     if p.precision == "none":
         uploads = spread_days(upload_dates)
         if photo_dates and uploads is not None and uploads > max_spread_days:

@@ -218,6 +218,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - A6.1 the name parser and rename proposals, plus `[naming]`
   - A6.2 `gp2sm albums` (inventory, plan, report, approve, apply, verify, undo)
   - A6.3 a real dry run on a 40-album random sample and the two Android upload albums
+  - A6.4 from the owner's review: a one-day event gets its full date from its photos, and a year-only name gains the month (or day) when its photos fall in that year (then confident)
 - **Fixes from A6.3:**
   - the day is kept by default
   - dating an album from its photos needs at least 5 dated photos
@@ -282,6 +283,16 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - **Versioning:** release v3.0 as a beta first. After that, ship small increments (minor and patch releases with a changelog entry each); v3 is meant to be the last major version for a long time, so breaking changes need a migration path rather than a v4.
   - **Before publishing:** scan the full git history (not just the tree) for personal names, account details and real album names, and rewrite it if needed with `git filter-repo` plus a force-push, done once right before going public (a real album name reached commit `2e36894` and was removed in `7e552be`; the first migration's commits also need checking).
 - **Exit:** a fresh-machine install and quickstart, done by someone who didn't write the code.
+
+### Later: Folder structure (not scheduled)
+
+- The owner's view (2026-10-07): the current folder tree makes albums hard to find, and some albums belong in several categories. Labels or tags would fit that better than folders, and a flatter structure would be easier to browse.
+- Possible stage:
+  - flatten a chosen part of the tree
+  - carry each folder's meaning into album keywords, so they can be found by label
+  - move albums with their **effective privacy preserved**: a Private folder makes everything in it private, and moving an album out would otherwise expose it; see `docs/smugmug-api.md`
+  - dry run, undo, and verify (re-read every album's `EffectivePrivacy`)
+- Album renames (A6) never move albums between folders. Auto-upload and conversion folders are out of scope here.
 
 ---
 

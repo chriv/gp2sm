@@ -77,7 +77,7 @@ def cmd_inventory(st, cfg, client, args):
     for a in albums:
         info = client.album_info(a["album_id"])
         dates = None
-        if nm["date_from_photos"] and naming.parse(info["name"]).precision == "none":
+        if nm["date_from_photos"] and naming.parse(info["name"]).precision in ("none", "year"):
             dates = sample_dates(client, a["album_id"], info["item_count"], nm["photo_sample"], a["album_id"])
             sampled += 1
         dates = dates or {"captured": [], "uploaded": []}
