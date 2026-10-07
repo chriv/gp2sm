@@ -24,6 +24,7 @@ import sys
 from PIL import Image
 
 from gp2sm.media.convert import render_small
+from gp2sm.media.phash import dhash, hamming, rotation_hashes  # noqa: F401  (re-exported for date_undated)
 from gp2sm.organize import planning
 from gp2sm.project import context
 from gp2sm.state import State, now
@@ -45,25 +46,6 @@ CREATE TABLE IF NOT EXISTS content_matches(
 
 
 # ------------------------------------------------------------------ pure parts
-
-def dhash(img):
-    g = img.convert("L").resize((9, 8), Image.LANCZOS)
-    px = g.tobytes()
-    bits = 0
-    for row in range(8):
-        for col in range(8):
-            bits = (bits << 1) | (px[row * 9 + col] > px[row * 9 + col + 1])
-    return bits
-
-
-def rotation_hashes(img):
-    """dHash of the image at 0/90/180/270 degrees (orientation handling differs between sources)."""
-    return [dhash(img.rotate(a, expand=True)) for a in (0, 90, 180, 270)]
-
-
-def hamming(a, b):
-    return bin(a ^ b).count("1")
-
 
 def group_key(filename):
     """Base name used to pair candidates: lowercase stem without a trailing '(N)'."""

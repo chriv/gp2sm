@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS uploads(
   attempts INT DEFAULT 0, last_error TEXT, updated_at TEXT,
   pair_item_id INT,  -- for a re-paired clip: the Takeout item of the still it belongs next to
   verified_at TEXT,  -- when verify last confirmed this upload on the server
+  source_ref TEXT,   -- the source's own reference for the file (importer rows; item_id is the legacy identity)
+  convert INT,       -- importer rows: convert to JPEG while staging
+  content_type TEXT, -- importer rows: upload content type
+  taken_ts INT,      -- importer rows: capture time (fills a missing EXIF date when converting)
+  pair_ref TEXT,     -- importer rows: for a clip, the source ref of the still it sits beside
   UNIQUE(item_id, role));
 CREATE INDEX IF NOT EXISTS uploads_status ON uploads(status, target_name);
 
@@ -109,6 +114,20 @@ CREATE TABLE IF NOT EXISTS datings(
   from_album TEXT, method TEXT, capture_ts INT, capture_local TEXT, target_name TEXT, evidence TEXT,
   status TEXT, last_error TEXT, updated_at TEXT, UNIQUE(kind, ref_id));
 
+-- Importer (service-neutral): what is already on the destination, and whether each source item is there.
+-- dest_* is a snapshot of the albums in scope (refreshed by `inventory`).
+CREATE TABLE IF NOT EXISTS dest_albums(album_id TEXT PRIMARY KEY, name TEXT, folder TEXT, item_count INT,
+  listed_at TEXT);
+CREATE TABLE IF NOT EXISTS dest_items(item_id TEXT, album_id TEXT, serial INT, name TEXT, md5 TEXT, size INT,
+  width INT, height INT, is_video INT, duration_s REAL, PRIMARY KEY(item_id, album_id));
+CREATE INDEX IF NOT EXISTS dest_items_md5 ON dest_items(md5);
+-- Cached perceptual hashes: source items (4 rotations) and destination items.
+CREATE TABLE IF NOT EXISTS hash_source(source_ref TEXT PRIMARY KEY, h0 TEXT, h1 TEXT, h2 TEXT, h3 TEXT, error TEXT);
+CREATE TABLE IF NOT EXISTS hash_dest(item_id TEXT PRIMARY KEY, h TEXT, error TEXT);
+-- decision: exact (same bytes) | same (same picture/video) | new | review ; reviewed: a person's same|different
+CREATE TABLE IF NOT EXISTS source_matches(source_ref TEXT PRIMARY KEY, decision TEXT, dest_item_id TEXT,
+  dest_album_id TEXT, dist INT, method TEXT, detail TEXT, decided_at TEXT, reviewed TEXT);
+
 CREATE TABLE IF NOT EXISTS placements(
   placement_id INTEGER PRIMARY KEY AUTOINCREMENT,
   upload_id INT UNIQUE,                       -- the clip's row in uploads
@@ -116,6 +135,12 @@ CREATE TABLE IF NOT EXISTS placements(
   still_name TEXT, new_target TEXT, new_name TEXT, seconds_apart INT, candidates INT,
   source_path TEXT, source_kind TEXT,          -- staged | takeout | destination
   status TEXT, new_item_id TEXT, new_item_ref TEXT, last_error TEXT, updated_at TEXT);
+"""
+
+
+# Indexes on columns that migrations add: run after migrating, so existing DBs have the columns first.
+POST_MIGRATION = """
+CREATE UNIQUE INDEX IF NOT EXISTS uploads_source ON uploads(source_ref, role) WHERE source_ref IS NOT NULL;
 """
 
 
@@ -133,6 +158,7 @@ class State:
         fresh = not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='images'").fetchone()
         self.db.executescript(SCHEMA)
         self.migrations_applied = migrations.migrate(self.db, fresh)
+        self.db.executescript(POST_MIGRATION)
         self.run_id = None
 
     @property

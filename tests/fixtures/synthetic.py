@@ -1,6 +1,6 @@
 """Deterministic synthetic test data: no real photos, names, ids or account data.
 
-- jpeg_bytes/png_bytes: small images, optional EXIF capture date
+- jpeg_bytes/png_bytes: small images, optional EXIF capture date; pattern_jpeg: distinct pictures for dHash
 - mp4_bytes: just enough MP4 structure for header parsers (mvhd/tkhd, optional Apple creationdate)
 - make_takeout: a Google-Takeout-shaped .tgz or .zip (Photos from YYYY/ folders, supplemental-metadata sidecars,
   '(N)' collision names, Live Photo pairs, optionally a pair split across two archives)
@@ -30,6 +30,19 @@ def jpeg_bytes(w=64, h=48, color=(120, 80, 40), exif_dt=None, exif_offset=None):
         img.save(buf, "JPEG", quality=90, exif=exif)
     else:
         img.save(buf, "JPEG", quality=90)
+    return buf.getvalue()
+
+
+def pattern_jpeg(seed, w=96, h=72):
+    """A JPEG with a seed-dependent pattern, so perceptual hashes tell different pictures apart."""
+    img = Image.new("RGB", (w, h), (128, 128, 128))
+    px = img.load()
+    for y in range(h):
+        for x in range(w):
+            v = ((x * (seed + 3) + y * (2 * seed + 5)) // 7 + seed * 37) % 256
+            px[x, y] = (v, (v * 3 + seed) % 256, 255 - v)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=92)
     return buf.getvalue()
 
 

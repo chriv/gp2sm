@@ -18,6 +18,11 @@ def _ref(archive, path):
     return f"{archive}::{path}"
 
 
+def _facts(member):
+    """The file's own facts recorded by the index (absent in indexes made before they were recorded)."""
+    return {k: member.get(k) for k in ("width", "height", "duration_s", "own_time")}
+
+
 def _split(ref):
     archive, path = ref.split("::", 1)
     return archive, path
@@ -51,16 +56,17 @@ class TakeoutSource:
             out.append(SourceItem(
                 source_id=_ref(m["archive"], m["path"]), name=m["basename"],
                 kind="video" if m["ext"] in MOTION_EXTS else "photo", taken_ts=taken,
-                size=m["size"], md5=m["md5"],
+                size=m["size"], md5=m["md5"], **_facts(m),
                 motion_ref=_ref(mo["archive"], mo["path"]) if mo else None,
                 extras={"title": js.get("title"), "sidecar": _ref(it["sidecar"]["archive"], it["sidecar"]["path"]),
                         "geo": js.get("geoData"), "url": js.get("url"),
+                        "motion": dict(name=mo["basename"], **_facts(mo)) if mo else None,
                         "created_ts": int(js.get("creationTime", {}).get("timestamp") or 0) or None}))
         if include_orphans:
             for o in orphans:
                 out.append(SourceItem(source_id=_ref(o["archive"], o["path"]), name=o["basename"],
                                       kind="video" if o["ext"] in MOTION_EXTS else "photo", taken_ts=None,
-                                      size=o["size"], md5=o["md5"], extras={"orphan": True}))
+                                      size=o["size"], md5=o["md5"], extras={"orphan": True}, **_facts(o)))
         yield from sorted(out, key=lambda i: i.source_id)
 
     def open_ref(self, ref):

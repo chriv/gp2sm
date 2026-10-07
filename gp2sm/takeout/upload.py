@@ -31,6 +31,8 @@ from zoneinfo import ZoneInfo
 import piexif
 
 from gp2sm.cli import run
+from gp2sm.importer.dedupe import bounded_map
+from gp2sm.importer.plan import landed_name
 from gp2sm.media.convert import to_jpeg
 from gp2sm.media.mp4 import clip_creation_ts
 from gp2sm.organize import planning
@@ -183,15 +185,25 @@ def cmd_stage(st, cfg, args):
     rows = select(st, ("planned",), args)
     if not rows:
         return {"staged": 0}
-    idx = sqlite3.connect(f"file:{os.path.abspath(args.index)}?mode=ro", uri=True)
-    taken = dict(idx.execute("SELECT item_id, taken_ts FROM items").fetchall())
+    taken = {}
+    if any(r["source_ref"] is None for r in rows):   # legacy rows: capture times from the takeout-match items
+        idx = sqlite3.connect(f"file:{os.path.abspath(args.index)}?mode=ro", uri=True)
+        taken = dict(idx.execute("SELECT item_id, taken_ts FROM items").fetchall())
     os.makedirs(args.stage_dir, exist_ok=True)
     by_member = {(r["archive"], r["src_path"]): r for r in rows}
     done = failed = 0
 
     def work(row, data):
         dest = os.path.join(args.stage_dir, f"{row['upload_id']}_{row['upload_name']}")
-        if row["role"] == "still":
+        if row["source_ref"] is not None:   # importer rows: the plan already paired clips by time
+            if row["convert"]:
+                note = convert_still(data, os.path.splitext(row["src_path"])[1].lower(), dest, row["taken_ts"],
+                                     cfg["timezone"])
+            else:
+                with open(dest, "wb") as f:
+                    f.write(data)
+                note = "as is"
+        elif row["role"] == "still":
             note = convert_still(data, os.path.splitext(row["src_path"])[1].lower(), dest,
                                  taken.get(row["item_id"]), cfg["timezone"])
         else:
@@ -209,13 +221,12 @@ def cmd_stage(st, cfg, args):
 
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
         for archive in sorted({a for a, _ in by_member}):
-            futures = {}
             remaining = {p for a, p in by_member if a == archive}
-            for path, data in read_members(os.path.join(args.takeout_dir, archive), remaining):
-                row = by_member[(archive, path)]
-                futures[pool.submit(work, row, data)] = row
-            for fut in concurrent.futures.as_completed(futures):
-                row = futures[fut]
+            pairs = ((by_member[(archive, path)], (by_member[(archive, path)], data))
+                     for path, data in read_members(os.path.join(args.takeout_dir, archive), remaining))
+            for n, (row, fut) in enumerate(bounded_map(pool, lambda a: work(*a), pairs, args.workers * 2), 1):
+                if n % 100 == 0:
+                    st.db.commit()
                 try:
                     dest, size, md5, note = fut.result()
                     st.db.execute("UPDATE uploads SET status='staged', staged_path=?, staged_size=?, staged_md5=?, "
@@ -255,8 +266,11 @@ def reconcile_uploads(st, client, rows):
     fixed = {"done": 0, "staged": 0}
     for r in rows:
         album_key = st.one("SELECT album_key FROM targets WHERE name=?", r["target_name"])
-        hit = find_in_album(client, album_key, r["upload_name"],
-                            r["staged_md5"] if r["role"] == "still" else None) if album_key else None
+        caps = client.capabilities
+        name = landed_name(r["upload_name"], caps)   # e.g. a kept HEIC lands as .JPG
+        ext = os.path.splitext(r["upload_name"])[1].lower()
+        md5 = r["staged_md5"] if r["role"] != "clip" and ext in caps.stores_original_bytes else None
+        hit = find_in_album(client, album_key, name, md5) if album_key else None
         if hit:
             st.db.execute("UPDATE uploads SET status='done', image_key=?, album_image_uri=?, last_error=NULL, "
                           "updated_at=? WHERE upload_id=?", (hit[0], hit[1], now(), r["upload_id"]))
@@ -301,7 +315,8 @@ def cmd_upload(st, cfg, client, args):
 
     def one(r):
         ext = os.path.splitext(r["upload_name"])[1].upper()
-        return client.upload_file(albums[r["target_name"]], r["staged_path"], r["upload_name"], CONTENT_TYPES[ext])
+        content_type = r["content_type"] or CONTENT_TYPES[ext]
+        return client.upload_file(albums[r["target_name"]], r["staged_path"], r["upload_name"], content_type)
 
     totals = {"uploaded": 0, "failed": 0, "unknown": 0}
     progress = run.Progress(len(rows), "uploading")

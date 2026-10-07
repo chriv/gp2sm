@@ -18,6 +18,10 @@ class TestFakeSmugMugContract(DestinationContract):
     def dest(self):
         yield FakeSmugMug(), "/api/v2/node/SANDBOX"
 
+    @pytest.fixture
+    def sandbox_path(self):
+        return "SANDBOX"
+
 
 @pytest.fixture(scope="module")
 def live_sandbox():
@@ -25,7 +29,7 @@ def live_sandbox():
     client = SmugMugClient.from_config_file(os.environ["GP2SM_LIVE_SMUGMUG"])
     name = "gp2sm-contract-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     folder = client.ensure_folder_path(client.root_folder(), name)
-    yield client, folder
+    yield client, folder, name
     client.delete_folder(folder)
 
 
@@ -34,4 +38,8 @@ def live_sandbox():
 class TestLiveSmugMugContract(DestinationContract):
     @pytest.fixture
     def dest(self, live_sandbox):
-        yield live_sandbox
+        yield live_sandbox[:2]
+
+    @pytest.fixture
+    def sandbox_path(self, live_sandbox):
+        return live_sandbox[2]

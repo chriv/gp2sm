@@ -10,6 +10,7 @@ COMMANDS = {
     "status": ("gp2sm.cli.status", "show project settings, credentials, lock and state summary"),
     "services": ("gp2sm.cli.services", "list installed photo services (sources and destinations)"),
     "auth": ("gp2sm.cli.auth", "sign in to a service and manage stored credentials"),
+    "takeout": ("gp2sm.takeout.cli", "import a Google Takeout: inventory, dedupe (more steps coming in A3)"),
     "consolidate": ("gp2sm.organize.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
     "takeout-match": ("gp2sm.takeout.match", "pair metadata files and Live Photo clips; compare with consolidation state"),

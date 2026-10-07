@@ -36,6 +36,7 @@ class AlbumRecord(TypedDict, total=False):
     ref: str
     name: str
     path: Optional[str]
+    folder: Optional[str]            # display-name folder path, e.g. "Family/2023" ("" = top level)
     item_count: Optional[int]
     raw: dict
 
@@ -51,6 +52,10 @@ class SourceItem:
     md5: Optional[str] = None
     motion_ref: Optional[str] = None  # the paired Live Photo clip, if any (source-specific reference)
     extras: dict = field(default_factory=dict)
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_s: Optional[float] = None
+    own_time: Optional[str] = None    # capture time the file itself records (ISO 8601, offset when known)
 
 
 # ------------------------------------------------------------- capabilities
@@ -83,6 +88,7 @@ class PhotoDestination(Protocol):
     def ensure_album(self, parent: str, name: str) -> tuple: ...   # (album_id, album_ref, node_ref, created)
     def delete_album(self, album_id: str) -> None: ...
     def list_albums(self) -> Iterator[AlbumRecord]: ...
+    def list_folder_albums(self, folder_path: str) -> Iterator[AlbumRecord]: ...  # by folder names; "" = all
     def album_ref(self, album_id: str) -> str: ...
     def album_item_count(self, album_id: str) -> int: ...
     def list_album_items(self, album_id: str, with_metadata: bool = False,

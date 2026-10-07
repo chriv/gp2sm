@@ -8,6 +8,7 @@ Quirk switches (all off by default):
   min_video_bytes  uploads of .mp4/.mov smaller than this are rejected (code 72), like tiny clips
 """
 
+import hashlib
 import itertools
 
 from gp2sm.smugmug.client import SMUGMUG_CAPABILITIES, NotFound, SmugMugError
@@ -16,8 +17,10 @@ from gp2sm.smugmug.client import SMUGMUG_CAPABILITIES, NotFound, SmugMugError
 class FakeSmugMug:
     capabilities = SMUGMUG_CAPABILITIES
 
-    def __init__(self, albums=None, items=None, bad=(), ambiguous=0, processing=(), min_video_bytes=0):
+    def __init__(self, albums=None, items=None, bad=(), ambiguous=0, processing=(), min_video_bytes=0, folders=None):
         self.albums = {k: set(v) for k, v in (albums or {}).items()}
+        self.folders = dict(folders or {})   # album_id -> display folder path ("" = top level)
+        self.names = {}                      # album_id -> display name (default: the id)
         self.items = dict(items or {})
         self.bad, self.processing = set(bad), set(processing)
         self.ambiguous = ambiguous
@@ -50,12 +53,22 @@ class FakeSmugMug:
         album_id = "A_" + "".join(ch for ch in name if ch.isalnum())
         created = album_id not in self.albums
         self.albums.setdefault(album_id, set())
+        if created:
+            self.folders[album_id] = parent.split("/api/v2/node/", 1)[-1].replace("ROOT", "").strip("/")
+            self.names[album_id] = name
         return album_id, self.album_ref(album_id), f"/api/v2/node/{album_id}", created
 
     def list_albums(self):
         for album_id, keys in self.albums.items():
-            yield {"album_id": album_id, "ref": self.album_ref(album_id), "name": album_id, "path": f"/{album_id}",
-                   "item_count": len(keys), "raw": {}}
+            yield {"album_id": album_id, "ref": self.album_ref(album_id), "name": self.names.get(album_id, album_id),
+                   "path": f"/{album_id}", "folder": self.folders.get(album_id, ""), "item_count": len(keys), "raw": {}}
+
+    def list_folder_albums(self, folder_path):
+        want = folder_path.strip("/")
+        for album in self.list_albums():
+            folder = album["folder"]
+            if not want or folder == want or folder.startswith(want + "/"):
+                yield dict(album, item_count=None)
 
     def album_item_count(self, album_id):
         if album_id not in self.albums:
@@ -110,7 +123,7 @@ class FakeSmugMug:
             raise SmugMugError("stat=fail code=72 video too small", http_status=200, code=72)
         item_id = next(self._ids)
         self.items[item_id] = {"name": filename, "size": len(data), "is_video": content_type.startswith("video/"),
-                               "data": data}
+                               "data": data, "md5": hashlib.md5(data).hexdigest()}
         self.albums.setdefault(album_id, set()).add(item_id)
         return {"item_id": item_id, "item_ref": self.item_ref(album_id, item_id)}
 

@@ -46,6 +46,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - `Album.ImageCount` updates immediately after upload, move, collect and delete.
 - **Album capacity:** documented as 5,000. Albums holding **5,001** items exist on the account. Not yet tested at the limit. Upload failure code 63 means "album full" (from legacy code, not re-verified).
 - Delete album: `DELETE /api/v2/album/{key}` → 200. Delete folder: `DELETE /api/v2/node/{id}` → 200.
+- **Albums under a folder, by display names:** walk `GET {nodeUri}!children` from the root node (`!authuser` → `Uris.Node`), matching `Type: "Folder"` and `Name` for each path part, then recurse. Children of `Type: "Album"` carry the album key in `Uris.Album.Uri`. `Album.UrlPath` is URL-ified (spaces become dashes), so don't match display folder names against it. (Confirmed 2026-10-06 by the live destination contract, `list_folder_albums`.)
 
 ## Upload
 `POST https://upload.smugmug.com/` with the raw file bytes as the body and these headers:

@@ -29,6 +29,7 @@ import sys
 from PIL import Image
 
 from gp2sm.cli import run
+from gp2sm.importer.pairing import assign
 from gp2sm.media import aspect, mp4_dims
 from gp2sm.media.mp4 import clip_creation_ts
 from gp2sm.organize.consolidate import setup_logging
@@ -39,35 +40,6 @@ from gp2sm.takeout.archive import read_members
 from gp2sm.takeout.upload import unique_name
 
 log = logging.getLogger("gp2sm.organize.place_clips")
-
-
-# ------------------------------------------------------------------ pure part
-
-def assign(clips, stills, window=60, aspect_tol=0.02):
-    """One-to-one clip -> still assignment by capture time and aspect ratio.
-
-    clips/stills: lists of dict(id, ts, ratio, order). Returns {clip_id: (still_id, seconds_apart, candidates)}.
-    Pairs are taken by smallest time gap; equal gaps are taken in (clip order, still order), so a burst of
-    clips sharing one second is matched to that second's stills in name order.
-    """
-    stills = sorted(stills, key=lambda s: s["ts"])
-    times = [s["ts"] for s in stills]
-    import bisect
-    pairs, ncand = [], {}
-    for c in clips:
-        lo, hi = bisect.bisect_left(times, c["ts"] - window), bisect.bisect_right(times, c["ts"] + window)
-        cands = [s for s in stills[lo:hi] if abs(s["ratio"] - c["ratio"]) / s["ratio"] <= aspect_tol]
-        ncand[c["id"]] = len(cands)
-        pairs += [(abs(s["ts"] - c["ts"]), c["order"], s["order"], c["id"], s["id"]) for s in cands]
-    pairs.sort()
-    used_c, used_s, out = set(), set(), {}
-    for dt, _, _, cid, sid in pairs:
-        if cid in used_c or sid in used_s:
-            continue
-        used_c.add(cid)
-        used_s.add(sid)
-        out[cid] = (sid, dt, ncand[cid])
-    return out
 
 
 # ------------------------------------------------------------------- helpers

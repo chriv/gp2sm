@@ -2,7 +2,7 @@
 
 Reuse it for a new destination plugin: subclass DestinationContract and provide a `dest` fixture that yields
 (destination, sandbox_folder_ref), where sandbox_folder_ref is a folder the tests may create albums in and
-that the fixture cleans up afterwards.
+that the fixture cleans up afterwards, and a `sandbox_path` fixture with that folder's display-name path.
 """
 
 import uuid
@@ -47,6 +47,18 @@ class DestinationContract:
             assert first[0] == second[0] and first[3] is True and second[3] is False
         finally:
             d.delete_album(first[0])
+
+    def test_list_folder_albums_finds_albums_by_folder_names(self, dest, sandbox_path):
+        d, folder = dest
+        name = f"contract-{uuid.uuid4().hex[:6]}-folder"
+        album_id = d.ensure_album(folder, name)[0]
+        try:
+            found = {a["album_id"]: a for a in d.list_folder_albums(sandbox_path)}
+            assert album_id in found and found[album_id]["name"] == name
+            assert found[album_id]["folder"] == sandbox_path.strip("/")
+            assert list(d.list_folder_albums(f"{sandbox_path}/no-such-folder-{uuid.uuid4().hex[:6]}")) == []
+        finally:
+            d.delete_album(album_id)
 
     def test_upload_listing_count_and_refs(self, albums, tmp_path):
         d, a, _ = albums

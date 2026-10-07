@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from gp2sm.state import State, migrations
 
 V1_UPLOADS = """CREATE TABLE uploads(upload_id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INT, role TEXT, archive TEXT,
@@ -36,10 +38,12 @@ def test_v1_db_upgrades_in_place_and_keeps_data(tmp_path):
     path = str(tmp_path / "old.db")
     make_v1(path)
     st = State(path)
-    assert st.migrations_applied == [2] and st.schema_version == 2
-    assert {"pair_item_id", "verified_at"} <= cols(st, "uploads")
+    assert st.migrations_applied == [2, 3] and st.schema_version == 3
+    assert {"pair_item_id", "verified_at", "source_ref"} <= cols(st, "uploads")
+    assert {"dest_items", "source_matches", "hash_source", "hash_dest"} <= {
+        r[0] for r in st.q("SELECT name FROM sqlite_master WHERE type='table'")}
     assert st.one("SELECT upload_name FROM uploads WHERE item_id=7") == "IMG_1.MP4"   # data preserved
-    assert [r[0] for r in st.q("SELECT version FROM schema_history")] == [2]
+    assert [r[0] for r in st.q("SELECT version FROM schema_history")] == [2, 3]
 
 
 def test_reopen_is_idempotent(tmp_path):
@@ -57,4 +61,21 @@ def test_step_is_idempotent_when_columns_already_exist(tmp_path):
     db.execute("ALTER TABLE uploads ADD COLUMN pair_item_id INT")   # what the old stopgap already did
     db.commit()
     db.close()
-    assert State(path).schema_version == 2
+    assert State(path).schema_version == migrations.LATEST
+
+
+def test_v2_db_upgrades_to_v3(tmp_path):
+    path = str(tmp_path / "v2.db")
+    make_v1(path)
+    db = sqlite3.connect(path)
+    db.execute("ALTER TABLE uploads ADD COLUMN pair_item_id INT")
+    db.execute("ALTER TABLE uploads ADD COLUMN verified_at TEXT")
+    db.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+    db.commit()
+    db.close()
+    st = State(path)
+    assert st.migrations_applied == [3]
+    assert {"source_ref", "convert", "content_type", "taken_ts", "pair_ref"} <= cols(st, "uploads")
+    st.db.execute("INSERT INTO uploads(source_ref, role, status) VALUES('a::x.jpg', 'still', 'planned')")
+    with pytest.raises(sqlite3.IntegrityError):   # one upload per source file and role
+        st.db.execute("INSERT INTO uploads(source_ref, role, status) VALUES('a::x.jpg', 'still', 'planned')")

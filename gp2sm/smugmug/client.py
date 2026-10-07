@@ -342,6 +342,28 @@ class SmugMugClient:
             yield {"album_id": a.get("AlbumKey"), "ref": a.get("Uri"), "name": a.get("Name"),
                    "path": a.get("UrlPath"), "item_count": a.get("ImageCount"), "raw": a}
 
+    def list_folder_albums(self, folder_path):
+        """Albums under a folder given by display names ("A/B"; "" or "/" = the whole account), recursively.
+        Never creates anything: a missing folder yields nothing."""
+        node_uri = self.root_folder()
+        parts = [p for p in folder_path.split("/") if p.strip()]
+        for part in parts:
+            node = self.find_child(node_uri, "Folder", part)
+            if node is None:
+                return
+            node_uri = node["Uri"]
+        stack = [(node_uri, "/".join(parts))]
+        while stack:
+            uri, folder = stack.pop()
+            for node in self.node_children(uri):
+                if node.get("Type") == "Folder":
+                    stack.append((node["Uri"], f"{folder}/{node.get('Name')}" if folder else node.get("Name")))
+                elif node.get("Type") == "Album":
+                    album_uri = ((node.get("Uris") or {}).get("Album") or {}).get("Uri")
+                    if album_uri:
+                        yield {"album_id": album_uri.rsplit("/", 1)[-1], "ref": album_uri, "name": node.get("Name"),
+                               "path": node.get("UrlPath"), "folder": folder, "item_count": None, "raw": node}
+
     def album_ref(self, album_id):
         return f"/api/v2/album/{album_id}"
 

@@ -151,6 +151,17 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
     - re-running after an interruption
   - an optional live test in the sandbox
 - **Exit:** the synthetic end-to-end test passes, and a real small Takeout (a single album) imports cleanly with verify passing.
+- **Sub-stages** (one commit each; CI must pass before the next):
+  - A3.1 archives in both export formats (`.zip`, `.tgz`) behind one reader; the index records each file's own dimensions, duration and capture time
+  - A3.2 import policies in `gp2sm.toml`
+  - A3.3 the service-neutral importer and `gp2sm takeout …`:
+    - destination inventory (`list_folder_albums`, by folder names)
+    - dedupe with a review band and flat drag-to-sort review folders
+    - the pure planner, with clips paired by time and shape across all stills
+    - stage, upload and verify reused
+    - end-to-end synthetic test
+  - A3.4 the old-database bridge moves to `gp2sm.contrib.legacy_bridge`
+  - A3.5 live sandbox test, then a real one-album Takeout
 
 ### Stage A4: Generalized organize (consolidation)
 

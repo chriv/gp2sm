@@ -68,14 +68,18 @@ def setup_logging(log_file, debug=False):
     os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
+    for old in [h for h in root.handlers if getattr(h, "_gp2sm", False)]:   # calling again replaces, not stacks
+        root.removeHandler(old)
+        old.close()
     fh = logging.FileHandler(log_file)
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s"))
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.DEBUG if debug else logging.INFO)
     ch.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-    root.addHandler(fh)
-    root.addHandler(ch)
+    for h in (fh, ch):
+        h._gp2sm = True
+        root.addHandler(h)
     for noisy in ("urllib3", "requests_oauthlib", "oauthlib"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

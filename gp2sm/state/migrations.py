@@ -22,9 +22,21 @@ def _m2_upload_pairing_and_verification(db):
             db.execute(f"ALTER TABLE uploads ADD COLUMN {col} {decl}")
 
 
+def _m3_importer(db):
+    # dest_albums, dest_items, hash_source, hash_dest and source_matches come from SCHEMA (CREATE IF NOT EXISTS),
+    # which runs before migrations; the uploads column has to be added here.
+    have = _columns(db, "uploads")
+    for col, decl in (("source_ref", "TEXT"), ("convert", "INT"), ("content_type", "TEXT"), ("taken_ts", "INT"),
+                      ("pair_ref", "TEXT")):
+        if col not in have:
+            db.execute(f"ALTER TABLE uploads ADD COLUMN {col} {decl}")
+
+
 MIGRATIONS = [
     (2, "uploads.pair_item_id (re-paired clips) and uploads.verified_at (incremental verify)",
      _m2_upload_pairing_and_verification),
+    (3, "importer: destination inventory, hash caches, source_matches; uploads.source_ref/convert/"
+        "content_type/taken_ts/pair_ref", _m3_importer),
 ]
 LATEST = max(v for v, _, _ in MIGRATIONS)
 

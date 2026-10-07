@@ -22,8 +22,10 @@ GP2SM_LIVE_SMUGMUG=smugmug_config.json .venv/bin/python -m pytest -q -m live   #
 Consolidation pipeline (`gp2sm consolidate <step>`; each step can be rerun; state lives in `data/consolidation.db`):
 `inventory → import-legacy → match → plan → report → apply [--yes|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
 
-Takeout pipeline (archives in `data/takeout/`, all gitignored):
-`gp2sm takeout-index` (all archives in the takeout folder) → `gp2sm takeout-match` → `gp2sm content-match [--apply]` → `gp2sm takeout-upload plan|stage|upload|verify|report|remove`, then `gp2sm place-clips plan|upload|verify|finalize` and `gp2sm date-undated plan|apply`.
+Takeout import (A3, any project; archives in the project's `takeout/` folder):
+`gp2sm takeout index → inventory → dedupe → [review, review --read] → plan → stage → upload --yes → verify`, plus `report`. Re-running any step only adds new work.
+
+Legacy migration tools (the first real migration's state, `data/`): `takeout-match`, `content-match`, `takeout-upload`, `place-clips`, `date-undated`.
 
 ## Architecture (`gp2sm/`)
 
@@ -31,6 +33,7 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 - `services/`: `registry.py` discovers services via the `gp2sm.services` entry-point group (built-ins SmugMug and Google Takeout register the same way; plugins can't shadow built-ins; factories are checked against the protocol). `base.py` has the service-neutral `PhotoDestination`/`PhotoSource` protocols, records (`ItemRecord`, `AlbumRecord`, `SourceItem`) and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (against the fake in CI; opt-in live run against SmugMug). Any source must pass `tests/contracts/source.py`.
 - `smugmug/client.py`: the SmugMug adapter, and the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging, per-endpoint list keys, rate-limit headers, and ambiguous writes (never blindly retried). It declares `SMUGMUG_CAPABILITIES`.
 - `takeout/`: `archive.py` (the only code that opens archives: `.zip` and `.tgz`, `iter_members`/`read_members`), `index.py` (one streaming pass: MD5, sidecars, and each media file's dimensions/duration/own capture time via `media.probe`), `match.py` (sidecar ↔ media pairing incl. `(N)` names, Live Photo clips), `source.py` (`TakeoutSource`, the PhotoSource), `upload.py` (plan/stage/upload/verify Live Photo pairs and HEIC; HEIC→JPEG keeping EXIF, filling in missing dates; clip-time pairing guard).
+- `importer/` (service-neutral; any PhotoSource → any PhotoDestination): `inventory.py` snapshots the destination albums in scope (`list_folder_albums`, by folder display names) into `dest_albums`/`dest_items`; `dedupe.py` decides per source item `exact | same | new | review | source_duplicate` (pure `decide`, cached dHashes in `hash_source`/`hash_dest`, results in `source_matches`; a person's `reviewed` answer wins). Wired to Takeout by `takeout/cli.py` (`gp2sm takeout …`).
 - `organize/`:
   - `planning.py`: pure matching, duplicate grouping and album planning
   - `consolidate.py`: inventory → match → plan → apply → verify, reconcile/undo, gated deletions
