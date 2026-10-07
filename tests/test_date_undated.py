@@ -30,8 +30,9 @@ def test_content_pick_with_margin():
 
 
 def test_mp4_duration_v0():
-    box = b"mvhd" + bytes([0, 0, 0, 0]) + b"\0" * 8 + (600).to_bytes(4, "big") + (7494).to_bytes(4, "big")
-    assert abs(mp4_duration(b"...." + box) - 12.49) < 0.001
+    from tests.fixtures.synthetic import _box
+    mvhd = _box(b"mvhd", bytes(4) + bytes(8) + (600).to_bytes(4, "big") + (7494).to_bytes(4, "big"))
+    assert abs(mp4_duration(_box(b"moov", mvhd)) - 12.49) < 0.001
 
 
 def test_stem_key_strips_download_prefix():

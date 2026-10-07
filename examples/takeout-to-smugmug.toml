@@ -59,7 +59,7 @@ unpaired_clips = "dated"
 rejected_types = "convert"
 # skip items already on the destination: exact (same bytes), content (also same picture), off
 dedupe = "content"
-# album paths (substrings) to check for existing copies; empty = this project's folder, ["/"] = the whole account
+# folders or albums (by name, e.g. "Family/2023-05") to check for existing copies; empty = this project's folder, ["/"] = the whole account
 existing = []
 # content check: picture distance at or below this is the same photo
 same_max = 6

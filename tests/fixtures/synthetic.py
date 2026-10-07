@@ -52,20 +52,31 @@ def png_bytes(w=32, h=32, color=(10, 200, 30)):
     return buf.getvalue()
 
 
-def mp4_bytes(duration_s=2.0, w=1920, h=1080, created_unix=FIXED_MTIME, apple_date=None, pad=0):
-    """Minimal box layout: ftyp + moov(mvhd v0, audio tkhd 0x0, video tkhd WxH) [+ Apple creationdate]."""
-    timescale = 600
-    mvhd = (b"mvhd" + bytes([0, 0, 0, 0]) + (created_unix + QT_EPOCH_OFFSET).to_bytes(4, "big") + b"\0" * 4
-            + timescale.to_bytes(4, "big") + int(duration_s * timescale).to_bytes(4, "big") + b"\0" * 80)
+def _box(kind, payload):
+    return (8 + len(payload)).to_bytes(4, "big") + kind + payload
 
-    def tkhd(tw, th):
-        return (b"tkhd" + bytes([0, 0, 0, 0]) + b"\0" * 20 + b"\0" * 8 + b"\0" * 8 + b"\0" * 36
-                + (tw << 16).to_bytes(4, "big") + (th << 16).to_bytes(4, "big"))
+
+def mp4_bytes(duration_s=2.0, w=1920, h=1080, created_unix=FIXED_MTIME, apple_date=None, pad=0, moov_at_end=False):
+    """Real box layout: ftyp, moov(mvhd v0, audio trak tkhd 0x0, video trak tkhd WxH [, meta with Apple
+    creationdate]) and mdat. moov_at_end puts moov after mdat (as iPhone MOVs do), and mdat then contains a
+    decoy 'mvhd' byte sequence, like real compressed data can."""
+    timescale = 600
+    mvhd = _box(b"mvhd", bytes(4) + (created_unix + QT_EPOCH_OFFSET).to_bytes(4, "big") + bytes(4)
+                + timescale.to_bytes(4, "big") + int(duration_s * timescale).to_bytes(4, "big") + bytes(80))
+
+    def trak(tw, th):
+        tkhd = _box(b"tkhd", bytes(4) + bytes(20) + bytes(8) + bytes(8) + bytes(36)
+                    + (tw << 16).to_bytes(4, "big") + (th << 16).to_bytes(4, "big"))
+        return _box(b"trak", tkhd)
 
     meta = b""
     if apple_date:  # e.g. "2023-07-04T10:00:00-0400"
-        meta = b"keys....com.apple.quicktime.creationdate....data" + apple_date.encode()
-    return b"\0\0\0\x18ftypmp42" + b"\0" * 12 + mvhd + tkhd(0, 0) + tkhd(w, h) + meta + b"\0" * pad
+        meta = _box(b"meta", b"keys....com.apple.quicktime.creationdate....data" + apple_date.encode())
+    moov = _box(b"moov", mvhd + trak(0, 0) + trak(w, h) + meta)
+    decoy = b"mvhd" + bytes(8) + (600).to_bytes(4, "big") + (7174).to_bytes(4, "big") if moov_at_end else b""
+    mdat = _box(b"mdat", decoy + bytes(pad))
+    ftyp = _box(b"ftyp", b"mp42" + bytes(4))
+    return ftyp + (mdat + moov if moov_at_end else moov + mdat)
 
 
 def sidecar(title, taken_unix, created_unix=None):

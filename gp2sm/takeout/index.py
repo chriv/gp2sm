@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import time
 
+from gp2sm.media.mp4 import Partial
 from gp2sm.media.probe import VIDEO_EXTS, is_media, probe
 from gp2sm.project import context
 from gp2sm.takeout.archive import iter_members, list_archives
@@ -49,7 +50,7 @@ def upgrade(db):
 def probe_member(data, ext):
     """(width, height, duration_s, own_time, error) for a media member."""
     try:
-        info = probe(bytes(data), ext)
+        info = probe(data, ext)
     except Exception as e:  # an unreadable file is recorded, not fatal
         return None, None, None, None, f"{type(e).__name__}: {e}"[:300]
     return info["width"], info["height"], info["duration_s"], info["own_time"], None
@@ -83,7 +84,8 @@ def index_archive(path):
                     tail.extend(chunk)
                     del tail[:max(0, len(tail) - EDGE)]
         js = head.decode("utf-8", errors="replace") if is_json else None
-        probed = probe_member(head + tail, ext) if media else (None,) * 5
+        blob = bytes(head) if whole else Partial(head, tail, m.size)
+        probed = probe_member(blob, ext) if media else (None,) * 5
         rows.append((name, m.name, m.size, m.mtime, md5.hexdigest(), ext, folder, base, js, *probed))
         if len(rows) % 5000 == 0:
             log.info("%s: %d members (%.0fs)", name, len(rows), time.time() - t0)

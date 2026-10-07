@@ -8,11 +8,16 @@ from gp2sm.state import now
 log = logging.getLogger("gp2sm.importer.inventory")
 
 
-def albums_in_scope(client, folders):
-    """Albums under any of the given folder paths (display names; "/" = whole account), each once."""
+def albums_in_scope(client, paths):
+    """Albums under any of the given paths (display names; "/" = whole account), each once. A path may also
+    name a single album ("Folder/Album"): when no folder has that path, its last part is taken as an album."""
     seen = {}
-    for folder in folders:
-        for album in client.list_folder_albums(folder):
+    for path in paths:
+        found = list(client.list_folder_albums(path))
+        if not found and path.strip("/"):
+            parent, _, name = path.strip("/").rpartition("/")
+            found = [a for a in client.list_folder_albums(parent) if a["name"] == name and a["folder"] == parent]
+        for album in found:
             seen.setdefault(album["album_id"], album)
     return list(seen.values())
 

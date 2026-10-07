@@ -28,9 +28,11 @@ def test_burst_pairs_one_to_one_in_name_order():
 
 
 def test_mp4_dims_reads_video_track_skipping_audio():
-    def tkhd(w, h):
-        body = bytes([0, 0, 0, 0]) + b"\0" * 20 + b"\0" * 8 + b"\0" * 8 + b"\0" * 36
-        return b"tkhd" + body + (w << 16).to_bytes(4, "big") + (h << 16).to_bytes(4, "big")
-    data = b"...." + tkhd(0, 0) + tkhd(1920, 884)
+    from tests.fixtures.synthetic import _box
+
+    def trak(w, h):
+        body = bytes(4) + bytes(20) + bytes(8) + bytes(8) + bytes(36)
+        return _box(b"trak", _box(b"tkhd", body + (w << 16).to_bytes(4, "big") + (h << 16).to_bytes(4, "big")))
+    data = _box(b"ftyp", b"qt  ") + _box(b"moov", trak(0, 0) + trak(1920, 884))
     assert mp4_dims(data) == (1920, 884)
     assert round(aspect(884, 1920), 3) == round(1920 / 884, 3)

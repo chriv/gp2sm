@@ -39,9 +39,10 @@ def test_fill_exif_date_lossless(tmp_path):
 
 def test_mp4_creation_ts_v0_and_v1():
     from gp2sm.media.mp4 import QT_EPOCH_OFFSET, mp4_creation_ts
+    from tests.fixtures.synthetic import _box
     unix = 1723521785
-    v0 = b"....mvhd" + bytes([0, 0, 0, 0]) + (unix + QT_EPOCH_OFFSET).to_bytes(4, "big") + b"\x00" * 16
-    v1 = b"....mvhd" + bytes([1, 0, 0, 0]) + (unix + QT_EPOCH_OFFSET).to_bytes(8, "big") + b"\x00" * 16
+    v0 = _box(b"moov", _box(b"mvhd", bytes([0, 0, 0, 0]) + (unix + QT_EPOCH_OFFSET).to_bytes(4, "big") + bytes(16)))
+    v1 = _box(b"moov", _box(b"mvhd", bytes([1, 0, 0, 0]) + (unix + QT_EPOCH_OFFSET).to_bytes(8, "big") + bytes(24)))
     assert mp4_creation_ts(v0) == unix
     assert mp4_creation_ts(v1) == unix
     assert mp4_creation_ts(b"no movie header here") is None
@@ -49,7 +50,8 @@ def test_mp4_creation_ts_v0_and_v1():
 
 def test_clip_creation_prefers_apple_date_over_mvhd():
     from gp2sm.media.mp4 import QT_EPOCH_OFFSET, clip_creation_ts
-    mvhd = b"mvhd" + bytes([0, 0, 0, 0]) + (2000000000 + QT_EPOCH_OFFSET).to_bytes(4, "big") + b"\x00" * 16
-    data = b"...." + mvhd + b"keys...com.apple.quicktime.creationdate...data2022-06-14T21:22:49-0400..."
-    assert clip_creation_ts(data) == 1655256169  # 2022-06-15T01:22:49Z
-    assert clip_creation_ts(b"...." + mvhd) == 2000000000  # no Apple tag: fall back to mvhd
+    from tests.fixtures.synthetic import _box
+    mvhd = _box(b"mvhd", bytes([0, 0, 0, 0]) + (2000000000 + QT_EPOCH_OFFSET).to_bytes(4, "big") + bytes(16))
+    meta = _box(b"meta", b"keys...com.apple.quicktime.creationdate...data2022-06-14T21:22:49-0400...")
+    assert clip_creation_ts(_box(b"moov", mvhd + meta)) == 1655256169  # 2022-06-15T01:22:49Z
+    assert clip_creation_ts(_box(b"moov", mvhd)) == 2000000000  # no Apple tag: fall back to mvhd

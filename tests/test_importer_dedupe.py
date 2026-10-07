@@ -173,3 +173,13 @@ def test_bounded_map_limits_work_in_flight():
         rest = list(it)
     assert sorted([first[0]] + [k for k, _ in rest]) == list(range(10))
     assert all(f.result() == k * 2 for k, f in [first] + rest)
+
+
+def test_scope_can_name_a_single_album():
+    fake = FakeSmugMug()
+    family = fake.ensure_folder_path(fake.root_folder(), "Family")
+    a = fake.ensure_album(family, "2023-05")[0]
+    fake.ensure_album(family, "2023-06")
+    assert [x["album_id"] for x in inventory.albums_in_scope(fake, ["Family/2023-05"])] == [a]
+    assert len(inventory.albums_in_scope(fake, ["Family"])) == 2
+    assert inventory.albums_in_scope(fake, ["Family/nope"]) == []

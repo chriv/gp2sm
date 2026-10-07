@@ -150,7 +150,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
     - missing metadata dates
     - re-running after an interruption
   - an optional live test in the sandbox
-- **Exit:** the synthetic end-to-end test passes, and a real small Takeout (a single album) imports cleanly with verify passing.
+- **Exit:** the synthetic end-to-end test passes, and a one-month slice cut from a real Takeout (a Takeout always contains the whole service) plans correctly against that month's existing album.
 - **Sub-stages** (one commit each; CI must pass before the next):
   - A3.1 archives in both export formats (`.zip`, `.tgz`) behind one reader; the index records each file's own dimensions, duration and capture time
   - A3.2 import policies in `gp2sm.toml`
@@ -161,7 +161,8 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
     - stage, upload and verify reused
     - end-to-end synthetic test
   - A3.4 the old-database bridge moves to `gp2sm.contrib.legacy_bridge` (Takeout side; `consolidate`'s legacy import follows in A4)
-  - A3.5 live sandbox test, then a real one-album Takeout
+  - A3.5 live sandbox test, then a one-month slice of a real Takeout
+- **Known gap (from the one-month check, 2026-10-07):** a Live Photo clip that pairs with no still is uploaded without first checking whether it's already on the destination. Same name and duration are too weak for clips, since bursts share names and most clips run 1–3 s. Fix: match on the destination copy's capture time, fetched only for same-named clip candidates.
 
 ### Stage A4: Generalized organize (consolidation)
 

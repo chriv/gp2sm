@@ -17,7 +17,7 @@ def probe(data, ext):
     """{'width', 'height', 'duration_s', 'own_time'}; values are None when unknown. Raises on unreadable stills.
 
     own_time is ISO 8601: with an offset when the file records one (iPhone EXIF, Apple clip dates), else naive
-    local time. Video data may be just the head and tail of a large file; the boxes needed live there.
+    local time. Video data may be a `mp4.Partial` (head + tail of a large file); the boxes needed live there.
     """
     ext = ext.lower()
     out = {"width": None, "height": None, "duration_s": None, "own_time": None}

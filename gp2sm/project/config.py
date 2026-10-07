@@ -55,8 +55,8 @@ SCHEMA = {
                            "photos in formats the destination rejects (e.g. WebP, BMP): convert to JPEG, or skip"),
         "dedupe": (("content", "exact", "off"), "content",
                    "skip items already on the destination: exact (same bytes), content (also same picture), off"),
-        "existing": (list, [], "album paths (substrings) to check for existing copies; empty = this project's "
-                               "folder, [\"/\"] = the whole account"),
+        "existing": (list, [], "folders or albums (by name, e.g. \"Family/2023-05\") to check for existing copies; "
+                               "empty = this project's folder, [\"/\"] = the whole account"),
         "same_max": (int, 6, "content check: picture distance at or below this is the same photo"),
         "different_min": (int, 19, "content check: distance at or above this is a different photo; between = review"),
         "pair_window": (int, 60, "a clip pairs with a still taken within this many seconds"),

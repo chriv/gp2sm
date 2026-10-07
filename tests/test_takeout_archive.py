@@ -94,7 +94,7 @@ def test_index_records_media_facts_and_pairs_items(tmp_path, fmt):
 def test_large_video_is_probed_from_head_and_tail(tmp_path, monkeypatch):
     monkeypatch.setattr(takeout_index, "FULL_READ_MAX", 1000)
     monkeypatch.setattr(takeout_index, "EDGE", 600)
-    data = mp4_bytes(duration_s=5.0, w=1280, h=720, pad=5000)   # boxes at the start, padding after
+    data = mp4_bytes(duration_s=5.0, w=1280, h=720, pad=5000, moov_at_end=True)   # moov after the media data
     path = str(make_takeout(tmp_path / "t.zip", [("Photos from 2023/big.mp4", data)]))
     _, rows, _ = takeout_index.index_archive(path)
     (row,) = rows
@@ -113,3 +113,15 @@ def test_old_index_is_upgraded_in_place(tmp_path):
     conn = sqlite3.connect(tmp_path / "old.db")
     rows = dict(conn.execute("SELECT basename, width FROM members"))
     assert rows == {"x.jpg": None, "y.png": 32}
+
+
+def test_mp4_parsing_reads_the_box_structure_not_stray_bytes():
+    from gp2sm.media.mp4 import Partial, clip_creation_ts, mp4_dims, mp4_duration
+    data = mp4_bytes(duration_s=17.4, w=1080, h=1920, created_unix=1_683_388_840, moov_at_end=True, pad=5000,
+                     apple_date="2023-05-06T12:00:40-0400")
+    assert data.index(b"mvhd") < data.index(b"moov")               # a decoy comes first, inside mdat
+    assert round(mp4_duration(data), 2) == 17.4 and mp4_dims(data) == (1080, 1920)
+    assert clip_creation_ts(data) == 1_683_388_840
+    part = Partial(data[:100], data[-400:], len(data))              # head + tail of a large file
+    assert round(mp4_duration(part), 2) == 17.4 and mp4_dims(part) == (1080, 1920)
+    assert mp4_duration(b"not an mp4 at all, but it says mvhd somewhere") is None
