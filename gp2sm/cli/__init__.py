@@ -6,6 +6,7 @@ import sys
 from gp2sm import __version__
 
 COMMANDS = {
+    "init": ("gp2sm.project.init", "create a project folder with a commented gp2sm.toml"),
     "auth": ("gp2sm.cli.auth", "sign in to a service and manage stored credentials"),
     "consolidate": ("gp2sm.organize.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
