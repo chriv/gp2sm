@@ -184,7 +184,7 @@ def cmd_apply(st, cfg, client, args):
                 st.db.execute("UPDATE album_changes SET status=?, applied_at=?, last_error=? WHERE change_id=?",
                               ("done" if ok else "failed", now(), None if ok else f"read back {got!r}", r["change_id"]))
                 out["renamed" if ok else "failed"] += 1
-                st.event("album_renamed" if ok else "album_rename_failed", album_key=r["album_id"], commit=False,
+                st.event("album_renamed" if ok else "album_rename_failed", album_id=r["album_id"], commit=False,
                          old=r["old_value"], new=r["new_value"], read_back=got)
         except (NotFound, SmugMugError) as e:
             st.db.execute("UPDATE album_changes SET status='failed', last_error=? WHERE change_id=?",
@@ -232,7 +232,7 @@ def cmd_undo(st, cfg, client, args):
         ok = got == r["old_value"]
         st.db.execute("UPDATE album_changes SET status=?, last_error=? WHERE change_id=?",
                       ("undone" if ok else "done", None if ok else f"undo read back {got!r}", r["change_id"]))
-        st.event("album_rename_undone" if ok else "album_rename_undo_failed", album_key=r["album_id"], commit=False,
+        st.event("album_rename_undone" if ok else "album_rename_undo_failed", album_id=r["album_id"], commit=False,
                  restored=r["old_value"])
         st.db.commit()
         out["restored" if ok else "failed"] += 1

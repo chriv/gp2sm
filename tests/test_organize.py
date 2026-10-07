@@ -100,9 +100,9 @@ def test_organize_end_to_end(project, capsys):
     root, fake, src = project
     assert run(root, "inventory") == 0
     st = State(str(root / "state.db"))
-    assert st.one("SELECT COUNT(*) FROM images") == 5                      # the project's own folder isn't a source
+    assert st.one("SELECT COUNT(*) FROM items") == 5                      # the project's own folder isn't a source
     assert run(root, "plan") == 0
-    plan = dict(st.q("SELECT image_key, target_name FROM plan"))
+    plan = dict(st.q("SELECT item_id, target_name FROM plan"))
     assert plan == {"P1": "Phone 2023-05", "P2": "Screens 2023-06", "P3": "Photos Duplicates (review)",
                     "P4": "Unassigned Undated"}
     assert run(root, "apply") == 0 and "Dry run" in capsys.readouterr().out
@@ -113,7 +113,7 @@ def test_organize_end_to_end(project, capsys):
     assert names["Phone 2023-05"] == {"P1"} and names["Screens 2023-06"] == {"P2"}
     assert run(root, "verify") == 0
     assert run(root, "plan") == 0                                            # re-planning keeps done items
-    assert dict(st.q("SELECT image_key, status FROM plan")) == {k: "done" for k in ("P1", "P2", "P3", "P4")}
+    assert dict(st.q("SELECT item_id, status FROM plan")) == {k: "done" for k in ("P1", "P2", "P3", "P4")}
     assert not os.path.exists(root / ".gp2sm.lock")
 
 
@@ -163,3 +163,18 @@ def test_apply_refuses_while_another_run_holds_the_lock(project):
     with pytest.raises(context.Locked):
         run(root, "apply", "--yes")
     assert fake.albums[src] == {"P1", "P2", "P3", "P4", "P5"}
+
+
+def test_delete_duplicates_needs_every_kept_copy_in_place(project, capsys):
+    root, fake, src = project
+    for step in ("inventory", "plan"):
+        run(root, step)
+    run(root, "apply", "--yes")
+    st = State(str(root / "state.db"))
+    assert st.one("SELECT keeper_item_id FROM plan WHERE item_id='P3'") == "P1"   # P3 is a copy of P1
+    assert run(root, "delete-duplicates") == 0                                  # checks pass; dry run
+    keeper_album = next(a for a, items in fake.albums.items() if "P1" in items and a != src)
+    fake.albums[keeper_album].discard("P1")                                     # the kept copy disappears
+    with pytest.raises(SystemExit, match="lack a kept copy"):
+        run(root, "delete-duplicates", "--yes")
+    assert any("P3" in items for items in fake.albums.values())                # nothing was deleted

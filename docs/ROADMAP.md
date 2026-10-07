@@ -226,7 +226,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - albums whose photos were uploaded over a long time aren't dated
   - an apply/undo round trip on sandbox albums left links unchanged
 
-### Cleanup before A7 (owner-approved, 2026-10-07)
+### Cleanup before A7 (owner-approved, 2026-10-07). ✅ Done
 
 Backwards compatibility isn't a goal before the first public release, and the first migration's state can't be relied on any more.
 - C1: remove the first migration's tools:
@@ -235,7 +235,7 @@ Backwards compatibility isn't a goal before the first public release, and the fi
   - the JSON-config fallback, `[consolidate]`, and the `legacy` date source
 
   The engine organize uses is kept as `organize/engine.py`; `gp2sm takeout remove` is exposed.
-- C2: a clean state schema with neutral names (items, albums), without the legacy tables; migrations restart, and older state databases are refused with a clear message.
+- C2: a clean state schema with neutral names (items, albums), without the legacy tables; migrations restart, and older state databases are refused with a clear message. Found on the way: `delete-duplicates` checked kept copies through a table only the old consolidation filled, so for organize projects the check passed vacuously. Parked duplicates now record their kept copy, and deletion verifies each one is in its album on the server.
 
 ### Stage A7: Settings policy (audit and bulk fix)
 

@@ -41,9 +41,9 @@ def organize_items(st, cfg):
     """Items with their date, method and group (pure rules applied to the inventory)."""
     org = cfg["organize"]
     out, skipped = [], []
-    for r in st.q("SELECT i.image_key AS item_id, i.filename, i.is_video, i.archived_md5 AS md5, i.uploaded, "
-                  "i.capture_dt_smug AS capture_time, i.make, i.model, a.name AS album_name, a.folder "
-                  "FROM images i LEFT JOIN source_albums a ON a.album_key = i.src_album_key"):
+    for r in st.q("SELECT i.item_id, i.name AS filename, i.is_video, i.md5, i.uploaded, "
+                  "i.capture_time, i.make, i.model, a.name AS album_name, a.folder "
+                  "FROM items i LEFT JOIN source_albums a ON a.album_id = i.src_album_id"):
         it = dict(r)
         if rules.recent(it["uploaded"], org["skip_newer_than_days"]):
             skipped.append(it["item_id"])
@@ -58,7 +58,7 @@ def organize_items(st, cfg):
 
 def cmd_plan(st, cfg, client, args):
     items, skipped = organize_items(st, cfg)
-    existing = {r["item_id"]: dict(r) for r in st.q("SELECT image_key AS item_id, status, target_name FROM plan")}
+    existing = {r["item_id"]: dict(r) for r in st.q("SELECT item_id AS item_id, status, target_name FROM plan")}
     org = cfg["organize"]
     settings = {"photo": cfg["photo_album_template"], "video": cfg["video_album_template"],
                 "undated_photo": cfg["undated_photo_album"], "undated_video": cfg["undated_video_album"],
@@ -66,7 +66,7 @@ def cmd_plan(st, cfg, client, args):
                 "soft_cap": cfg["album_soft_cap"], "mode": org["mode"]}
     rows = planning.plan_organize(items, settings, existing)
     with st.db:   # recent items wait for a later run; only plan rows that haven't started are withdrawn
-        st.db.executemany("DELETE FROM plan WHERE image_key=? AND status IN ('pending', 'failed')",
+        st.db.executemany("DELETE FROM plan WHERE item_id=? AND status IN ('pending', 'failed')",
                           [(k,) for k in skipped])
     out = engine.write_plan(st, rows, existing)
     methods = {}

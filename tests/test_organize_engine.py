@@ -14,22 +14,22 @@ def FakeSmug(albums, bad=(), fail_network=0):
 def st(tmp_path):
     s = State(str(tmp_path / "s.db"))
     s.start_run("test", {})
-    s.db.execute("INSERT INTO targets(name, kind, album_key) VALUES('T', 'photo', 'DST')")
+    s.db.execute("INSERT INTO targets(name, kind, album_id) VALUES('T', 'photo', 'DST')")
     for k in "abcd":
-        s.db.execute("INSERT INTO images(image_key, serial, src_album_key, current_album_key) VALUES(?,0,'SRC','SRC')",
+        s.db.execute("INSERT INTO items(item_id, serial, src_album_id, current_album_id) VALUES(?,0,'SRC','SRC')",
                      (k,))
-        s.db.execute("INSERT INTO plan(image_key, action, target_name, status) VALUES(?,'move','T','pending')", (k,))
+        s.db.execute("INSERT INTO plan(item_id, action, target_name, status) VALUES(?,'move','T','pending')", (k,))
     s.db.commit()
     return s
 
 
 def rows(st):
-    return [dict(r) for r in st.q("SELECT p.image_key, i.serial, i.current_album_key FROM plan p "
-                                  "JOIN images i USING(image_key) ORDER BY 1")]
+    return [dict(r) for r in st.q("SELECT p.item_id, i.serial, i.current_album_id FROM plan p "
+                                  "JOIN items i USING(item_id) ORDER BY 1")]
 
 
 def status(st):
-    return {r[0]: r[1] for r in st.q("SELECT image_key, status FROM plan")}
+    return {r[0]: r[1] for r in st.q("SELECT item_id, status FROM plan")}
 
 
 def test_clean_batch_moves_and_records(st):
@@ -37,7 +37,7 @@ def test_clean_batch_moves_and_records(st):
     done, failed = engine.move_batch(st, fake, "DST", rows(st), "b1")
     assert sorted(done) == list("abcd") and failed == []
     assert set(status(st).values()) == {"done"}
-    assert {r["current_album_key"] for r in rows(st)} == {"DST"}
+    assert {r["current_album_id"] for r in rows(st)} == {"DST"}
     assert st.one("SELECT COUNT(*) FROM events WHERE kind='batch_moved'") == 1
 
 
@@ -72,6 +72,6 @@ def test_ambiguous_504_is_reconciled_not_failed(st):
 
 def test_single_400_already_in_target_counts_as_done(st):
     fake = FakeSmug({"SRC": "bcd", "DST": "a"})  # 'a' already moved by an earlier, unrecorded request
-    a = [r for r in rows(st) if r["image_key"] == "a"]
+    a = [r for r in rows(st) if r["item_id"] == "a"]
     done, failed = engine.move_batch(st, fake, "DST", a, "b1")
     assert done == ["a"] and failed == []

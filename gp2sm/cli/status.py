@@ -6,7 +6,7 @@ import sqlite3
 
 from gp2sm.project import context, credentials
 
-STATUS_TABLES = ("plan", "uploads", "placements", "datings")
+STATUS_TABLES = ("plan", "uploads", "album_changes")
 
 
 def _lock_holder(state_db):

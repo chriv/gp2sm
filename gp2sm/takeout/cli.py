@@ -133,7 +133,7 @@ def cmd_plan(st, cfg, client, args):
     album_ids = dict(st.q("SELECT name, album_id FROM dest_albums WHERE folder=?", cfg["target_folder"]))
     for r in rows:
         if r["album_id"]:
-            known = st.one("SELECT album_key FROM targets WHERE name=?", r["target_name"])
+            known = st.one("SELECT album_id FROM targets WHERE name=?", r["target_name"])
             if known and known != r["album_id"]:
                 r["status"], r["reason"] = "held", (f"another album named {r['target_name']!r} is already a target; "
                                                     "rename one of them")
@@ -153,7 +153,7 @@ def cmd_plan(st, cfg, client, args):
                  r["status"], int(r["convert"]), r["content_type"], r["taken_ts"], r["pair_ref"], stamp))
         for name, kind in sorted(kinds.items()):
             # an album already on the destination (e.g. a still's existing album) is used as is
-            st.db.execute("INSERT OR IGNORE INTO targets(name, kind, planned, album_key) VALUES(?,?,0,?)",
+            st.db.execute("INSERT OR IGNORE INTO targets(name, kind, planned, album_id) VALUES(?,?,0,?)",
                           (name, kind, album_ids.get(name)))
         st.event("takeout_plan", commit=False, rows=len(rows), **{k[:40]: v for k, v in notes.items()})
     counts = {}

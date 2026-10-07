@@ -20,7 +20,8 @@ def plan_organize(items, settings, existing=None):
     the duplicates album; any copy's date can date the keeper. Albums over soft_cap continue as '- Part N'.
     mode 'collect' adds items to their album and leaves them in the source (action 'collect'); nothing is
     parked then, since moving items out of a source an uploader app still writes to may make it upload again.
-    Returns [dict(item_id, action, target_name, kind, reason)].
+    Returns [dict(item_id, action, target_name, kind, reason, keeper_item_id)]; keeper_item_id is set on parked
+    duplicates (the copy that is kept, which delete-duplicates checks before deleting anything).
     """
     existing = existing or {}
     collect = settings.get("mode") == "collect"
@@ -47,7 +48,7 @@ def plan_organize(items, settings, existing=None):
         keeper = keeper_of.get(it["item_id"], it["item_id"])
         if keeper != it["item_id"]:
             rows.append({"item_id": it["item_id"], "action": "park_duplicate", "base": settings["duplicates_album"],
-                         "kind": "duplicates", "sort": (it["md5"], it["item_id"]),
+                         "kind": "duplicates", "sort": (it["md5"], it["item_id"]), "keeper": keeper,
                          "reason": f"same file as {keeper}"})
             continue
         src = dated_by.get(it["item_id"], it)
@@ -75,4 +76,5 @@ def plan_organize(items, settings, existing=None):
                 r["target_name"] = prior["target_name"]
             else:
                 r["target_name"] = part_name(base, i // settings["soft_cap"] + 1)
-    return [{k: r[k] for k in ("item_id", "action", "target_name", "kind", "reason")} for r in rows]
+    return [dict({k: r[k] for k in ("item_id", "action", "target_name", "kind", "reason")},
+                 keeper_item_id=r.get("keeper")) for r in rows]

@@ -127,9 +127,9 @@ def cmd_stage(st, cfg, args):
 
 # ---------------------------------------------------------------------- upload
 
-def find_in_album(client, album_key, filename, md5=None):
+def find_in_album(client, album_id, filename, md5=None):
     """Return (item_id, item_ref) of an item named `filename` (and, if given, with this md5) in the album."""
-    for it in client.list_album_items(album_key):
+    for it in client.list_album_items(album_id):
         if (it["name"] or "").lower() == filename.lower() and (md5 is None or it["md5"] == md5):
             return it["item_id"], it["item_ref"]
     return None
@@ -139,14 +139,14 @@ def reconcile_uploads(st, client, rows):
     """For uploads with an unknown outcome, look in the target album before anything is retried."""
     fixed = {"done": 0, "staged": 0}
     for r in rows:
-        album_key = st.one("SELECT album_key FROM targets WHERE name=?", r["target_name"])
+        album_id = st.one("SELECT album_id FROM targets WHERE name=?", r["target_name"])
         caps = client.capabilities
         name = landed_name(r["upload_name"], caps)   # e.g. a kept HEIC lands as .JPG
         ext = os.path.splitext(r["upload_name"])[1].lower()
         md5 = r["staged_md5"] if r["role"] != "clip" and ext in caps.stores_original_bytes else None
-        hit = find_in_album(client, album_key, name, md5) if album_key else None
+        hit = find_in_album(client, album_id, name, md5) if album_id else None
         if hit:
-            st.db.execute("UPDATE uploads SET status='done', image_key=?, album_image_uri=?, last_error=NULL, "
+            st.db.execute("UPDATE uploads SET status='done', item_id=?, item_ref=?, last_error=NULL, "
                           "updated_at=? WHERE upload_id=?", (hit[0], hit[1], now(), r["upload_id"]))
             fixed["done"] += 1
         else:
@@ -214,7 +214,7 @@ def cmd_upload(st, cfg, client, args):
             r = inflight.pop(fut)
             try:
                 item = fut.result()
-                st.db.execute("UPDATE uploads SET status='done', image_key=?, album_image_uri=?, last_error=NULL, "
+                st.db.execute("UPDATE uploads SET status='done', item_id=?, item_ref=?, last_error=NULL, "
                               "updated_at=? WHERE upload_id=?", (item["item_id"], item["item_ref"], now(), r["upload_id"]))
                 totals["uploaded"] += 1
                 progress.update()
@@ -238,7 +238,7 @@ def cmd_upload(st, cfg, client, args):
             client.set_sort_by_filename(key)
         except SmugMugError as e:
             log.warning("could not set filename sort on %s: %s", name, e)
-            st.event("album_sort_failed", level="warning", album_key=key, name=name, error=str(e))
+            st.event("album_sort_failed", level="warning", album_id=key, name=name, error=str(e))
     st.event("upload", **totals)
     return totals
 
@@ -251,7 +251,7 @@ def cmd_remove(st, cfg, client, args):
     rows = [dict(r) for r in st.q(f"SELECT * FROM uploads WHERE upload_id IN ({','.join('?' * len(ids))})", *ids)]
     out = {"removed": 0, "skipped": 0}
     for r in rows:
-        if r["status"] != "done" or not r["album_image_uri"]:
+        if r["status"] != "done" or not r["item_ref"]:
             log.warning("upload %s (%s) is %s; not ours to remove", r["upload_id"], r["upload_name"], r["status"])
             out["skipped"] += 1
             continue
@@ -259,11 +259,11 @@ def cmd_remove(st, cfg, client, args):
             log.info("dry run: would remove %s from %s", r["upload_name"], r["target_name"])
             continue
         try:
-            client.remove_item(r["album_image_uri"])
+            client.remove_item(r["item_ref"])
         except NotFound:
             log.info("%s already gone", r["upload_name"])
         new_status = "staged"   # uploaded again only by a later `gp2sm takeout upload --yes`
-        st.db.execute("UPDATE uploads SET status=?, image_key=NULL, album_image_uri=NULL, last_error=?, updated_at=? "
+        st.db.execute("UPDATE uploads SET status=?, item_id=NULL, item_ref=NULL, last_error=?, updated_at=? "
                       "WHERE upload_id=?", (new_status, f"removed: {args.reason}", now(), r["upload_id"]))
         st.event("upload_removed", commit=False, upload_id=r["upload_id"], name=r["upload_name"],
                  target=r["target_name"], reason=args.reason)
@@ -280,17 +280,17 @@ def cmd_verify(st, cfg, client, args):
     Lists each affected album once (item ids only), with a few albums in parallel.
     """
     where = "status='done'" + ("" if args.all else " AND verified_at IS NULL")
-    rows = st.q(f"SELECT upload_id, target_name, image_key FROM uploads WHERE {where}")
+    rows = st.q(f"SELECT upload_id, target_name, item_id FROM uploads WHERE {where}")
     by_album = {}
     for r in rows:
         if not args.target or any(fnmatch.fnmatch(r["target_name"], p) for p in args.target):
-            by_album.setdefault(r["target_name"], []).append((r["upload_id"], r["image_key"]))
+            by_album.setdefault(r["target_name"], []).append((r["upload_id"], r["item_id"]))
     log.info("verifying %d uploads in %d albums", sum(len(v) for v in by_album.values()), len(by_album))
 
-    album_keys = {name: st.one("SELECT album_key FROM targets WHERE name=?", name) for name in by_album}
+    album_ids = {name: st.one("SELECT album_id FROM targets WHERE name=?", name) for name in by_album}
 
     def listing(name):  # runs in a worker thread: no database access here
-        return name, {it["item_id"] for it in client.list_album_items(album_keys[name], ids_only=True)}
+        return name, {it["item_id"] for it in client.list_album_items(album_ids[name], ids_only=True)}
 
     out = {"albums_ok": 0, "albums_bad": 0, "uploads_verified": 0, "uploads_missing": 0}
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
@@ -304,7 +304,7 @@ def cmd_verify(st, cfg, client, args):
             out["uploads_missing"] += len(missing)
             if missing:
                 out["albums_bad"] += 1
-                log.error("%s: %d uploaded images missing on server: %s", name, len(missing), sorted(missing)[:10])
+                log.error("%s: %d uploaded items missing on server: %s", name, len(missing), sorted(missing)[:10])
                 st.event("upload_verify_mismatch", level="error", commit=False, name=name, missing=sorted(missing))
             else:
                 out["albums_ok"] += 1
