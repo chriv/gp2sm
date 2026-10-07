@@ -1,7 +1,7 @@
 """gp2sm takeout: import a Google Takeout into the destination.
 
   index       read the archives (.zip/.tgz) in the takeout folder (same as `gp2sm takeout-index`)
-  inventory   list the destination albums in scope ([takeout] existing; default: the project's folder)
+  inventory   list the destination albums in scope ([takeout] existing; default: the whole account)
   dedupe      decide, for every Takeout item, whether it's already there: exact | same | new | review
   review      export the unclear cases side by side for a person to sort; `review --read` takes the answers
   plan        decide what to upload, where and under which name (Live Photo clips beside their stills)
@@ -34,6 +34,7 @@ log = logging.getLogger("gp2sm.takeout.cli")
 
 
 def scope(cfg):
+    """Where to look for copies already on the destination ([] means only the project's own folder)."""
     return cfg["takeout"]["existing"] or [cfg["target_folder"]]
 
 

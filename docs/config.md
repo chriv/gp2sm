@@ -42,7 +42,7 @@ This page is generated from the code (`python -m gp2sm.project.reference`).
 | `unpaired_clips` | one of "dated", "undated", "skip" | `"dated"` | clips with no matching still: dated video album by their own time, the undated album, or skip |
 | `rejected_types` | one of "skip", "convert" | `"skip"` | photos in formats the destination rejects (e.g. WebP, BMP): skip (listed in the report), or convert to JPEG |
 | `dedupe` | one of "content", "exact", "off" | `"content"` | skip items already on the destination: exact (same bytes), content (also same picture), off |
-| `existing` | list of text | `[]` | folders or albums (by name, e.g. "Family/2023-05") to check for existing copies; empty = this project's folder, ["/"] = the whole account |
+| `existing` | list of text | `["/"]` | where to look for copies already on the destination: ["/"] = the whole account (safest; listing takes a few minutes for tens of thousands of items), or folders or albums by name, e.g. ["Family", "Old Imports/2023-05"]; [] = only this project's folder |
 | `same_max` | whole number (1 or more) | `6` | content check: picture distance at or below this is the same photo |
 | `different_min` | whole number (1 or more) | `19` | content check: distance at or above this is a different photo; between = review |
 | `pair_window` | whole number (1 or more) | `60` | a clip pairs with a still taken within this many seconds |

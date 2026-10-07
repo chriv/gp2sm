@@ -57,8 +57,10 @@ SCHEMA = {
                            "or convert to JPEG"),
         "dedupe": (("content", "exact", "off"), "content",
                    "skip items already on the destination: exact (same bytes), content (also same picture), off"),
-        "existing": (list, [], "folders or albums (by name, e.g. \"Family/2023-05\") to check for existing copies; "
-                               "empty = this project's folder, [\"/\"] = the whole account"),
+        "existing": (list, ["/"], "where to look for copies already on the destination: [\"/\"] = the whole account "
+                                  "(safest; listing takes a few minutes for tens of thousands of items), or folders or "
+                                  "albums by name, e.g. [\"Family\", \"Old Imports/2023-05\"]; [] = only this "
+                                  "project's folder"),
         "same_max": (int, 6, "content check: picture distance at or below this is the same photo"),
         "different_min": (int, 19, "content check: distance at or above this is a different photo; between = review"),
         "pair_window": (int, 60, "a clip pairs with a still taken within this many seconds"),

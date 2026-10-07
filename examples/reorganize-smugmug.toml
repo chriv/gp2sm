@@ -52,8 +52,8 @@ unpaired_clips = "dated"
 rejected_types = "skip"
 # skip items already on the destination: exact (same bytes), content (also same picture), off
 dedupe = "content"
-# folders or albums (by name, e.g. "Family/2023-05") to check for existing copies; empty = this project's folder, ["/"] = the whole account
-existing = []
+# where to look for copies already on the destination: ["/"] = the whole account (safest; listing takes a few minutes for tens of thousands of items), or folders or albums by name, e.g. ["Family", "Old Imports/2023-05"]; [] = only this project's folder
+existing = ["/"]
 # content check: picture distance at or below this is the same photo
 same_max = 6
 # content check: distance at or above this is a different photo; between = review
@@ -111,3 +111,14 @@ max_spread_days = 45
 move_batch_size = 25
 # parallel network workers
 workers = 8
+
+# --- Album settings policy (`gp2sm albums audit`, `fix`): ordered [[policy]] entries. Each has a scope
+# (folder/album globs; ["*"] = every album), an optional exclude, and settings; the last match wins.
+# Settings: comments, download_size, downloads, exif, filenames, geography, hide_owner, largest_size, printable, privacy, protected, ranking, search, share, slideshow, sort, sort_direction, watermark, web_search.
+# Example:
+#   [[policy]]
+#   scope = ["*"]
+#   sort = "date_taken"
+#   [[policy]]
+#   scope = ["Family/*"]
+#   privacy = "private"

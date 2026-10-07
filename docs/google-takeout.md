@@ -2,6 +2,8 @@
 
 Google Takeout is the only way to get your whole Google Photos library out of Google. It always includes **everything** in Google Photos (you can't pick albums), with a metadata file next to each photo and video.
 
+**Start this first: it takes time.** Google builds the export in the background. The more photos and videos you have, the longer it takes, from a few hours for a small library to several days for a large one. Include **Google Photos only**: every other Google service you tick (Drive, Gmail, YouTube…) adds data gp2sm doesn't use and makes the export larger and slower.
+
 1. Go to [takeout.google.com](https://takeout.google.com) and sign in to the Google account that owns the photos.
 2. Choose **Deselect all**, then tick only **Google Photos**.
 3. Next step: choose how the archive is delivered (a download link by email is simplest), the frequency (export once), the file type (**.zip** or **.tgz**; gp2sm reads both) and the size (the largest size means fewer files to download).

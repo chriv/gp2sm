@@ -1,5 +1,11 @@
 # gp2sm
 
+[![CI](https://github.com/chriv/gp2sm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chriv/gp2sm/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Status: beta](https://img.shields.io/badge/status-beta-orange)](CHANGELOG.md)
+[![Platforms: Linux | macOS | Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](.github/workflows/ci.yml)
+
 Move a photo library into **SmugMug** and keep it organized. Every step is planned before it runs, recorded, checked against SmugMug afterwards, and undoable where SmugMug allows it.
 
 > **Status: beta (3.0.0b1).** Used on a real 35,000-item migration (Google Photos → SmugMug, Live Photos included). Expect rough edges; please report them.
@@ -22,23 +28,24 @@ gp2sm --help
 
 From a checkout: `python -m venv .venv && .venv/bin/pip install -e '.[dev]'`.
 
-## Quickstart: Google Photos to SmugMug in about 10 minutes of your time
+## Quickstart: Google Photos to SmugMug
 
-1. **Get a SmugMug API key** (once): see [docs/smugmug-api-key.md](docs/smugmug-api-key.md).
-2. **Create a project** (a folder holding settings, progress and logs) and sign in:
+1. **Request a Google Takeout first; it takes a while.** Google prepares the export in the background, and the more photos and videos you have, the longer it takes: from hours to several days for a large library. Select **Google Photos only** (choose "Deselect all" first): a Takeout of other Google services adds data gp2sm doesn't use and makes the export bigger and slower. Details: [docs/google-takeout.md](docs/google-takeout.md).
+2. **While you wait, get a SmugMug API key** (once): see [docs/smugmug-api-key.md](docs/smugmug-api-key.md).
+3. **Create a project** (a folder holding settings, progress and logs) and sign in:
    ```bash
    gp2sm init family-photos          # asks a few questions; writes family-photos/gp2sm.toml
    gp2sm auth smugmug                # API key and secret, then a 6-digit code from SmugMug
    cd family-photos
    ```
-3. **Request a Google Takeout** of Google Photos and put the downloaded archives in `family-photos/takeout/`: see [docs/google-takeout.md](docs/google-takeout.md).
-4. **Plan.** Nothing on SmugMug changes:
+4. **When the Takeout is ready,** download every part into `family-photos/takeout/`. Don't extract them.
+5. **Plan.** Nothing on SmugMug changes:
    ```bash
    gp2sm plan                        # indexes the archives, checks SmugMug, plans every upload
    gp2sm report                      # reports/report.html: what would happen to every file
    ```
-   If the plan holds anything for review, run `gp2sm takeout review`, sort the pairs in `review/`, then `gp2sm takeout review --read` and `gp2sm plan` again.
-5. **Upload and check:**
+   The plan skips anything already anywhere on your SmugMug account: the same file, the same picture saved differently, or the same video. To check only some folders (faster for a huge account), set `existing` under `[takeout]` in `gp2sm.toml`. If the plan holds anything for review, run `gp2sm takeout review`, sort the pairs in `review/`, then run `gp2sm takeout review --read` and `gp2sm plan` again.
+6. **Upload and check:**
    ```bash
    gp2sm apply                       # prepares the files locally, then shows what it would upload
    gp2sm apply --yes                 # uploads (stop any time with Ctrl-C; run it again to continue)
@@ -47,6 +54,31 @@ From a checkout: `python -m venv .venv && .venv/bin/pip install -e '.[dev]'`.
    ```
 
 Every setting (album names, HEIC handling, Live Photo clips, what to skip) is in `gp2sm.toml`, with its help text. See [docs/config.md](docs/config.md).
+
+## Other tasks
+
+Each task works in a project and follows the same pattern: plan, look at the report, apply with `--yes`, verify, and undo if needed. All of them are dry runs until you add `--yes`.
+
+**Organize photos already on SmugMug**, e.g. a phone's auto-upload album, into month albums. In `gp2sm.toml`, set `sources` under `[organize]` to the albums or folders to organize, and optionally add grouping rules (`[[organize.group]]`) and `mode = "collect"` to leave the originals in place. Then:
+```bash
+gp2sm organize inventory && gp2sm organize plan && gp2sm organize report
+gp2sm organize apply --yes && gp2sm organize verify
+gp2sm organize undo "Photos 2024-05" --yes      # if you change your mind about an album
+```
+
+**Give albums date-sortable names** like `2019-06 Beach Trip` (display names only; links keep working). Set `scope` under `[naming]` (e.g. `["/"]` for every album), then:
+```bash
+gp2sm albums inventory && gp2sm albums plan && gp2sm albums report
+gp2sm albums approve --name "Cotton Pickin 2011"  # proposals marked for review need your OK
+gp2sm albums apply --yes && gp2sm albums verify
+```
+
+**Keep album settings consistent** (privacy, downloads, sort order, …). Add `[[policy]]` entries to `gp2sm.toml` (a commented example is in every new one), then:
+```bash
+gp2sm albums audit && gp2sm albums report         # what differs from your policy
+gp2sm albums fix --yes && gp2sm albums verify
+gp2sm albums undo --yes                           # restores the previous names and settings
+```
 
 ## Safety
 

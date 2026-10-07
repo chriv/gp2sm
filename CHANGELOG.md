@@ -11,7 +11,7 @@ Licensed under MIT (earlier versions were released under the Unlicense).
 - **Projects:** `gp2sm init` creates a folder with a commented `gp2sm.toml`. `gp2sm auth smugmug` signs in once and stores credentials per user, outside the project. `gp2sm status` and `gp2sm services` show where things stand.
 - **Google Takeout import** (`gp2sm takeout …`):
   - reads `.zip` and `.tgz` archives without extracting them
-  - checks what's already on SmugMug: the same file, the same picture re-encoded (perceptual hash), or the same video shape
+  - checks what's already anywhere on the SmugMug account (by default; `[takeout] existing` can narrow it): the same file, the same picture re-encoded (perceptual hash), or the same video shape
   - a review folder for unclear cases
   - month albums
   - Live Photo clips paired with their still by capture time and shape
