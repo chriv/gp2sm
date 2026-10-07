@@ -144,6 +144,7 @@ class ProjectConfig:
             "organize": organize_settings(self.values),
             "naming": section_settings("naming", self.values),
             "policy": list(self.values.get("policy", [])),
+            "project_name": self.values["project"]["name"],
         }
 
 

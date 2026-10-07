@@ -59,3 +59,4 @@ def test_top_level_verbs_pick_the_pipeline(tmp_path, monkeypatch):
     assert calls == [("organize", ["--project", str(root), "apply", "--yes", "--limit", "5"])]
     with pytest.raises(SystemExit, match="isn't available for takeout"):
         verbs.undo(["takeout", "--project", str(root)], show=lambda *a: None)
+    assert not hasattr(verbs, "report")          # `gp2sm report` is the project report (gp2sm/report)

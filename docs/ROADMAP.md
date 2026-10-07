@@ -285,6 +285,9 @@ Backwards compatibility isn't a goal before the first public release, and the fi
 - **Prototype:** the per-project report and file-type accounting built during the first real migration. Generalize them and remove anything account-specific.
 - **Tests:** a synthetic state DB with known outcomes produces the expected totals. The accounting invariant (each file counted once, rows sum to totals) is tested directly.
 - **Exit:** a report on a real project that its owner finds complete and accurate without asking follow-up questions.
+- **Sub-stages:**
+  - A8.1 `gp2sm report`: the data model and per-file accounting (every source file exactly one outcome, totals checked), evidence, verification and activity; Markdown, HTML, JSON and a per-file CSV in the project's `reports/` folder
+  - A8.2 a real check: a one-month slice planned (not uploaded) to produce an in-progress report
 
 ### Stage A9: Documentation and release
 

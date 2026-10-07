@@ -10,7 +10,7 @@ COMMANDS = {
     "plan": ("gp2sm.cli.verbs:plan", "plan the project's work (dry; nothing on the destination changes)"),
     "apply": ("gp2sm.cli.verbs:apply", "carry out the plan (dry run unless --yes)"),
     "verify": ("gp2sm.cli.verbs:verify", "check the destination against what was done"),
-    "report": ("gp2sm.cli.verbs:report", "what was planned and done, and why"),
+    "report": ("gp2sm.report.cli", "the project report: every file's outcome, evidence, verification (md/html/json/csv)"),
     "undo": ("gp2sm.cli.verbs:undo", "undo an organize move for one album (dry run unless --yes)"),
     "status": ("gp2sm.cli.status", "show project settings, credentials, lock and state summary"),
     "services": ("gp2sm.cli.services", "list installed photo services (sources and destinations)"),

@@ -1,4 +1,4 @@
-"""Top-level verbs: `gp2sm plan | apply | verify | report | undo`, run against the project's pipeline.
+"""Top-level verbs: `gp2sm plan | apply | verify | undo` (and `gp2sm report`, in gp2sm/report), run against the project's pipeline.
 
 A project's pipelines are found from its config: `takeout` when its takeout folder holds archives,
 `organize` when [organize] sources is set. If both apply, name one: `gp2sm plan organize`.
@@ -8,7 +8,6 @@ Each verb runs the pipeline's steps in order and stops at the first one that fai
   plan     takeout: index -> inventory -> dedupe -> plan        organize: inventory -> plan
   apply    takeout: stage -> upload                              organize: apply
   verify   verify                                                verify
-  report   report                                                report
   undo     (not available for takeout imports)                   undo ALBUM
 """
 
@@ -20,9 +19,8 @@ from gp2sm.takeout.archive import list_archives
 
 STEPS = {
     "takeout": {"plan": ["index", "inventory", "dedupe", "plan"], "apply": ["stage", "upload"],
-                "verify": ["verify"], "report": ["report"]},
-    "organize": {"plan": ["inventory", "plan"], "apply": ["apply"], "verify": ["verify"], "report": ["report"],
-                 "undo": ["undo"]},
+                "verify": ["verify"]},
+    "organize": {"plan": ["inventory", "plan"], "apply": ["apply"], "verify": ["verify"], "undo": ["undo"]},
 }
 
 
@@ -80,5 +78,4 @@ def make_main(verb):
 plan = make_main("plan")
 apply = make_main("apply")
 verify = make_main("verify")
-report = make_main("report")
 undo = make_main("undo")
