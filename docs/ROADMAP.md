@@ -269,6 +269,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
     - troubleshooting
     - `smugmug-api.md` (confirmed API behavior)
   - **Release:** a changelog, versioning, a PyPI release, and issue templates.
+  - **Before publishing:** scan the full git history (not just the tree) for personal names, account details and real album names, and rewrite it if needed (a real album name reached commit `2e36894` and was removed in `7e552be`; the first migration's commits also need checking).
 - **Exit:** a fresh-machine install and quickstart, done by someone who didn't write the code.
 
 ---
