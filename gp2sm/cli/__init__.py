@@ -6,6 +6,7 @@ import sys
 from gp2sm import __version__
 
 COMMANDS = {
+    "auth": ("gp2sm.cli.auth", "sign in to a service and manage stored credentials"),
     "consolidate": ("gp2sm.organize.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
     "takeout-match": ("gp2sm.takeout.match", "pair metadata files and Live Photo clips; compare with consolidation state"),
