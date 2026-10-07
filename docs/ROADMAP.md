@@ -164,7 +164,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - A3.5 live sandbox test, then a one-month slice of a real Takeout
 - **Known gap, deliberately left out of A3 (from the one-month check, 2026-10-07):** affects roughly 0.5% of clips at most (about 60 of 10,534 in the first real library), and only when an unpaired clip is already on the destination through some other route; the worst case is a duplicate clip, never a lost one. a Live Photo clip that pairs with no still is uploaded without first checking whether it's already on the destination. Same name and duration are too weak for clips, since bursts share names and most clips run 1–3 s. Fix: match on the destination copy's capture time, fetched only for same-named clip candidates.
 
-### Stage A4: Generalized organize (consolidation)
+### Stage A4: Generalized organize (consolidation). ✅ Done (2026-10-07)
 
 - **Goal:** rule-based reorganization of existing SmugMug albums.
 - **Deliverables:**
