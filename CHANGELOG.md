@@ -6,6 +6,8 @@ All notable changes to gp2sm. Versions follow [semantic versioning](https://semv
 
 A rewrite of the earlier v1/v2 script (kept at the git tag `legacy-v2`) as an installable tool, built and tested on a real 35,000-item migration.
 
+Licensed under MIT (earlier versions were released under the Unlicense).
+
 - **Projects:** `gp2sm init` creates a folder with a commented `gp2sm.toml`. `gp2sm auth smugmug` signs in once and stores credentials per user, outside the project. `gp2sm status` and `gp2sm services` show where things stand.
 - **Google Takeout import** (`gp2sm takeout …`):
   - reads `.zip` and `.tgz` archives without extracting them

@@ -7,7 +7,7 @@ name = "gp2sm"
 dynamic = ["version"]
 description = "Move a Google Photos library (via Google Takeout) into SmugMug and keep it organized: planned, verified, undoable."
 readme = "README.md"
-license = "Unlicense"
+license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 keywords = ["smugmug", "google-photos", "google-takeout", "photos", "migration", "backup", "live-photos"]

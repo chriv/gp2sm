@@ -64,4 +64,4 @@ Anything that changes SmugMug is a dry run unless you add `--yes`. Deletions are
 
 ## License
 
-Public domain ([The Unlicense](LICENSE)). Not affiliated with Google or SmugMug.
+[MIT](LICENSE). Not affiliated with Google or SmugMug.
