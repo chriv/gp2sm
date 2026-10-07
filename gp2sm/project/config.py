@@ -80,6 +80,18 @@ SCHEMA = {
         "group": ("rules", [], "ordered rules naming a group, e.g. [[organize.group]] name = \"Phone\" "
                                "model = \"iPhone*\" (also: album, make, filename; case-insensitive globs)"),
     },
+    "naming": {
+        "scope": (list, [], "folders or albums (by name) whose album names are checked; [\"/\"] = the whole account"),
+        "exclude": (list, [], "album names to leave alone (case-insensitive globs), e.g. [\"*Auto Upload*\"]"),
+        "month": ("name_template", "{yyyy}-{mm} {subject}", "new name when the date has a month"),
+        "year": ("name_template", "{yyyy} {subject}", "new name when only the year is known"),
+        "day": ("name_template", "{yyyy}-{mm}-{dd} {subject}", "new name when keep_day is on and the day is known"),
+        "keep_day": ((False, True), False, "keep the day when the old name has one"),
+        "min_confidence": (("high", "medium"), "high", "apply renames this sure without review; the rest are listed"),
+        "date_from_photos": ((True, False), True, "date albums with no date in their name from a sample of photos"),
+        "photo_sample": (int, 60, "photos sampled per undated album (a few random pages)"),
+        "max_spread_days": (int, 45, "photos spread over more days than this don't date an album"),
+    },
     "run": {
         "move_batch_size": (int, 25, "items per batch move"),
         "workers": (int, 8, "parallel network workers"),
@@ -134,6 +146,7 @@ class ProjectConfig:
             "max_consecutive_failures": 5,
             "takeout": takeout_policies(self.values),
             "organize": organize_settings(self.values),
+            "naming": section_settings("naming", self.values),
         }
 
 
@@ -145,6 +158,14 @@ def _check(section, key, kind, value, problems):
     elif kind is int:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             problems.append(f"{where} must be a positive integer, got {value!r}")
+    elif kind == "name_template":
+        if not isinstance(value, str):
+            problems.append(f"{where} must be a string")
+            return
+        fields = {f for _, f, _, _ in string.Formatter().parse(value) if f}
+        unknown = fields - {"yyyy", "mm", "dd", "subject"}
+        if unknown or "yyyy" not in fields or "subject" not in fields:
+            problems.append(f"{where} must use {{yyyy}} and {{subject}} (and may use {{mm}}, {{dd}}), got {value!r}")
     elif kind == "count":
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             problems.append(f"{where} must be 0 or a positive integer, got {value!r}")
@@ -217,6 +238,11 @@ def validate(raw):
     if isinstance(t["same_max"], int) and isinstance(t["different_min"], int) and t["same_max"] >= t["different_min"]:
         problems.append(f"[takeout] same_max ({t['same_max']}) must be below different_min ({t['different_min']})")
     return values, problems
+
+
+def section_settings(section, values=None):
+    """A section's settings (defaults when no project config is in use)."""
+    return dict(values[section]) if values else {k: v[1] for k, v in SCHEMA[section].items()}
 
 
 def organize_settings(values=None):

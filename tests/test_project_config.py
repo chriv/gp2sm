@@ -127,3 +127,10 @@ def test_rules_render_as_valid_toml(tmp_path):
     text = render({"organize": {"group": [{"name": "Phone", "model": "iPhone*"}]}})
     (tmp_path / "gp2sm.toml").write_text(text)
     assert load(str(tmp_path)).get("organize", "group") == [{"name": "Phone", "model": "iPhone*"}]
+
+
+def test_naming_section_defaults_and_template_check():
+    values, problems = validate({"naming": {"month": "{subject} {mm}", "keep_day": True}})
+    assert any("[naming] month must use {yyyy} and {subject}" in p for p in problems)
+    values, problems = validate({})
+    assert problems == [] and values["naming"]["min_confidence"] == "high" and values["naming"]["keep_day"] is False

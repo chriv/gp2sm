@@ -74,7 +74,7 @@ aspect_tolerance_pct = 2
 [organize]
 # folders or albums (by name) whose items are organized, e.g. ["Uploads"]
 sources = []
-# where capture dates come from, in order: camera (the file's own date), filename, upload (last resort), legacy (old transfer DBs)
+# where capture dates come from, in order: camera (the file's own date), filename, album (a date in the source album's name), upload (last resort), legacy (old transfer DBs)
 dates = ["camera", "filename"]
 # move items into the dated albums, or collect them (copies stay in the source; use for albums an uploader app still writes to)
 mode = "move"
@@ -86,6 +86,29 @@ duplicates = "park"
 unassigned = "Unassigned"
 # ordered rules naming a group, e.g. [[organize.group]] name = "Phone" model = "iPhone*" (also: album, make, filename; case-insensitive globs)
 group = []
+
+# --- naming
+[naming]
+# folders or albums (by name) whose album names are checked; ["/"] = the whole account
+scope = []
+# album names to leave alone (case-insensitive globs), e.g. ["*Auto Upload*"]
+exclude = []
+# new name when the date has a month
+month = "{yyyy}-{mm} {subject}"
+# new name when only the year is known
+year = "{yyyy} {subject}"
+# new name when keep_day is on and the day is known
+day = "{yyyy}-{mm}-{dd} {subject}"
+# keep the day when the old name has one
+keep_day = false
+# apply renames this sure without review; the rest are listed
+min_confidence = "high"
+# date albums with no date in their name from a sample of photos
+date_from_photos = true
+# photos sampled per undated album (a few random pages)
+photo_sample = 60
+# photos spread over more days than this don't date an album
+max_spread_days = 45
 
 # --- Performance
 [run]
