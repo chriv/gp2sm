@@ -32,11 +32,18 @@ def _m3_importer(db):
             db.execute(f"ALTER TABLE uploads ADD COLUMN {col} {decl}")
 
 
+def _m4_organize_rules(db):
+    for table, col in (("images", "make"), ("images", "model"), ("source_albums", "folder")):
+        if col not in _columns(db, table):
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+
+
 MIGRATIONS = [
     (2, "uploads.pair_item_id (re-paired clips) and uploads.verified_at (incremental verify)",
      _m2_upload_pairing_and_verification),
     (3, "importer: destination inventory, hash caches, source_matches; uploads.source_ref/convert/"
         "content_type/taken_ts/pair_ref", _m3_importer),
+    (4, "organize rules: images.make/model, source_albums.folder", _m4_organize_rules),
 ]
 LATEST = max(v for v, _, _ in MIGRATIONS)
 

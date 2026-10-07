@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS events(
 -- Albums whose contents are being consolidated.
 CREATE TABLE IF NOT EXISTS source_albums(
   album_key TEXT PRIMARY KEY, album_uri TEXT, name TEXT, url_path TEXT,
-  image_count INT, rows_stored INT, inventoried_at TEXT);
+  image_count INT, rows_stored INT, inventoried_at TEXT,
+  folder TEXT);  -- display-name folder path (organize rules match "folder/name")
 
 -- One row per SmugMug image found in a source album.
 CREATE TABLE IF NOT EXISTS images(
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS images(
   archived_md5 TEXT, archived_size INT, width INT, height INT, duration_s REAL,
   uploaded TEXT, capture_dt_smug TEXT,
   raw_image TEXT, raw_metadata TEXT,
-  first_seen TEXT, last_seen TEXT);
+  first_seen TEXT, last_seen TEXT,
+  make TEXT, model TEXT);  -- camera, from the destination's metadata (organize rules)
 
 -- Google items from the legacy transfer DBs (the bridge to capture dates and Google IDs).
 CREATE TABLE IF NOT EXISTS legacy_items(

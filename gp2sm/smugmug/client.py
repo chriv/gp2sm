@@ -329,6 +329,7 @@ class SmugMugClient:
             "width": img.get("OriginalWidth"), "height": img.get("OriginalHeight"),
             "duration_s": cls._duration_s(md.get("Duration")), "uploaded": img.get("DateTimeUploaded"),
             "capture_time": md.get("DateTimeCreated") or None,
+            "make": md.get("Make") or None, "model": md.get("Model") or None,
             "raw": {k: v for k, v in img.items() if k != "Uris"}, "raw_metadata": md or None,
         }
 

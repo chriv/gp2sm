@@ -27,6 +27,8 @@ class ItemRecord(TypedDict, total=False):
     duration_s: Optional[float]
     uploaded: Optional[str]
     capture_time: Optional[str]
+    make: Optional[str]              # camera make/model (with_metadata listings)
+    model: Optional[str]
     raw: dict                 # service-specific fields, for logging/reporting only
     raw_metadata: Optional[dict]
 

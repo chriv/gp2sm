@@ -1,9 +1,9 @@
-"""Pure consolidation logic: match destination items to source items, group exact duplicates,
-and decide each image's destination album. No I/O here, so it can be unit tested.
+"""Pure planning: group exact duplicates and decide each item's destination album (consolidation and
+organize). No I/O here, so it can be unit tested. Matching to the legacy transfer database lives in
+gp2sm.contrib.legacy_bridge.legacy_dates.
 """
 
 import datetime
-import os
 import re
 from collections import defaultdict
 from zoneinfo import ZoneInfo
@@ -36,93 +36,6 @@ def dims_match(w1, h1, w2, h2):
         return None  # unknown
     return (w1, h1) == (w2, h2) or (w1, h1) == (h2, w2)
 
-
-# ------------------------------------------------------------------ matching
-
-class LegacyIndex:
-    """Lookups over legacy Google items: by MD5, by filename, and by HEIC-stem.jpg
-    (the destination may store NAME.HEIC as NAME.JPG)."""
-
-    def __init__(self, items, md5_rows):
-        self.items = {it["google_id"]: it for it in items}
-        self.by_md5 = defaultdict(list)
-        for row in md5_rows:
-            if row["google_id"] in self.items:
-                self.by_md5[row["md5"]].append(row["google_id"])
-        self.by_name = defaultdict(list)
-        self.by_heic_jpg = defaultdict(list)
-        for it in items:
-            name = (it["filename"] or "").lower()
-            self.by_name[name].append(it["google_id"])
-            stem, ext = os.path.splitext(name)
-            if ext in (".heic", ".heif"):
-                self.by_heic_jpg[stem + ".jpg"].append(it["google_id"])
-
-
-def match_image(img, index, tz_name):
-    """Tie one destination item to a source (legacy Google) item.
-
-    Returns dict(google_id, method, confidence, capture_ts_utc, capture_local, candidates, notes).
-    Confidence: high = byte-identical (MD5); medium = unique filename with matching dimensions;
-    low = filename match with unknown/mismatched dims, or several candidates in the same month.
-    """
-    result = {"google_id": None, "method": "none", "confidence": "none", "capture_ts_utc": None,
-              "capture_local": None, "candidates": 0, "notes": None}
-
-    def finish(gid, method, confidence, candidates, notes=None):
-        ts = index.items[gid]["creation_ts"] if gid else None
-        result.update(google_id=gid, method=method, confidence=confidence, capture_ts_utc=ts,
-                      capture_local=to_local(ts, tz_name), candidates=candidates, notes=notes)
-        return result
-
-    if not img["is_video"] and img.get("md5") in index.by_md5:
-        gids = sorted(index.by_md5[img["md5"]], key=lambda g: index.items[g]["creation_ts"] or "")
-        return finish(gids[0], "md5" if len(gids) == 1 else "md5_multi", "high", len(gids))
-
-    # Candidates: same filename, plus (for NAME.JPG) Google items named NAME.HEIC/.HEIF, since
-    # the destination may rename converted HEICs. Both kinds are considered together: an identically named
-    # JPEG is often a different photo than the HEIC this file was converted from.
-    name = (img.get("filename") or "").lower()
-    cands = list(index.by_name.get(name, []))
-    if name.endswith(".jpg"):
-        cands += [g for g in index.by_heic_jpg.get(name, []) if g not in cands]
-    if not cands:
-        return result
-
-    def method_for(gid):
-        return "filename" if (index.items[gid]["filename"] or "").lower() == name else "heic_basename"
-
-    def dm(g):
-        return dims_match(img.get("width"), img.get("height"), index.items[g]["width"], index.items[g]["height"])
-
-    with_dims = [g for g in cands if dm(g)]
-    unknown_dims = [g for g in cands if dm(g) is None]
-    if with_dims:
-        pool, dims_note, conf = with_dims, "dims_match", "medium"
-    elif img["is_video"]:
-        # re-encoding may change a video's dimensions, so they can't rule a candidate out
-        pool, dims_note, conf = cands, ("dims_unknown" if unknown_dims else "dims_mismatch"), "low"
-    elif unknown_dims:
-        pool, dims_note, conf = unknown_dims, "dims_unknown", "low"
-    else:
-        result.update(method="dims_mismatch", candidates=len(cands),
-                      notes=f"{len(cands)} same-name candidates, none with matching dimensions")
-        return result
-
-    if len(pool) == 1:
-        return finish(pool[0], method_for(pool[0]), conf, len(cands), dims_note)
-
-    prefix = method_for(pool[0]) if len({method_for(g) for g in pool}) == 1 else "name"
-    months = {(to_local(index.items[g]["creation_ts"], tz_name) or "")[:7] for g in pool}
-    if len(months) == 1 and "" not in months:
-        first = min(pool, key=lambda g: index.items[g]["creation_ts"] or "")
-        return finish(first, prefix + "_same_month", "low", len(cands), f"{dims_note}; {len(pool)} candidates")
-
-    result.update(method=prefix + "_ambiguous", candidates=len(cands), notes=f"{dims_note}; {len(pool)} candidates")
-    return result
-
-
-# ------------------------------------------------------------------ grouping
 
 def group_duplicates(images, matches):
     """Group items by content hash (md5) and choose one keeper per group.
@@ -218,4 +131,72 @@ def plan_actions(images, matches, groups, cfg, existing=None):
                 r["target_name"] = prior["target_name"]
             else:
                 r["target_name"] = part_name(base, i // cap + 1)
+    return [{k: r[k] for k in ("item_id", "action", "target_name", "kind", "reason")} for r in rows]
+
+
+# ------------------------------------------------------------- organize (rules)
+
+def plan_organize(items, settings, existing=None):
+    """Targets for items already dated and grouped by organize.rules (pure).
+
+    items: [dict(item_id, filename, is_video, md5, uploaded, capture_local, method, group)]
+    settings: dict(photo, video, undated_photo, undated_video (templates; {yyyy} {mm} {group}),
+                   duplicates_album, duplicates ('park' | 'keep'), soft_cap)
+    existing: {item_id: dict(status, target_name)}; items whose move is done keep their album.
+    Byte-identical copies: with 'park', one keeper per MD5 (earliest upload) is organized and the others go to
+    the duplicates album; any copy's date can date the keeper. Albums over soft_cap continue as '- Part N'.
+    Returns [dict(item_id, action, target_name, kind, reason)].
+    """
+    existing = existing or {}
+    groups = {}
+    if settings["duplicates"] == "park":
+        for it in items:
+            if it.get("md5"):
+                groups.setdefault(it["md5"], []).append(it)
+    keeper_of, dated_by = {}, {}
+    for members in groups.values():
+        keeper = min(members, key=lambda it: (it.get("uploaded") or "", it["item_id"]))
+        dated = next((m for m in sorted(members, key=lambda m: m is not keeper) if m.get("capture_local")), None)
+        for m in members:
+            keeper_of[m["item_id"]] = keeper["item_id"]
+        if dated:
+            dated_by[keeper["item_id"]] = dated
+
+    def fill(template, capture_local, group):
+        yyyy, mm = (capture_local[:4], capture_local[5:7]) if capture_local else ("", "")
+        return " ".join(template.format(yyyy=yyyy, mm=mm, group=group or "").split())
+
+    rows = []
+    for it in items:
+        keeper = keeper_of.get(it["item_id"], it["item_id"])
+        if keeper != it["item_id"]:
+            rows.append({"item_id": it["item_id"], "action": "park_duplicate", "base": settings["duplicates_album"],
+                         "kind": "duplicates", "sort": (it["md5"], it["item_id"]),
+                         "reason": f"same file as {keeper}"})
+            continue
+        src = dated_by.get(it["item_id"], it)
+        when, method = src.get("capture_local"), src.get("method") or "none"
+        if src is not it:
+            method = f"{method} (from an identical copy)"
+        video = bool(it.get("is_video"))
+        if when:
+            base, kind = fill(settings["video" if video else "photo"], when, it.get("group")), "video" if video else "photo"
+        else:
+            base = fill(settings["undated_video" if video else "undated_photo"], None, it.get("group"))
+            kind = "video_undated" if video else "photo_undated"
+        group = f", group {it['group']}" if it.get("group") else ""
+        rows.append({"item_id": it["item_id"], "action": "move", "base": base, "kind": kind,
+                     "sort": (when or "", it["item_id"]), "reason": f"date via {method}{group}"})
+
+    by_base = defaultdict(list)
+    for r in rows:
+        by_base[r["base"]].append(r)
+    for base, members in by_base.items():
+        members.sort(key=lambda r: r["sort"])
+        for i, r in enumerate(members):
+            prior = existing.get(r["item_id"])
+            if prior and prior["status"] == "done":
+                r["target_name"] = prior["target_name"]
+            else:
+                r["target_name"] = part_name(base, i // settings["soft_cap"] + 1)
     return [{k: r[k] for k in ("item_id", "action", "target_name", "kind", "reason")} for r in rows]

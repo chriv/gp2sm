@@ -19,7 +19,9 @@ GP2SM_LIVE_SMUGMUG=smugmug_config.json .venv/bin/python -m pytest -q -m live   #
 .venv/bin/gp2sm --help                                   # all commands (gp2sm <command> --help for each)
 ```
 
-Consolidation pipeline (`gp2sm consolidate <step>`; each step can be rerun; state lives in `data/consolidation.db`):
+Organize (A4, any project): `gp2sm organize inventory → plan → report → apply [--yes] → verify`, plus `reconcile`, `undo <album>` and the gated `delete-*` steps. Rules in `[organize]` (sources by folder/album name, date chain, `[[organize.group]]`).
+
+Legacy consolidation, the first migration's (`gp2sm consolidate <step>`; each step can be rerun; state lives in `data/consolidation.db`):
 `inventory → import-legacy → match → plan → report → apply [--yes|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
 
 Takeout import (A3, any project; archives in the project's `takeout/` folder):
@@ -37,12 +39,13 @@ Legacy migration tools (the first real migration's state, `data/`): `takeout-mat
 - `organize/`:
   - `rules.py`: pure organize rules: the date chain (`camera` → `filename` patterns → `upload`, plus plugins), `[[organize.group]]` grouping (first match wins, else `unassigned`), album names with `{yyyy}`/`{mm}`/`{group}`, `skip_newer_than_days`
   - `planning.py`: pure matching, duplicate grouping and album planning
-  - `consolidate.py`: inventory → match → plan → apply → verify, reconcile/undo, gated deletions
+  - `cli.py`: `gp2sm organize`: inventory by names (`inventory_albums`), rules → `planning.plan_organize` → `write_plan`; apply/verify/undo/deletions shared with consolidate
+  - `consolidate.py`: inventory → match → plan → apply → verify, reconcile/undo, gated deletions (apply/verify/undo/deletes are reused by organize)
   - `place_clips.py`: unsorted clips → beside their still, by time + aspect
   - `date_undated.py`: evidence chain for undated items, server-confirmed moves
 - `state/`: the SQLite schema, plus `migrations.py` (ordered, versioned, idempotent steps recorded in `schema_history`; new DBs are created at LATEST; to add one, append a step, update SCHEMA, and test an upgrade from the previous version). `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`. Specific TODOs for a neutral, versioned schema are in `state/__init__.py`.
 - `media/`: `probe.py` (`probe(data, ext)`: dimensions, duration, own capture time as ISO with offset when recorded), `still.py` (EXIF via Pillow), `mp4.py` (MP4 header parsing: duration, dimensions, aspect, clip capture time: Apple `creationdate` else `mvhd`) and `convert.py` (cross-platform HEIC/any→JPEG via Pillow + pillow-heif; original EXIF bytes passed through untouched, Orientation reset to 1 since libheif applies the rotation; `render_small` for hashing; optional `sips` backend on macOS).
-- `contrib/legacy_bridge/`: only for libraries first moved with the old v1/v2 tool: `takeout_match` (link a Takeout to the legacy transfer DB), `content_match` (dHash vs legacy uploads, bursts), `takeout_upload` (that migration's upload plan). `consolidate`'s legacy import moves here in A4.
+- `contrib/legacy_bridge/`: only for libraries first moved with the old v1/v2 tool: `takeout_match` (link a Takeout to the legacy transfer DB), `content_match` (dHash vs legacy uploads, bursts), `takeout_upload` (that migration's upload plan), `legacy_dates` (`import-legacy`, `match`, and the `legacy` date source for organize).
 - `cli/`: the `gp2sm <command>` dispatcher, `status`, `services`, `auth`, and `run.py`, which every tool uses: `add_yes` (anything that changes the destination is a dry run without `--yes`), `install_sigint`/`Stop` (first Ctrl-C finishes the work in flight; second aborts), `run_command` (records the run as ok/stopped/interrupted/failed, releases the project lock, exit 130 on abort) and `Progress`.
 
 ## Modularity rule (until Stage A1 adds the service layer)

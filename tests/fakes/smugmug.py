@@ -81,7 +81,9 @@ class FakeSmugMug:
             yield {"item_id": item_id, "serial": 0, "item_ref": self.item_ref(album_id, item_id),
                    "name": it.get("name"), "md5": it.get("md5"), "is_video": it.get("is_video", False),
                    "size": it.get("size"), "width": it.get("width"), "height": it.get("height"),
-                   "duration_s": it.get("duration_s"), "uploaded": None, "capture_time": None,
+                   "duration_s": it.get("duration_s"), "uploaded": it.get("uploaded"),
+                   "capture_time": it.get("capture_time") if with_metadata else None,
+                   "make": it.get("make") if with_metadata else None, "model": it.get("model") if with_metadata else None,
                    "format": None, "raw": {}, "raw_metadata": None}
 
     def album_contains(self, album_id, item_id, serial=0):

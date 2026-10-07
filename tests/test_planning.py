@@ -1,3 +1,4 @@
+from gp2sm.contrib.legacy_bridge import legacy_dates
 from gp2sm.organize import planning
 
 CFG = {
@@ -20,7 +21,7 @@ def img(key, filename, md5=None, is_video=0, w=100, h=50, uploaded="2025-01-01T0
 
 
 def index(items, md5s=()):
-    return planning.LegacyIndex(items, [{"google_id": g, "md5": m} for g, m in md5s])
+    return legacy_dates.LegacyIndex(items, [{"google_id": g, "md5": m} for g, m in md5s])
 
 
 def test_parse_duration():
@@ -36,64 +37,64 @@ def test_to_local_crosses_month_boundary():
 
 def test_md5_match_is_high_confidence():
     idx = index([legacy("g1", "IMG_1.JPG", "2023-05-01T12:00:00Z")], [("g1", "abc")])
-    m = planning.match_image(img("k1", "whatever.jpg", md5="abc"), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "whatever.jpg", md5="abc"), idx, "UTC")
     assert (m["google_id"], m["method"], m["confidence"]) == ("g1", "md5", "high")
     assert m["capture_local"] == "2023-05-01T12:00:00"
 
 
 def test_md5_not_used_for_videos():
     idx = index([legacy("g1", "clip.mp4", "2023-05-01T12:00:00Z")], [("g1", "abc")])
-    m = planning.match_image(img("k1", "clip.mp4", md5="abc", is_video=1), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "clip.mp4", md5="abc", is_video=1), idx, "UTC")
     assert m["method"] == "filename"
 
 
 def test_unique_filename_with_dims_is_medium():
     idx = index([legacy("g1", "IMG_1.PNG", "2023-05-01T12:00:00Z")])
-    m = planning.match_image(img("k1", "img_1.png"), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "img_1.png"), idx, "UTC")
     assert (m["method"], m["confidence"], m["notes"]) == ("filename", "medium", "dims_match")
 
 
 def test_photo_dims_mismatch_is_not_a_match():
     idx = index([legacy("g1", "IMG_1.PNG", "2023-05-01T12:00:00Z", w=999, h=999)])
-    m = planning.match_image(img("k1", "IMG_1.PNG"), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "IMG_1.PNG"), idx, "UTC")
     assert (m["method"], m["google_id"], m["capture_local"]) == ("dims_mismatch", None, None)
 
 
 def test_video_dims_mismatch_still_matches_low():
     idx = index([legacy("g1", "clip.mp4", "2023-05-01T12:00:00Z", w=3840, h=2160)])
-    m = planning.match_image(img("k1", "clip.mp4", is_video=1, w=1920, h=1080), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "clip.mp4", is_video=1, w=1920, h=1080), idx, "UTC")
     assert (m["google_id"], m["confidence"], m["notes"]) == ("g1", "low", "dims_mismatch")
 
 
 def test_same_named_jpeg_loses_to_heic_with_matching_dims():
     idx = index([legacy("g1", "IMG_9.JPG", "2021-01-01T00:00:00Z", w=410, h=230),
                  legacy("g2", "IMG_9.HEIC", "2023-03-03T00:00:00Z", w=1576, h=2100)])
-    m = planning.match_image(img("k1", "IMG_9.JPG", w=1576, h=2100), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "IMG_9.JPG", w=1576, h=2100), idx, "UTC")
     assert (m["google_id"], m["method"], m["confidence"]) == ("g2", "heic_basename", "medium")
 
 
 def test_heic_converted_to_jpg_matches_by_stem():
     idx = index([legacy("g1", "IMG_7.HEIC", "2022-01-02T00:00:00Z")])
-    m = planning.match_image(img("k1", "IMG_7.JPG"), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "IMG_7.JPG"), idx, "UTC")
     assert (m["google_id"], m["method"]) == ("g1", "heic_basename")
 
 
 def test_dims_disambiguate_reused_filename():
     idx = index([legacy("g1", "IMG_7.HEIC", "2019-01-01T00:00:00Z", w=4032, h=3024),
                  legacy("g2", "IMG_7.HEIC", "2023-01-01T00:00:00Z", w=100, h=50)])
-    m = planning.match_image(img("k1", "IMG_7.JPG", w=50, h=100), idx, "UTC")  # rotated dims count
+    m = legacy_dates.match_image(img("k1", "IMG_7.JPG", w=50, h=100), idx, "UTC")  # rotated dims count
     assert m["google_id"] == "g2"
 
 
 def test_ambiguous_same_month_still_dated():
     idx = index([legacy("g1", "a.png", "2023-05-02T00:00:00Z"), legacy("g2", "a.png", "2023-05-20T00:00:00Z")])
-    m = planning.match_image(img("k1", "a.png"), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "a.png"), idx, "UTC")
     assert m["method"] == "filename_same_month" and m["capture_local"].startswith("2023-05")
 
 
 def test_ambiguous_different_months_is_undated():
     idx = index([legacy("g1", "a.png", "2019-05-02T00:00:00Z"), legacy("g2", "a.png", "2023-05-20T00:00:00Z")])
-    m = planning.match_image(img("k1", "a.png"), idx, "UTC")
+    m = legacy_dates.match_image(img("k1", "a.png"), idx, "UTC")
     assert m["method"] == "filename_ambiguous" and m["capture_local"] is None
 
 

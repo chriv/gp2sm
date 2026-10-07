@@ -24,11 +24,11 @@ import fnmatch
 import json
 import logging
 import os
-import sqlite3
 import sys
 import uuid
 
 from gp2sm.cli import run
+from gp2sm.contrib.legacy_bridge.legacy_dates import cmd_import_legacy, cmd_match
 from gp2sm.organize import planning
 from gp2sm.project import context
 from gp2sm.smugmug.client import NotFound, SmugMugError
@@ -95,19 +95,26 @@ def cmd_inventory(st, cfg, client, args):
               if any(p in (a["path"] or "").lower() for p in patterns)
               and not (a["path"] or "").lower().startswith(target_prefix)]
     log.info("%d source albums match %s", len(albums), cfg["source_album_patterns"])
+    return inventory_albums(st, client, albums, args.workers)
+
+
+def inventory_albums(st, client, albums, workers):
+    """Record the albums and every item in them (with metadata) in source_albums/images."""
     for a in albums:
-        st.db.execute("INSERT INTO source_albums(album_key, album_uri, name, url_path, image_count) VALUES(?,?,?,?,?) "
-                      "ON CONFLICT(album_key) DO UPDATE SET name=excluded.name, url_path=excluded.url_path, "
-                      "image_count=excluded.image_count",
-                      (a["album_id"], a["ref"], a["name"], a["path"], a["item_count"]))
+        st.db.execute("INSERT INTO source_albums(album_key, album_uri, name, url_path, image_count, folder) "
+                      "VALUES(?,?,?,?,?,?) ON CONFLICT(album_key) DO UPDATE SET name=excluded.name, "
+                      "url_path=excluded.url_path, image_count=excluded.image_count, "
+                      "folder=COALESCE(excluded.folder, source_albums.folder)",
+                      (a["album_id"], a["ref"], a["name"], a["path"], a["item_count"], a.get("folder")))
     st.db.commit()
 
     def fetch(album):
         return album, list(client.list_album_items(album["album_id"], with_metadata=True))
 
     total = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="inv") as pool:
-        for album, items in pool.map(fetch, [a for a in albums if a["item_count"]]):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="inv") as pool:
+        # albums listed by folder don't report a count up front, so None means "list it"
+        for album, items in pool.map(fetch, [a for a in albums if a["item_count"] is None or a["item_count"]]):
             key = album["album_id"]
             ts = now()
             with st.db:
@@ -115,91 +122,25 @@ def cmd_inventory(st, cfg, client, args):
                     st.db.execute(
                         "INSERT INTO images(image_key, serial, src_album_key, src_album_image_uri, current_album_key,"
                         " filename, format, is_video, archived_md5, archived_size, width, height, duration_s,"
-                        " uploaded, capture_dt_smug, raw_image, raw_metadata, first_seen, last_seen)"
-                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                        " uploaded, capture_dt_smug, raw_image, raw_metadata, first_seen, last_seen, make, model)"
+                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                         " ON CONFLICT(image_key) DO UPDATE SET current_album_key=excluded.current_album_key,"
                         " archived_md5=excluded.archived_md5, raw_image=excluded.raw_image,"
-                        " raw_metadata=excluded.raw_metadata, last_seen=excluded.last_seen",
+                        " raw_metadata=excluded.raw_metadata, last_seen=excluded.last_seen,"
+                        " capture_dt_smug=excluded.capture_dt_smug, make=excluded.make, model=excluded.model",
                         (it["item_id"], it["serial"], key, it["item_ref"], key, it["name"], it["format"],
                          int(it["is_video"]), it["md5"], it["size"], it["width"], it["height"], it["duration_s"],
                          it["uploaded"], it["capture_time"], json.dumps(it["raw"]),
-                         json.dumps(it["raw_metadata"]) if it["raw_metadata"] else None, ts, ts))
+                         json.dumps(it["raw_metadata"]) if it.get("raw_metadata") else None, ts, ts,
+                         it.get("make"), it.get("model")))
                 st.db.execute("UPDATE source_albums SET rows_stored=?, inventoried_at=? WHERE album_key=?",
                               (len(items), ts, key))
                 st.event("inventory_album", album_key=key, commit=False, rows=len(items),
                          item_count=album["item_count"], path=album["path"])
-            flag = "" if len(items) == album["item_count"] else f" (album reports {album['item_count']})"
+            flag = "" if album["item_count"] in (None, len(items)) else f" (album reports {album['item_count']})"
             log.info("inventoried %s %s: %d%s", key, album["path"], len(items), flag)
             total += len(items)
     return {"albums": len(albums), "images": total}
-
-
-# ------------------------------------------------------------ import-legacy
-
-def cmd_import_legacy(st, cfg, client, args):
-    stats = {}
-    for path in cfg["legacy_dbs"]:
-        src = sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True)
-        src.row_factory = sqlite3.Row
-        tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "media_items" not in tables:
-            log.warning("%s has no media_items table; skipped", path)
-            continue
-        n = n_md5 = 0
-        with st.db:
-            for r in src.execute("SELECT * FROM media_items"):
-                md = json.loads(r["media_metadata_json"] or "{}")
-                st.db.execute(
-                    "INSERT INTO legacy_items(google_id, filename, mime_type, creation_ts, width, height, product_url,"
-                    " legacy_status, source_db) VALUES(?,?,?,?,?,?,?,?,?)"
-                    " ON CONFLICT(google_id) DO UPDATE SET"
-                    " creation_ts=COALESCE(legacy_items.creation_ts, excluded.creation_ts),"
-                    " width=COALESCE(legacy_items.width, excluded.width),"
-                    " height=COALESCE(legacy_items.height, excluded.height)",
-                    (r["google_id"], r["filename"], r["mime_type"],
-                     r["creation_timestamp"] or md.get("creationTime"),
-                     int(md["width"]) if md.get("width") else None, int(md["height"]) if md.get("height") else None,
-                     r["product_url"], r["status"], os.path.basename(path)))
-                n += 1
-                if r["md5_hash"]:
-                    st.db.execute("INSERT OR IGNORE INTO legacy_md5 VALUES(?,?,?)",
-                                  (r["google_id"], r["md5_hash"], os.path.basename(path)))
-                    n_md5 += 1
-            st.event("import_legacy", commit=False, path=os.path.basename(path), items=n, md5=n_md5)
-        stats[os.path.basename(path)] = {"items": n, "md5": n_md5}
-        log.info("imported %s: %d items, %d md5", path, n, n_md5)
-    stats["distinct_items"] = st.one("SELECT COUNT(*) FROM legacy_items")
-    stats["distinct_md5"] = st.one("SELECT COUNT(DISTINCT md5) FROM legacy_md5")
-    return stats
-
-
-# -------------------------------------------------------------------- match
-
-def load_images(st):
-    return [dict(r) for r in st.q("SELECT image_key AS item_id, filename, is_video, archived_md5 AS md5, width, height, "
-                                  "uploaded FROM images")]
-
-
-def cmd_match(st, cfg, client, args):
-    index = planning.LegacyIndex([dict(r) for r in st.q("SELECT * FROM legacy_items")],
-                                 [dict(r) for r in st.q("SELECT google_id, md5 FROM legacy_md5")])
-    images = load_images(st)
-    matches = {img["item_id"]: planning.match_image(img, index, cfg["timezone"]) for img in images}
-    groups = planning.group_duplicates(images, matches)
-    with st.db:
-        st.db.execute("DELETE FROM matches")
-        st.db.executemany("INSERT INTO matches VALUES(?,?,?,?,?,?,?,?)",
-                          [(k, m["google_id"], m["method"], m["confidence"], m["capture_ts_utc"],
-                            m["capture_local"], m["candidates"], m["notes"]) for k, m in matches.items()])
-        st.db.execute("DELETE FROM dup_groups")
-        st.db.executemany("INSERT INTO dup_groups VALUES(?,?,?,?,?)",
-                          [(k, g["group_key"], g["group_size"], g["keeper_item_id"], g["is_keeper"])
-                           for k, g in groups.items()])
-    summary = {r[0]: r[1] for r in st.q("SELECT method, COUNT(*) FROM matches GROUP BY method")}
-    summary["keepers"] = st.one("SELECT COUNT(*) FROM dup_groups WHERE is_keeper=1")
-    summary["duplicates"] = st.one("SELECT COUNT(*) FROM dup_groups WHERE is_keeper=0")
-    st.event("match", **summary)
-    return summary
 
 
 # --------------------------------------------------------------------- plan
@@ -214,6 +155,11 @@ def cmd_plan(st, cfg, client, args):
         raise SystemExit("run `match` first")
     existing = {r["item_id"]: dict(r) for r in st.q("SELECT image_key AS item_id, status, target_name FROM plan")}
     rows = planning.plan_actions(images, matches, groups, cfg, existing)
+    return write_plan(st, rows, existing)
+
+
+def write_plan(st, rows, existing):
+    """Store plan rows. Work that has started (done/in_progress/unknown) is never re-planned."""
     ts = now()
     changed = 0
     with st.db:
