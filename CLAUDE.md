@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - The legacy v1/v2 script was removed. It's preserved at the git tag `legacy-v2`, and none of its code is trusted (core parts never worked). All work is in the `gp2sm/` package.
 - `docs/ROADMAP.md` is the staged plan (do one stage at a time). `docs/smugmug-api.md` records SmugMug behavior **confirmed by probes**. Check it before relying on any SmugMug endpoint, and add anything newly confirmed.
-- The repo is meant to become public. Keep personal names, account details and real album names out of tracked files. They belong in gitignored config (`data/`, `*.json`).
+- The repo is meant to become public. Keep personal names, account details and real album names out of tracked files. They belong in gitignored config (`data/`, `*.json`). The one intended exception is the owner's name as copyright holder in `LICENSE` (MIT).
 
 ## Commands
 
