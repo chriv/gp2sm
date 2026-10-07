@@ -8,7 +8,7 @@
 
 Move a photo library into **SmugMug** and keep it organized. Every step is planned before it runs, recorded, checked against SmugMug afterwards, and undoable where SmugMug allows it.
 
-> **Status: beta (3.0.0b1).** Used on a real 35,000-item migration (Google Photos → SmugMug, Live Photos included). Expect rough edges; please report them.
+> **Status: beta (3.0.0b2).** Used on a real 35,000-item migration (Google Photos → SmugMug, Live Photos included). Expect rough edges; please report them.
 
 ## What it does
 

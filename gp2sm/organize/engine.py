@@ -380,7 +380,8 @@ def cmd_verify(st, cfg, client, args):
 
 def cmd_delete_duplicates(st, cfg, client, args):
     """Delete the duplicates album(s) after proving, against the server, that each holds exactly the planned
-    duplicate copies and that every copy's kept item (plan.keeper_item_id) is in its target album right now.
+    duplicate copies, that every copy's kept item (plan.keeper_item_id) is in its target album right now, and that
+    no copy is also in another album (deleting it would remove it there too).
     Permanent: requires --yes."""
     targets = st.q("SELECT name, album_id FROM targets WHERE kind='duplicates' AND album_id IS NOT NULL")
     out = {"deleted_albums": 0, "deleted_items": 0}
@@ -410,6 +411,12 @@ def cmd_delete_duplicates(st, cfg, client, args):
         if unsafe:
             raise SystemExit(f"{t['name']}: {len(unsafe)} copies lack a kept copy that is in place on the server; "
                              "not deleting")
+        # Deleting an original also deletes every collected copy of it, so a copy that is in another album too
+        # would vanish from there.
+        elsewhere = [iid for iid in sorted(expected) if set(client.item_album_ids(iid)) - {t["album_id"]}]
+        if elsewhere:
+            raise SystemExit(f"{t['name']}: {len(elsewhere)} copies are also in another album (deleting them would "
+                             f"remove them there too): {', '.join(elsewhere[:5])}; not deleting")
         log.info("%s: %d copies verified (server == plan, every kept copy in place)", t["name"], len(server))
         if not args.yes:
             log.info("dry run: pass --yes to delete %s", t["name"])

@@ -178,3 +178,14 @@ def test_delete_duplicates_needs_every_kept_copy_in_place(project, capsys):
     with pytest.raises(SystemExit, match="lack a kept copy"):
         run(root, "delete-duplicates", "--yes")
     assert any("P3" in items for items in fake.albums.values())                # nothing was deleted
+
+
+def test_delete_duplicates_refuses_a_copy_that_is_also_in_another_album(project):
+    root, fake, src = project
+    for step in ("inventory", "plan"):
+        run(root, step)
+    run(root, "apply", "--yes")
+    fake.albums.setdefault("HANDMADE", set()).add("P3")                        # the copy was collected elsewhere
+    with pytest.raises(SystemExit, match="also in another album"):
+        run(root, "delete-duplicates", "--yes")
+    assert "P3" in fake.albums["HANDMADE"]

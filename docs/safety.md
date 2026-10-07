@@ -33,6 +33,6 @@ Undo leaves alone anything that was changed again after gp2sm changed it, and sa
 ## What can't be undone
 
 Deletions are permanent, so they're separate commands, dry runs by default, and checked against SmugMug first:
-- `gp2sm organize delete-duplicates --yes` deletes the album of parked identical copies, only after confirming that it holds exactly the planned copies and that the kept copy of each is in place.
+- `gp2sm organize delete-duplicates --yes` deletes the album of parked identical copies, only after confirming that it holds exactly the planned copies and that the kept copy of each is in place, and that no copy is also in another album (on SmugMug, deleting a photo removes it from every album it was collected into).
 - `gp2sm organize delete-empty-sources --yes` deletes source albums SmugMug reports as empty. It refuses to run when anything was collected, because deleting an original on SmugMug deletes every collected copy of it too.
 - `gp2sm organize delete-empty-targets --yes` deletes empty albums gp2sm itself created that nothing is planned for.

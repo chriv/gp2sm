@@ -2,6 +2,11 @@
 
 All notable changes to gp2sm. Versions follow [semantic versioning](https://semver.org): after 3.0, new features come in minor releases and fixes in patch releases.
 
+## 3.0.0b2 (beta)
+
+- **Fixed:** listing a SmugMug album lost each item's metadata after the first page, so most items looked undated to organize (#1). SmugMug's next-page link drops `_expand`, so the original parameters are now resent on every page.
+- **Safer:** `organize delete-duplicates` refuses when a copy is also in another album, because deleting it would remove it there too (#2).
+
 ## 3.0.0b1 (beta)
 
 A rewrite of the earlier v1/v2 script (kept at the git tag `legacy-v2`) as an installable tool, built and tested on a real 35,000-item migration.
