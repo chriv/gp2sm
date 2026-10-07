@@ -23,7 +23,8 @@ def project(tmp_path, monkeypatch):
     ids = {n: fake.ensure_album(fam, n)[0] for n in
            ["Beach Trip 06-2019", "Christmas 2015", "Lake weekend", "Phone Auto Upload", "2019-06 Beach Trip",
             "Party 03-04-2021", "Stuck 05-2018", "Spread out", "Picnic 07-2020", "2020-07 Picnic"]}
-    for i, d in enumerate(["2021-07-02T10:00:00", "2021-07-04T09:00:00", "2021-07-05T18:00:00"]):
+    for i, d in enumerate(["2021-07-02T10:00:00", "2021-07-04T09:00:00", "2021-07-05T18:00:00",
+                           "2021-07-03T08:00:00", "2021-07-03T09:00:00"]):
         fake.items[f"L{i}"] = {"name": f"l{i}.jpg", "capture_time": d}
         fake.albums[ids["Lake weekend"]].add(f"L{i}")
     for i, d in enumerate(["2015-01-01T00:00:00", "2019-06-01T00:00:00"]):

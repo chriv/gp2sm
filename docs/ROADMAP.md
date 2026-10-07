@@ -204,7 +204,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 - **Deliverables:** an "album settings" section in `docs/smugmug-api.md` listing each property's allowed values, account-level requirements (e.g. Pro-only features) and quirks.
 - **Exit:** every property the later stages use is confirmed.
 
-### Stage A6: Naming conventions
+### Stage A6: Naming conventions. ✅ Done (2026-10-07; owner to review the sample report)
 
 - **Goal:** consistent, date-sortable album names (default template `{yyyy}-{mm} {subject}`, configurable).
 - **Deliverables:**
@@ -214,6 +214,16 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - **Report:** a proposed-rename table (old → new, date source, confidence). Only proposals at or above the confidence threshold are auto-applied; the rest are listed for review. `UrlName` follows the new name only if configured, because it changes album links.
 - **Tests:** a large parser table (ambiguous `03-04`, two-digit years, names that contain numbers but aren't dates), image-date fallback, collision handling. All with synthetic names.
 - **Exit:** a dry-run report on a real account looks right. A small batch rename passes verify and can be undone.
+- **Sub-stages:**
+  - A6.1 the name parser and rename proposals, plus `[naming]`
+  - A6.2 `gp2sm albums` (inventory, plan, report, approve, apply, verify, undo)
+  - A6.3 a real dry run on a 40-album random sample and the two Android upload albums
+- **Fixes from A6.3:**
+  - the day is kept by default
+  - dating an album from its photos needs at least 5 dated photos
+  - pages are sampled across the whole album (one per slice)
+  - albums whose photos were uploaded over a long time aren't dated
+  - an apply/undo round trip on sandbox albums left links unchanged
 
 ### Stage A7: Settings policy (audit and bulk fix)
 

@@ -45,8 +45,8 @@ def test_parse_table(name, iso, precision, subject, confidence):
 def test_propose_formats_and_confidence():
     prop = naming.propose("Beach Trip 06-2019", T, today=TODAY)
     assert (prop.new, prop.auto, prop.source) == ("2019-06 Beach Trip", True, "name")
-    assert naming.propose("2004-03-17 New puppy", T, today=TODAY).new == "2004-03 New puppy"
-    assert naming.propose("2004-03-17 New puppy", T, keep_day=True, today=TODAY).new is None   # already conforms
+    assert naming.propose("2004-03-17 New puppy", T, today=TODAY).new is None        # keeps the day: already conforms
+    assert naming.propose("2004-03-17 New puppy", T, keep_day=False, today=TODAY).new == "2004-03 New puppy"
     year = naming.propose("Christmas 2015", T, today=TODAY)
     assert (year.new, year.auto) == ("2015 Christmas", False)                 # medium: listed for review
     assert naming.propose("Christmas 2015", T, min_confidence="medium", today=TODAY).auto is True
@@ -57,9 +57,29 @@ def test_propose_formats_and_confidence():
 
 def test_undated_names_use_tightly_clustered_photos_only():
     close = ["2021-07-02T10:00:00", "2021-07-04T09:00:00", "2021-07-05T18:00:00"]
+    few = naming.propose("Lake weekend", T, photo_dates=close, today=TODAY)
+    assert few.new is None and "fewer than 5 dated photos" in few.note
+    close = close + ["2021-07-03T08:00:00", "2021-07-03T09:00:00"]
     prop = naming.propose("Lake weekend", T, photo_dates=close, today=TODAY)
     assert (prop.new, prop.source, prop.confidence, prop.auto) == ("2021-07 Lake weekend", "photos", "medium", False)
     wide = ["2019-01-01", "2020-06-01", "2023-03-03"]
-    prop = naming.propose("Kid's Auto Upload", T, photo_dates=wide, today=TODAY)
+    prop = naming.propose("Kid's Auto Upload", T, photo_dates=wide, min_photos=3, today=TODAY)
     assert prop.new is None and "span 1522 days" in prop.note
     assert naming.propose("Lake weekend", T, today=TODAY).note == "no date in the name"
+
+
+def test_albums_uploaded_over_a_long_time_are_not_dated():
+    close = ["2021-05-15", "2021-05-20", "2021-06-01", "2021-06-05", "2021-06-12"]
+    prop = naming.propose("Phone Auto Upload", T, photo_dates=close, upload_dates=["2019-01-01", "2026-08-01"],
+                          today=TODAY)
+    assert prop.new is None and "uploaded over 2769 days" in prop.note
+    ok = naming.propose("Lake weekend", T, photo_dates=close, upload_dates=["2021-06-13", "2021-06-14"], today=TODAY)
+    assert ok.new == "2021-06 Lake weekend"
+
+
+def test_page_starts_cover_the_whole_album():
+    from gp2sm.albums.cli import page_starts
+    starts = page_starts(5001, 60, seed="abc")
+    assert len(starts) == 3 and starts == page_starts(5001, 60, seed="abc")
+    assert starts[0] <= 1680 < starts[1] <= 3340 < starts[2] <= 5001
+    assert page_starts(15, 60, seed="x") == [1]

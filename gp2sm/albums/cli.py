@@ -36,19 +36,31 @@ def excluded(album, patterns):
                for p in patterns)
 
 
-def sample_dates(client, album_id, item_count, wanted, seed):
-    """Capture dates from a few pages at random offsets (repeatable for the same album)."""
-    if not item_count:
-        return []
+def page_starts(item_count, wanted, seed):
+    """1-based page starts spread over the whole album: one random page from each of k equal slices
+    (purely random pages can bunch together and miss most of a large album). Repeatable per seed."""
+    total_pages = -(-item_count // PAGE)
+    k = max(1, min(-(-wanted // PAGE), total_pages))
     rng = random.Random(seed)
-    pages = max(1, min(-(-wanted // PAGE), -(-item_count // PAGE)))
-    starts = sorted(rng.sample(range(1, item_count + 1, PAGE), pages)) if item_count > PAGE else [1]
-    dates = []
-    for start in starts:
+    starts = []
+    for i in range(k):
+        lo, hi = i * total_pages // k, max(i * total_pages // k, (i + 1) * total_pages // k - 1)
+        starts.append(rng.randint(lo, hi) * PAGE + 1)
+    return starts
+
+
+def sample_dates(client, album_id, item_count, wanted, seed):
+    """{'captured': [...], 'uploaded': [...]} from pages spread over the album (repeatable for the same album)."""
+    out = {"captured": [], "uploaded": []}
+    if not item_count:
+        return out
+    for start in page_starts(item_count, wanted, seed):
         for it in client.album_items_page(album_id, start, PAGE, with_metadata=True):
             if it.get("capture_time"):
-                dates.append(it["capture_time"])
-    return dates
+                out["captured"].append(it["capture_time"])
+            if it.get("uploaded"):
+                out["uploaded"].append(it["uploaded"])
+    return out
 
 
 def cmd_inventory(st, cfg, client, args):
@@ -64,10 +76,11 @@ def cmd_inventory(st, cfg, client, args):
         st.db.execute("DELETE FROM albums_seen")
     for a in albums:
         info = client.album_info(a["album_id"])
-        dates = []
+        dates = None
         if nm["date_from_photos"] and naming.parse(info["name"]).precision == "none":
             dates = sample_dates(client, a["album_id"], info["item_count"], nm["photo_sample"], a["album_id"])
             sampled += 1
+        dates = dates or {"captured": [], "uploaded": []}
         with st.db:
             st.db.execute("INSERT OR REPLACE INTO albums_seen VALUES(?,?,?,?,?,?)",
                           (a["album_id"], info["name"], a.get("folder"), info["item_count"], json.dumps(dates), now()))
@@ -91,8 +104,10 @@ def cmd_plan(st, cfg, client, args):
                       "AND new_value=?", r["album_id"], r["name"]):
                 counts["already renamed by gp2sm"] = counts.get("already renamed by gp2sm", 0) + 1
                 continue
+            sample = json.loads(r["photo_dates"] or "{}") or {}
             prop = naming.propose(r["name"], templates, nm["keep_day"], nm["min_confidence"],
-                                  json.loads(r["photo_dates"] or "[]"), nm["max_spread_days"])
+                                  sample.get("captured") or [], nm["max_spread_days"],
+                                  min_photos=nm["min_photos"], upload_dates=sample.get("uploaded"))
             if not prop.new:
                 counts[prop.note.split(";")[0]] = counts.get(prop.note.split(";")[0], 0) + 1
                 continue

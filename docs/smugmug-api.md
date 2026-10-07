@@ -75,6 +75,8 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - Changing **`UrlName`** moves the album's URL, and the **old path stops resolving** (`!urlpathlookup` on it returns no album; nothing redirects). Renaming `UrlName` breaks existing links, so only do it when the owner asks.
 - A `UrlName` that a sibling already uses is refused with **HTTP 409**. With `AutoRename: true` the same PATCH returns 200 and changes nothing (AutoRename doesn't help on PATCH).
 - Two albums in one folder may share the same display `Name`.
+- A `UrlName` must start with a letter: an album created as "2019-06-14 Beach Trip" gets `A-2019-06-14-Beach-Trip`. Renaming its display name later doesn't change that.
+- Paging: `!images?start=N&count=M` (1-based `start`) fetches any page directly, which is how large albums are sampled.
 
 **Folder settings that round-trip:** `Privacy` (Public, Unlisted, Private), `SortMethod` (SortIndex, Name, DateAdded, DateModified), `SortDirection`, `Description`, `ShowCoverImage`.
 

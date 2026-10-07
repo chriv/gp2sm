@@ -86,10 +86,11 @@ SCHEMA = {
         "month": ("name_template", "{yyyy}-{mm} {subject}", "new name when the date has a month"),
         "year": ("name_template", "{yyyy} {subject}", "new name when only the year is known"),
         "day": ("name_template", "{yyyy}-{mm}-{dd} {subject}", "new name when keep_day is on and the day is known"),
-        "keep_day": ((False, True), False, "keep the day when the old name has one"),
+        "keep_day": ((True, False), True, "keep the day when the old name has one (false drops it: less information)"),
         "min_confidence": (("high", "medium"), "high", "apply renames this sure without review; the rest are listed"),
         "date_from_photos": ((True, False), True, "date albums with no date in their name from a sample of photos"),
         "photo_sample": (int, 60, "photos sampled per undated album (a few random pages)"),
+        "min_photos": (int, 5, "an undated album needs at least this many dated photos to be dated from them"),
         "max_spread_days": (int, 45, "photos spread over more days than this don't date an album"),
     },
     "run": {

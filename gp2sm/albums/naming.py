@@ -111,11 +111,12 @@ def parse(name, today=None):
     return Parsed(subject=clean_subject(name or ""))
 
 
-def date_from_photos(capture_dates, max_spread_days=45):
+def date_from_photos(capture_dates, max_spread_days=45, min_photos=5):
     """(Parsed or None, spread_days) from sampled photo dates ('YYYY-MM-DD...' strings): the median date at month
-    precision when the photos fall within max_spread_days of each other, else None (a wide album isn't one date)."""
+    precision when at least min_photos photos fall within max_spread_days of each other, else None (a wide album
+    isn't one date, and a handful of photos isn't evidence)."""
     days = sorted(datetime.date.fromisoformat(d[:10]) for d in capture_dates if d and len(d) >= 10)
-    if not days:
+    if len(days) < min_photos:
         return None, None
     spread = (days[-1] - days[0]).days
     if spread > max_spread_days:
@@ -150,16 +151,27 @@ class Proposal:
     note: str = ""
 
 
-def propose(name, templates, keep_day=False, min_confidence="high", photo_dates=None, max_spread_days=45,
-            today=None):
-    """A rename proposal for one album name. photo_dates (optional) dates an album whose name has no date."""
+def spread_days(dates):
+    days = sorted(datetime.date.fromisoformat(d[:10]) for d in dates or () if d and len(d) >= 10)
+    return (days[-1] - days[0]).days if days else None
+
+
+def propose(name, templates, keep_day=True, min_confidence="high", photo_dates=None, max_spread_days=45,
+            today=None, min_photos=5, upload_dates=None):
+    """A rename proposal for one album name. photo_dates (optional) dates an album whose name has no date, unless
+    upload_dates show the album kept growing over a long time (an uploader's album, not one event)."""
     p = parse(name, today)
     source = "name"
     if p.precision == "none":
+        uploads = spread_days(upload_dates)
+        if photo_dates and uploads is not None and uploads > max_spread_days:
+            return Proposal(name, None, None, "none", "none", False,
+                            f"no date in the name; its photos were uploaded over {uploads} days")
         if photo_dates:
-            p2, spread = date_from_photos(photo_dates, max_spread_days)
+            p2, spread = date_from_photos(photo_dates, max_spread_days, min_photos)
             if p2 is None:
-                note = "no date in the name" + (f"; its photos span {spread} days" if spread is not None else "")
+                note = "no date in the name" + (f"; its photos span {spread} days" if spread is not None
+                                                else f"; fewer than {min_photos} dated photos")
                 return Proposal(name, None, None, "none", "none", False, note)
             p2.subject = p.subject
             p, source = p2, "photos"
