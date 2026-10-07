@@ -21,7 +21,7 @@ folder = "Family Photos"
 
 # --- Album names and limits
 [albums]
-# dated album name; {yyyy} and {mm} come from the capture date
+# dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]]
 photo = "Photos {yyyy}-{mm}"
 # dated album for videos (same as photo keeps them together)
 video = "Photos {yyyy}-{mm}"
@@ -69,6 +69,23 @@ different_min = 19
 pair_window = 60
 # a clip pairs only with a still of the same shape, within this percent
 aspect_tolerance_pct = 2
+
+# --- organize
+[organize]
+# folders or albums (by name) whose items are organized, e.g. ["Uploads"]
+sources = []
+# where capture dates come from, in order: camera (the file's own date), filename, upload (last resort), legacy (old transfer DBs)
+dates = ["camera", "filename"]
+# move items into the dated albums, or collect them (copies stay in the source; use for albums an uploader app still writes to)
+mode = "move"
+# leave items uploaded within this many days alone (0 = none)
+skip_newer_than_days = 0
+# byte-identical extra copies: park in the duplicates album, or keep where they are
+duplicates = "park"
+# group name for items no [[organize.group]] rule matches
+unassigned = "Unassigned"
+# ordered rules naming a group, e.g. [[organize.group]] name = "Phone" model = "iPhone*" (also: album, make, filename; case-insensitive globs)
+group = []
 
 # --- Performance
 [run]

@@ -178,6 +178,12 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - **Re-runnable:** `skip_newer_than_days`, replanning that only adds new work, and a `collect` mode as an alternative to `move` for sources an uploader app still writes to.
 - **Tests:** a planning matrix (date-source precedence, rule matching, cap splitting, keeping done items in place, collect vs move) and fake-backed apply/undo/verify.
 - **Exit:** a dry-run plan on a real account looks right to its owner. A one-month pilot passes verify.
+- **Sub-stages** (one commit each; CI must pass before the next):
+  - A4.1 rules and config: `[organize]` (sources, date chain, `[[organize.group]]`, mode, `skip_newer_than_days`, duplicates), `{group}` in album templates
+  - A4.2 `gp2sm organize inventory|plan|report|apply|verify|undo` on those rules; legacy dating becomes a `contrib` plugin
+  - A4.3 collect mode (after a sandbox probe of collect/remove semantics)
+  - A4.4 top-level verbs (`gp2sm plan|apply|verify|undo|report`) dispatching to the project's pipeline
+  - A4.5 real check: a dry-run plan on one small album, then a one-month pilot the owner approves
 
 
 **Album management:** bulk audit and repair of album **names** and **settings**, using the same model: inventory → plan (dry run, readable report) → apply with `--yes` → verify. Every change records the album's previous values, so `undo` restores them.

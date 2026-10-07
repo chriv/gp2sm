@@ -38,6 +38,8 @@ def _toml(value):
         return str(value)
     if isinstance(value, list):
         return "[" + ", ".join(_toml(v) for v in value) + "]"
+    if isinstance(value, dict):  # an inline table
+        return "{" + ", ".join(f"{k} = {_toml(v)}" for k, v in value.items()) + "}"
     return json.dumps(value)  # a JSON string is a valid TOML basic string
 
 

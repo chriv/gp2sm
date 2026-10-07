@@ -1,5 +1,5 @@
-# Example: gather photos already on SmugMug (from several albums) into dated month albums.
-# Then: gp2sm consolidate inventory, match, plan, report, apply (dry run first; --yes to move).
+# Example: gather photos already on SmugMug into dated albums per person/device.
+# Then: gp2sm organize inventory, plan, report, apply (dry run first; --yes to move).
 # gp2sm project configuration. Paths are relative to this folder.
 # Reference: every key, its meaning and default, is listed below.
 
@@ -21,10 +21,10 @@ folder = "Photos by Month"
 
 # --- Album names and limits
 [albums]
-# dated album name; {yyyy} and {mm} come from the capture date
-photo = "{yyyy}-{mm}"
+# dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]]
+photo = "{group} {yyyy}-{mm}"
 # dated album for videos (same as photo keeps them together)
-video = "Videos {yyyy}-{mm}"
+video = "{group} {yyyy}-{mm}"
 # album for photos with no confident date
 undated_photo = "Photos Undated"
 # album for videos with no confident date
@@ -39,7 +39,7 @@ hard_cap = 5000
 # --- Reorganizing existing albums (`gp2sm consolidate`)
 [consolidate]
 # substrings of album paths to consolidate from
-sources = ["/Uploads/", "/Old Imports/"]
+sources = []
 # optional legacy transfer databases (Google item lists) for dating
 legacy_dbs = []
 
@@ -69,6 +69,23 @@ different_min = 19
 pair_window = 60
 # a clip pairs only with a still of the same shape, within this percent
 aspect_tolerance_pct = 2
+
+# --- organize
+[organize]
+# folders or albums (by name) whose items are organized, e.g. ["Uploads"]
+sources = ["Uploads"]
+# where capture dates come from, in order: camera (the file's own date), filename, upload (last resort), legacy (old transfer DBs)
+dates = ["camera", "filename"]
+# move items into the dated albums, or collect them (copies stay in the source; use for albums an uploader app still writes to)
+mode = "move"
+# leave items uploaded within this many days alone (0 = none)
+skip_newer_than_days = 14
+# byte-identical extra copies: park in the duplicates album, or keep where they are
+duplicates = "park"
+# group name for items no [[organize.group]] rule matches
+unassigned = "Unassigned"
+# ordered rules naming a group, e.g. [[organize.group]] name = "Phone" model = "iPhone*" (also: album, make, filename; case-insensitive globs)
+group = [{name = "Dad", model = "iPhone 14*"}, {name = "Kids", model = "iPad*"}, {name = "Screenshots", filename = "Screen*"}]
 
 # --- Performance
 [run]

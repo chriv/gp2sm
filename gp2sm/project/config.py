@@ -17,8 +17,10 @@ else:  # pragma: no cover - exercised on 3.10 in CI
 
 CONFIG_NAME = "gp2sm.toml"
 
-# section -> key -> (type, default, help). Types: str, int, list (of str), "template", "timezone",
-# or a tuple of allowed strings (a choice).
+# section -> key -> (type, default, help). Types: str, int (positive), "count" (0 or more), list (of str),
+# "template", "timezone", "rules" (an array of tables), or a tuple of allowed strings (a choice).
+DATE_SOURCES = ("camera", "filename", "upload", "legacy")
+RULE_KEYS = ("name", "album", "make", "model", "filename")
 SCHEMA = {
     "project": {
         "name": (str, "", "a name for this project (shown in reports)"),
@@ -30,7 +32,8 @@ SCHEMA = {
         "folder": (str, "Consolidated", "folder that holds this project's albums"),
     },
     "albums": {
-        "photo": ("template", "Photos {yyyy}-{mm}", "dated album name; {yyyy} and {mm} come from the capture date"),
+        "photo": ("template", "Photos {yyyy}-{mm}",
+                  "dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]]"),
         "video": ("template", "Photos {yyyy}-{mm}", "dated album for videos (same as photo keeps them together)"),
         "undated_photo": (str, "Photos Undated", "album for photos with no confident date"),
         "undated_video": (str, "Videos Undated", "album for videos with no confident date"),
@@ -61,6 +64,19 @@ SCHEMA = {
         "different_min": (int, 19, "content check: distance at or above this is a different photo; between = review"),
         "pair_window": (int, 60, "a clip pairs with a still taken within this many seconds"),
         "aspect_tolerance_pct": (int, 2, "a clip pairs only with a still of the same shape, within this percent"),
+    },
+    "organize": {
+        "sources": (list, [], "folders or albums (by name) whose items are organized, e.g. [\"Uploads\"]"),
+        "dates": (list, ["camera", "filename"], "where capture dates come from, in order: camera (the file's own "
+                                                "date), filename, upload (last resort), legacy (old transfer DBs)"),
+        "mode": (("move", "collect"), "move", "move items into the dated albums, or collect them (copies stay in "
+                                              "the source; use for albums an uploader app still writes to)"),
+        "skip_newer_than_days": ("count", 0, "leave items uploaded within this many days alone (0 = none)"),
+        "duplicates": (("park", "keep"), "park", "byte-identical extra copies: park in the duplicates album, or "
+                                                "keep where they are"),
+        "unassigned": (str, "Unassigned", "group name for items no [[organize.group]] rule matches"),
+        "group": ("rules", [], "ordered rules naming a group, e.g. [[organize.group]] name = \"Phone\" "
+                               "model = \"iPhone*\" (also: album, make, filename; case-insensitive globs)"),
     },
     "run": {
         "move_batch_size": (int, 25, "items per batch move"),
@@ -115,6 +131,7 @@ class ProjectConfig:
             "move_batch_size": self.values["run"]["move_batch_size"],
             "max_consecutive_failures": 5,
             "takeout": takeout_policies(self.values),
+            "organize": organize_settings(self.values),
         }
 
 
@@ -126,6 +143,23 @@ def _check(section, key, kind, value, problems):
     elif kind is int:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             problems.append(f"{where} must be a positive integer, got {value!r}")
+    elif kind == "count":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            problems.append(f"{where} must be 0 or a positive integer, got {value!r}")
+    elif kind == "rules":
+        if not isinstance(value, list) or not all(isinstance(r, dict) for r in value):
+            problems.append(f"{where} must be a list of tables ([[{section}.{key}]])")
+            return
+        for i, rule in enumerate(value, 1):
+            unknown = set(rule) - set(RULE_KEYS)
+            if unknown:
+                problems.append(f"{where} rule {i} has unknown keys {sorted(unknown)}; allowed: {list(RULE_KEYS)}")
+            if not isinstance(rule.get("name"), str) or not rule.get("name"):
+                problems.append(f"{where} rule {i} needs a name")
+            if not any(k in rule for k in RULE_KEYS[1:]):
+                problems.append(f"{where} rule {i} has no conditions (album, make, model or filename)")
+            if not all(isinstance(v, str) for v in rule.values()):
+                problems.append(f"{where} rule {i}: values must be strings")
     elif kind is list:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             problems.append(f"{where} must be a list of strings, got {value!r}")
@@ -136,9 +170,10 @@ def _check(section, key, kind, value, problems):
         fields = {f for _, f, _, _ in string.Formatter().parse(value) if f}
         if "yyyy" not in fields:
             problems.append(f"{where} must contain {{yyyy}} (and usually {{mm}}), got {value!r}")
-        unknown = fields - {"yyyy", "mm"}
+        unknown = fields - {"yyyy", "mm", "group"}
         if unknown:
-            problems.append(f"{where} has unknown placeholders {sorted(unknown)}; only {{yyyy}} and {{mm}} are allowed")
+            problems.append(f"{where} has unknown placeholders {sorted(unknown)}; "
+                            "only {yyyy}, {mm} and {group} are allowed")
     elif isinstance(kind, tuple):
         if value not in kind:
             problems.append(f"{where} must be one of {list(kind)}, got {value!r}")
@@ -171,10 +206,20 @@ def validate(raw):
     a = values["albums"]
     if isinstance(a["soft_cap"], int) and isinstance(a["hard_cap"], int) and a["soft_cap"] > a["hard_cap"]:
         problems.append(f"[albums] soft_cap ({a['soft_cap']}) must not exceed hard_cap ({a['hard_cap']})")
+    o = values["organize"]
+    if isinstance(o["dates"], list):
+        bad = [d for d in o["dates"] if d not in DATE_SOURCES]
+        if bad:
+            problems.append(f"[organize] dates has unknown sources {bad}; choose from {list(DATE_SOURCES)}")
     t = values["takeout"]
     if isinstance(t["same_max"], int) and isinstance(t["different_min"], int) and t["same_max"] >= t["different_min"]:
         problems.append(f"[takeout] same_max ({t['same_max']}) must be below different_min ({t['different_min']})")
     return values, problems
+
+
+def organize_settings(values=None):
+    """The [organize] settings (defaults when no project config is in use)."""
+    return dict(values["organize"]) if values else {k: v[1] for k, v in SCHEMA["organize"].items()}
 
 
 def takeout_policies(values=None):

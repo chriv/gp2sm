@@ -103,3 +103,27 @@ def test_tool_settings_carry_takeout_policies(tmp_path):
     policies = load(str(tmp_path)).tool_settings()["takeout"]
     assert policies["heic"] == "keep" and policies["pair_window"] == 60
     assert "archives" not in policies and "index" not in policies
+
+
+def test_organize_section_validates_rules_dates_and_group_placeholder(tmp_path):
+    _, problems = validate({"organize": {"dates": ["camera", "horoscope"],
+                                         "group": [{"name": "A", "colour": "red"}, {"model": "x"}],
+                                         "skip_newer_than_days": -1},
+                            "albums": {"photo": "{group} {yyyy}-{mm}"}})
+    text = "\n".join(problems)
+    assert "unknown sources ['horoscope']" in text
+    assert "rule 1 has unknown keys ['colour']" in text and "rule 1 has no conditions" in text
+    assert "rule 2 needs a name" in text
+    assert "skip_newer_than_days must be 0 or a positive integer" in text
+    assert "placeholders" not in text                     # {group} is allowed
+    (tmp_path / "gp2sm.toml").write_text('[albums]\nphoto = "{group} {yyyy}-{mm}"\n\n[organize]\nmode = "collect"\n'
+                                         '[[organize.group]]\nname = "Phone"\nmodel = "iPhone*"\n')
+    org = load(str(tmp_path)).tool_settings()["organize"]
+    assert org["mode"] == "collect" and org["group"] == [{"name": "Phone", "model": "iPhone*"}]
+
+
+def test_rules_render_as_valid_toml(tmp_path):
+    from gp2sm.project.init import render
+    text = render({"organize": {"group": [{"name": "Phone", "model": "iPhone*"}]}})
+    (tmp_path / "gp2sm.toml").write_text(text)
+    assert load(str(tmp_path)).get("organize", "group") == [{"name": "Phone", "model": "iPhone*"}]
