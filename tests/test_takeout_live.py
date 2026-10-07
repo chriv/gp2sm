@@ -60,6 +60,8 @@ def test_import_into_sandbox(sandbox, tmp_path):
     root = tmp_path / "proj"
     init_main([str(root), "--non-interactive", "--name", "live", "--timezone", "America/New_York",
                "--folder", folder_name], show=lambda *a: None)
+    toml = (root / "gp2sm.toml").read_text().replace('rejected_types = "skip"', 'rejected_types = "convert"')
+    (root / "gp2sm.toml").write_text(toml)   # this test covers converting a rejected format
     d = "Photos from 2023"
     entries = [
         (f"{d}/IMG_0101.HEIC", heic_bytes(11)), (f"{d}/IMG_0101.HEIC.supplemental-metadata.json", sidecar("IMG_0101.HEIC", T)),

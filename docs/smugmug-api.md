@@ -48,6 +48,12 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - Delete album: `DELETE /api/v2/album/{key}` → 200. Delete folder: `DELETE /api/v2/node/{id}` → 200.
 - **Albums under a folder, by display names:** walk `GET {nodeUri}!children` from the root node (`!authuser` → `Uris.Node`), matching `Type: "Folder"` and `Name` for each path part, then recurse. Children of `Type: "Album"` carry the album key in `Uris.Album.Uri`. `Album.UrlPath` is URL-ified (spaces become dashes), so don't match display folder names against it. (Confirmed 2026-10-06 by the live destination contract, `list_folder_albums`.)
 
+## The SmugMug iOS app's automatic upload (observed by the owner, 2026-10-07)
+- Uploads go to a root folder **"Automatic iOS Uploads"**, which the app creates and names (you can't choose). Inside it the app makes one gallery per month, named `YYYY-MM`, under a year folder. Older accounts can also have an earlier "Automatic iOS Uploads" folder elsewhere (e.g. under another folder) that the app no longer writes to.
+- **Live Photos lose their motion**: only the still is uploaded.
+- Deleting an uploaded photo on SmugMug does **not** make the app upload it again. Editing a photo on the device after it was uploaded does **not** upload a new copy. Deleting a photo on the device does **not** delete it on SmugMug (SmugMug is a backup, not a mirror).
+- So the app's own month galleries rarely need organizing. The cleanup that matters is merging an old upload folder's galleries into the current one, and removing duplicates.
+
 ## Upload
 `POST https://upload.smugmug.com/` with the raw file bytes as the body and these headers:
 `X-Smug-AlbumUri`, `X-Smug-FileName`, `X-Smug-ResponseType: JSON`, `X-Smug-Version: v2`, `Content-MD5` (hex), `Content-Type`.

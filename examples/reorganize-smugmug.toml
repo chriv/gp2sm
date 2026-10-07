@@ -55,8 +55,8 @@ heic = "convert"
 live_clips = "pair"
 # clips with no matching still: dated video album by their own time, the undated album, or skip
 unpaired_clips = "dated"
-# photos in formats the destination rejects (e.g. WebP, BMP): convert to JPEG, or skip
-rejected_types = "convert"
+# photos in formats the destination rejects (e.g. WebP, BMP): skip (listed in the report), or convert to JPEG
+rejected_types = "skip"
 # skip items already on the destination: exact (same bytes), content (also same picture), off
 dedupe = "content"
 # folders or albums (by name, e.g. "Family/2023-05") to check for existing copies; empty = this project's folder, ["/"] = the whole account

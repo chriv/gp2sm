@@ -279,21 +279,18 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 
 Each step below is its own project (separate config and state), so results stay separate and each can be re-run.
 
-### Stage B0: How the uploader app behaves
+### Stage B0: How the uploader app behaves. ✅ Done (2026-10-07, tested by the owner on an iPad)
 
-- **Goal:** know how the SmugMug mobile app's automatic upload behaves before reorganizing anything it writes to.
-- **Method:** on a test device, set up auto-upload to a new sandbox folder, then take a few photos, Live Photos and a short video. Watch:
-  1. What gets uploaded for a Live Photo (still format, any motion clip, filenames, dates).
-  2. Whether **moving** an uploaded photo to another album, or deleting it, makes the app upload it again. (Hypothesis: the app decides by a content hash.)
-  3. Whether editing a photo on the device uploads a new copy.
-  4. What deleting a photo on the device does to its uploaded copy. If the app deletes it on SmugMug, collected copies in organized albums vanish with it (collect semantics: removing an original deletes every collected copy; see `docs/smugmug-api.md`).
-- **Deliverables:** findings added to `docs/smugmug-api.md` (an "uploader app" section), and the choice of `move` vs `collect` for auto-upload sources.
-- **Exit:** all three questions answered, and the test images removed.
+- Uploads go to a root "Automatic iOS Uploads" folder the app names itself, already split into `YYYY-MM` galleries. An older "Automatic iOS Uploads" folder (under "Other") is no longer written to.
+- Live Photos lose their motion (still only).
+- Deleting on SmugMug doesn't trigger a re-upload; editing on the device doesn't upload a new copy; deleting on the device doesn't delete on SmugMug.
+- Findings are in `docs/smugmug-api.md`.
 
-### Stage B1: Phone auto-upload albums
+### Stage B1: Auto-upload albums
 
-- Organize (A4) the uploader-app folders: sources, person/device rules, and a date order that prefers each photo's own EXIF.
-- Dry-run plan → review duplicates and the "unassigned" bucket → one-month pilot → full run → verify.
+- **iOS uploads need little organizing:** the app already files them by month. The work is merging the old folder's `YYYY-MM` galleries into the current folder's same-month galleries, then removing duplicates (parked, then deleted with `--yes`). Keep the current "Automatic iOS Uploads" folder in place so the app keeps working.
+- **Other auto-upload sources** (other apps or devices, conversions): organize into `{uploader} auto-uploaded {yyyy}-{mm}` (e.g. `Sam auto-uploaded 2026-10`), where the group is the uploader's first name (by source folder or device rule). Never remove or rename an uploader's own folder.
+- Small samples first (one month), then the rest; verify after each.
 
 ### Stage B2: Account-wide naming and settings cleanup
 

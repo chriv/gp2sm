@@ -54,8 +54,9 @@ SCHEMA = {
                        "Live Photo motion clips: pair (same name, next to the still), separate (video albums), skip"),
         "unpaired_clips": (("dated", "undated", "skip"), "dated",
                            "clips with no matching still: dated video album by their own time, the undated album, or skip"),
-        "rejected_types": (("convert", "skip"), "convert",
-                           "photos in formats the destination rejects (e.g. WebP, BMP): convert to JPEG, or skip"),
+        "rejected_types": (("skip", "convert"), "skip",
+                           "photos in formats the destination rejects (e.g. WebP, BMP): skip (listed in the report), "
+                           "or convert to JPEG"),
         "dedupe": (("content", "exact", "off"), "content",
                    "skip items already on the destination: exact (same bytes), content (also same picture), off"),
         "existing": (list, [], "folders or albums (by name, e.g. \"Family/2023-05\") to check for existing copies; "
