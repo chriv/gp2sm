@@ -40,7 +40,7 @@ def test_date_chain_precedence_and_plugins():
     assert rules.date_for(bare, ["camera", "filename"], "UTC", today=TODAY) == (None, "none")
     assert rules.date_for(bare, ["camera", "upload"], "America/New_York", today=TODAY) == ("2024-05-31T22:00:00", "upload")
     old = {"filename": "PICT0008.TIF", "capture_time": None, "album_name": "2004-03-17 New puppy (6 weeks old)"}
-    assert rules.date_for(old, ["camera", "filename", "album"], "UTC", today=TODAY) == ("2004-03-17", "album:iso_date")
+    assert rules.date_for(old, ["camera", "filename", "album"], "UTC", today=TODAY) == ("2004-03-17", "album:ymd")
     plugin = {"legacy": lambda it: "2019-12-31T23:59:59"}
     assert rules.date_for(bare, ["legacy", "upload"], "UTC", plugins=plugin, today=TODAY)[1] == "legacy"
     with pytest.raises(ValueError):
@@ -71,3 +71,11 @@ def test_recent_uploads_are_skipped():
     assert rules.recent("2026-10-01T00:00:00+00:00", 14, now) is True
     assert rules.recent("2026-09-01T00:00:00+00:00", 14, now) is False
     assert rules.recent("2026-10-01T00:00:00+00:00", 0, now) is False
+
+
+def test_album_date_source_reads_month_galleries():
+    item = {"album_name": "2016-08", "capture_time": "2016-09-01T00:10:00"}   # camera says September
+    assert rules.date_for(item, ["album"], "UTC") == ("2016-08-01", "album:ym")
+    assert rules.date_for({"album_name": "2019-06-14 Beach Trip"}, ["album"], "UTC")[0] == "2019-06-14"
+    assert rules.date_for({"album_name": "Beach 2019"}, ["album"], "UTC") == (None, "none")   # a year alone isn't enough
+    assert rules.date_for({"album_name": "Photos Undated"}, ["album"], "UTC") == (None, "none")

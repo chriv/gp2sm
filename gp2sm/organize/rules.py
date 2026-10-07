@@ -16,6 +16,8 @@ import fnmatch
 import re
 from zoneinfo import ZoneInfo
 
+from gp2sm.albums import naming
+
 MIN_YEAR = 1990   # earlier "dates" are almost always camera defaults or garbage
 
 # (name, regex, has_time). Groups: y, m, d and optionally H, M, S.
@@ -73,6 +75,15 @@ def upload_date(uploaded, tz_name):
     return dt.astimezone(ZoneInfo(tz_name)).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
+def date_from_album_name(name, today=None):
+    """(capture_local or None, pattern) from an album name: a confident month or day ("2016-08", "2019-06-14 Trip",
+    "June 2019 Beach"), else the file-name patterns. A month-only name gives the 1st of that month."""
+    parsed = naming.parse(name or "", today)
+    if parsed.confidence == "high" and parsed.precision in ("month", "day"):
+        return f"{parsed.year:04d}-{parsed.month:02d}-{parsed.day or 1:02d}", parsed.pattern
+    return date_from_filename(name, today)
+
+
 def date_for(item, chain, tz_name, plugins=None, today=None):
     """(capture_local or None, method) for an item dict(filename, capture_time, uploaded, item_id, ...).
     plugins: {name: fn(item) -> capture_local or None} for chain entries beyond the built-ins."""
@@ -85,7 +96,7 @@ def date_for(item, chain, tz_name, plugins=None, today=None):
                 return value, f"filename:{pattern}"
             continue
         elif source == "album":
-            value, pattern = date_from_filename(item.get("album_name"), today)
+            value, pattern = date_from_album_name(item.get("album_name"), today)
             if value:
                 return value, f"album:{pattern}"
             continue
