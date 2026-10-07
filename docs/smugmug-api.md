@@ -70,6 +70,8 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - `AlbumImage.Date` is the **upload time**, not the capture time.
 - Capture time is in `GET {ImageUri}!metadata`: `DateTimeCreated` (EXIF DateTimeOriginal for images, container `creation_time` for videos), with no timezone. It survives the HEIC→JPEG conversion.
 - `GET {ImageUri}!largestvideo` → `Duration` (seconds, as a string), `Size`, `MD5`, `Width`, `Height` of the *re-encoded* rendition.
+- `!largestvideo` returns **404 for some videos** (2026-10-07: 7 of a few hundred in a real library; likely still processing or without a playable rendition). Treat it as "duration unknown", never as "absent".
+- **Listing cost:** about 25–35 ms of server time per item in `!images`, whatever the page size (100/500/1000 tried) or `_filter` field list (which saves only ~20%). A 35,000-item folder lists in about 3½ minutes with 6 albums in parallel. Durations need `_expand=ImageMetadata` or `!largestvideo`, so fetch them only for the videos that need them.
 
 ## Renaming images
 - **`FileName` can't be changed.** (Verified 2026-10-06 for both JPEG and MOV.) `PATCH /api/v2/image/{key}-0` with `{"FileName": ...}` returns **HTTP 200 "Ok" but leaves `FileName` unchanged**: a silent no-op. `Title` *can* be changed this way.
