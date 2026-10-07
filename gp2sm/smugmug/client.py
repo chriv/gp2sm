@@ -14,6 +14,7 @@ import logging
 import re
 import threading
 import time
+import urllib.parse
 
 import requests
 from requests_oauthlib import OAuth1Session
@@ -207,17 +208,23 @@ class SmugMugClient:
 
     def paged(self, path, list_key, params=None):
         """Yield (item, expansions) for every item of a paged list endpoint."""
-        params = dict(params or {})
-        params.setdefault("count", self.page_size)
-        url = path
+        base = dict(params or {})
+        base.setdefault("count", self.page_size)
+        url, params = path, base
         while url:
             body = self.request("GET", url, params=params)
-            params = None  # NextPage already carries the query string
             resp = body.get("Response", {})
             expansions = body.get("Expansions", {})
             for item in resp.get(list_key, []) or []:
                 yield item, expansions
-            url = resp.get("Pages", {}).get("NextPage")
+            next_page = resp.get("Pages", {}).get("NextPage")
+            if not next_page:
+                break
+            # NextPage keeps only count/start and drops _expand/_filter, so take the position from it and
+            # resend the original params.
+            parts = urllib.parse.urlsplit(next_page)
+            url = parts.path
+            params = {**base, **dict(urllib.parse.parse_qsl(parts.query))}
 
     # ------------------------------------------------------------- read API
 

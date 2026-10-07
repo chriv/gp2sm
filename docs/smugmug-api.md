@@ -27,7 +27,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - POST `!moveimages` / `!collectimages` / DELETE responses: HTTP 200 with `"Message": "Ok"` and no `stat`.
 
 ## Paging and field selection
-- Paging uses `count` + `start`. Follow `Response.Pages.NextPage`, a relative URI that already includes your params. `Pages.Total` gives the total count.
+- Paging uses `count` + `start`. `Response.Pages.NextPage` is a relative URI carrying only `count` and `start`: **it drops `_expand` (and other `_` params)**, so page 2 onwards silently comes back without expansions (confirmed 2026-10-07). Take the position from `NextPage` and resend your own params. `Pages.Total` gives the total count.
 - `count`: 100 ≈ 2 s per page. 500–1,000 ≈ 18–22 s and risks `nonce_used`. 5,000 returned no `Response`. **Use 100–200.**
 - **`_filter` is a FIELD selector, not a value filter.** `_filter=FileName,ArchivedMD5` limits which fields come back. `_filtervalue` is ignored, so it can't be used to search by MD5. `_filteruri=` (empty) drops the large `Uris` block.
 

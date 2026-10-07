@@ -77,12 +77,15 @@ def test_http_200_stat_fail_raises():
 
 def test_paged_follows_next_page_and_uses_list_key():
     c, s = client([
-        FakeResponse(200, {"Response": {"AlbumImage": [{"ImageKey": "a"}], "Pages": {"NextPage": "/p2"}}}),
+        FakeResponse(200, {"Response": {"AlbumImage": [{"ImageKey": "a"}],
+                                        "Pages": {"NextPage": "/p1?count=1&start=2"}}}),
         FakeResponse(200, {"Response": {"AlbumImage": [{"ImageKey": "b"}], "Pages": {}}}),
     ])
-    keys = [i["ImageKey"] for i, _ in c.paged("/p1", "AlbumImage")]
+    keys = [i["ImageKey"] for i, _ in c.paged("/p1", "AlbumImage", {"_expand": "ImageMetadata", "count": 1})]
     assert keys == ["a", "b"]
-    assert s.calls[1][2]["params"] is None  # NextPage already carries the query
+    # SmugMug's NextPage drops _expand: the original params are resent, with the position from NextPage
+    assert s.calls[1][1].endswith("/p1")
+    assert s.calls[1][2]["params"] == {"_expand": "ImageMetadata", "count": "1", "start": "2"}
 
 
 def test_album_images_attaches_expanded_metadata():
