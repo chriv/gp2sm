@@ -16,6 +16,7 @@ COMMANDS = {
     "services": ("gp2sm.cli.services", "list installed photo services (sources and destinations)"),
     "auth": ("gp2sm.cli.auth", "sign in to a service and manage stored credentials"),
     "takeout": ("gp2sm.takeout.cli", "import a Google Takeout (index, inventory, dedupe, review, plan, stage, upload, verify)"),
+    "albums": ("gp2sm.albums.cli", "album names: date-sortable renames with review and undo"),
     "organize": ("gp2sm.organize.cli", "gather items already on the destination into dated, grouped albums (rules)"),
     "consolidate": ("gp2sm.organize.consolidate", "legacy: the first migration's consolidation (legacy-dated); new projects use organize"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),

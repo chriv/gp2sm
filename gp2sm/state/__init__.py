@@ -130,6 +130,17 @@ CREATE TABLE IF NOT EXISTS hash_dest(item_id TEXT PRIMARY KEY, h TEXT, error TEX
 CREATE TABLE IF NOT EXISTS source_matches(source_ref TEXT PRIMARY KEY, decision TEXT, dest_item_id TEXT,
   dest_album_id TEXT, dist INT, method TEXT, detail TEXT, decided_at TEXT, reviewed TEXT);
 
+-- Album management (gp2sm albums): albums in scope as last seen, with sampled photo dates for albums whose
+-- names carry no date; and every planned or applied album change with the value it replaced (for undo).
+-- album_changes.status: planned -> done | failed ; review (needs a person's approve) ; undone ; skipped
+CREATE TABLE IF NOT EXISTS albums_seen(album_id TEXT PRIMARY KEY, name TEXT, folder TEXT, item_count INT,
+  photo_dates TEXT, listed_at TEXT);
+CREATE TABLE IF NOT EXISTS album_changes(
+  change_id INTEGER PRIMARY KEY AUTOINCREMENT, album_id TEXT, kind TEXT, field TEXT,
+  old_value TEXT, new_value TEXT, confidence TEXT, source TEXT, note TEXT,
+  status TEXT, planned_at TEXT, applied_at TEXT, last_error TEXT);
+CREATE INDEX IF NOT EXISTS album_changes_album ON album_changes(album_id, field, status);
+
 CREATE TABLE IF NOT EXISTS placements(
   placement_id INTEGER PRIMARY KEY AUTOINCREMENT,
   upload_id INT UNIQUE,                       -- the clip's row in uploads

@@ -38,12 +38,12 @@ def test_v1_db_upgrades_in_place_and_keeps_data(tmp_path):
     path = str(tmp_path / "old.db")
     make_v1(path)
     st = State(path)
-    assert st.migrations_applied == [2, 3, 4] and st.schema_version == 4
+    assert st.migrations_applied == [2, 3, 4, 5] and st.schema_version == 5
     assert {"pair_item_id", "verified_at", "source_ref"} <= cols(st, "uploads")
     assert {"dest_items", "source_matches", "hash_source", "hash_dest"} <= {
         r[0] for r in st.q("SELECT name FROM sqlite_master WHERE type='table'")}
     assert st.one("SELECT upload_name FROM uploads WHERE item_id=7") == "IMG_1.MP4"   # data preserved
-    assert [r[0] for r in st.q("SELECT version FROM schema_history")] == [2, 3, 4]
+    assert [r[0] for r in st.q("SELECT version FROM schema_history")] == [2, 3, 4, 5]
 
 
 def test_reopen_is_idempotent(tmp_path):
@@ -74,7 +74,7 @@ def test_v2_db_upgrades_to_v3(tmp_path):
     db.commit()
     db.close()
     st = State(path)
-    assert st.migrations_applied == [3, 4]
+    assert st.migrations_applied == [3, 4, 5]
     assert {"make", "model"} <= cols(st, "images") and "folder" in cols(st, "source_albums")
     assert {"source_ref", "convert", "content_type", "taken_ts", "pair_ref"} <= cols(st, "uploads")
     st.db.execute("INSERT INTO uploads(source_ref, role, status) VALUES('a::x.jpg', 'still', 'planned')")

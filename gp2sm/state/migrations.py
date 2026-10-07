@@ -44,6 +44,7 @@ MIGRATIONS = [
     (3, "importer: destination inventory, hash caches, source_matches; uploads.source_ref/convert/"
         "content_type/taken_ts/pair_ref", _m3_importer),
     (4, "organize rules: images.make/model, source_albums.folder", _m4_organize_rules),
+    (5, "album management: albums_seen, album_changes (created by SCHEMA)", lambda db: None),
 ]
 LATEST = max(v for v, _, _ in MIGRATIONS)
 
