@@ -42,7 +42,7 @@ SCHEMA = {
         "legacy_dbs": (list, [], "optional legacy transfer databases (Google item lists) for dating"),
     },
     "takeout": {
-        "archives": (str, "takeout", "folder with the Google Takeout .tgz files"),
+        "archives": (str, "takeout", "folder with the Google Takeout archives (.zip or .tgz)"),
         "index": (str, "takeout_index.db", "Takeout index database"),
     },
     "run": {

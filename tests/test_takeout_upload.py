@@ -38,7 +38,7 @@ def test_fill_exif_date_lossless(tmp_path):
 
 
 def test_mp4_creation_ts_v0_and_v1():
-    from gp2sm.takeout.upload import QT_EPOCH_OFFSET, mp4_creation_ts
+    from gp2sm.media.mp4 import QT_EPOCH_OFFSET, mp4_creation_ts
     unix = 1723521785
     v0 = b"....mvhd" + bytes([0, 0, 0, 0]) + (unix + QT_EPOCH_OFFSET).to_bytes(4, "big") + b"\x00" * 16
     v1 = b"....mvhd" + bytes([1, 0, 0, 0]) + (unix + QT_EPOCH_OFFSET).to_bytes(8, "big") + b"\x00" * 16
@@ -48,7 +48,7 @@ def test_mp4_creation_ts_v0_and_v1():
 
 
 def test_clip_creation_prefers_apple_date_over_mvhd():
-    from gp2sm.takeout.upload import QT_EPOCH_OFFSET, clip_creation_ts
+    from gp2sm.media.mp4 import QT_EPOCH_OFFSET, clip_creation_ts
     mvhd = b"mvhd" + bytes([0, 0, 0, 0]) + (2000000000 + QT_EPOCH_OFFSET).to_bytes(4, "big") + b"\x00" * 16
     data = b"...." + mvhd + b"keys...com.apple.quicktime.creationdate...data2022-06-14T21:22:49-0400..."
     assert clip_creation_ts(data) == 1655256169  # 2022-06-15T01:22:49Z

@@ -24,21 +24,21 @@ import fnmatch
 import hashlib
 import logging
 import os
-import re
 import sqlite3
 import sys
-import tarfile
 from zoneinfo import ZoneInfo
 
 import piexif
 
 from gp2sm.cli import run
 from gp2sm.media.convert import to_jpeg
+from gp2sm.media.mp4 import clip_creation_ts
 from gp2sm.organize import planning
 from gp2sm.organize.consolidate import ensure_target, setup_logging
 from gp2sm.project import context
 from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import State, now
+from gp2sm.takeout.archive import read_members
 
 log = logging.getLogger("gp2sm.takeout.upload")
 
@@ -73,33 +73,7 @@ def exif_datetime_fields(taken_ts, tz_name):
     return dt.strftime("%Y:%m:%d %H:%M:%S"), f"{sign}{minutes // 60:02d}:{minutes % 60:02d}"
 
 
-QT_EPOCH_OFFSET = 2082844800  # seconds between 1904-01-01 and 1970-01-01
 MAX_CLIP_SKEW = 120  # a Live Photo clip starts within seconds of its still
-
-
-APPLE_DATE = re.compile(rb"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d{4}|Z)")
-
-
-def clip_creation_ts(data):
-    """Capture time of a clip: Apple's com.apple.quicktime.creationdate if present (the true capture time),
-    else the mvhd creation time (which can be a later re-encode time)."""
-    if b"com.apple.quicktime.creationdate" in data:
-        m = APPLE_DATE.search(data)
-        if m:
-            text = m.group(0).decode()
-            text = text.replace("Z", "+00:00") if text.endswith("Z") else text[:-2] + ":" + text[-2:]
-            return int(datetime.datetime.fromisoformat(text).timestamp())
-    return mp4_creation_ts(data)
-
-
-def mp4_creation_ts(data):
-    """Unix creation time from the first 'mvhd' atom of an MP4/MOV (None if absent or zero)."""
-    i = data.find(b"mvhd")
-    if i < 0 or i + 16 > len(data):
-        return None
-    version = data[i + 4]
-    raw = int.from_bytes(data[i + 8:i + 16], "big") if version == 1 else int.from_bytes(data[i + 8:i + 12], "big")
-    return raw - QT_EPOCH_OFFSET if raw else None
 
 
 def fill_exif_date(jpg_path, taken_ts, tz_name):
@@ -237,15 +211,9 @@ def cmd_stage(st, cfg, args):
         for archive in sorted({a for a, _ in by_member}):
             futures = {}
             remaining = {p for a, p in by_member if a == archive}
-            with tarfile.open(os.path.join(args.takeout_dir, archive), "r|*") as tar:
-                for m in tar:
-                    if m.name not in remaining:
-                        continue
-                    row = by_member[(archive, m.name)]
-                    futures[pool.submit(work, row, tar.extractfile(m).read())] = row
-                    remaining.discard(m.name)
-                    if not remaining:
-                        break
+            for path, data in read_members(os.path.join(args.takeout_dir, archive), remaining):
+                row = by_member[(archive, path)]
+                futures[pool.submit(work, row, data)] = row
             for fut in concurrent.futures.as_completed(futures):
                 row = futures[fut]
                 try:

@@ -1,4 +1,7 @@
-"""Small media helpers that don't depend on any photo service."""
+"""MP4/MOV header parsing (dimensions, duration, capture time), without any video library."""
+
+import datetime
+import re
 
 
 def mp4_dims(data):
@@ -34,3 +37,31 @@ def mp4_duration(data):
         timescale = int.from_bytes(data[i + 16:i + 20], "big")
         duration = int.from_bytes(data[i + 20:i + 24], "big")
     return duration / timescale if timescale else None
+
+
+QT_EPOCH_OFFSET = 2082844800  # seconds between 1904-01-01 and 1970-01-01
+
+
+APPLE_DATE = re.compile(rb"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d{4}|Z)")
+
+
+def clip_creation_ts(data):
+    """Capture time of a clip: Apple's com.apple.quicktime.creationdate if present (the true capture time),
+    else the mvhd creation time (which can be a later re-encode time)."""
+    if b"com.apple.quicktime.creationdate" in data:
+        m = APPLE_DATE.search(data)
+        if m:
+            text = m.group(0).decode()
+            text = text.replace("Z", "+00:00") if text.endswith("Z") else text[:-2] + ":" + text[-2:]
+            return int(datetime.datetime.fromisoformat(text).timestamp())
+    return mp4_creation_ts(data)
+
+
+def mp4_creation_ts(data):
+    """Unix creation time from the first 'mvhd' atom of an MP4/MOV (None if absent or zero)."""
+    i = data.find(b"mvhd")
+    if i < 0 or i + 16 > len(data):
+        return None
+    version = data[i + 4]
+    raw = int.from_bytes(data[i + 8:i + 16], "big") if version == 1 else int.from_bytes(data[i + 8:i + 12], "big")
+    return raw - QT_EPOCH_OFFSET if raw else None

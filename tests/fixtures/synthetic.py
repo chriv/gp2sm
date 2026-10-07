@@ -2,7 +2,7 @@
 
 - jpeg_bytes/png_bytes: small images, optional EXIF capture date
 - mp4_bytes: just enough MP4 structure for header parsers (mvhd/tkhd, optional Apple creationdate)
-- make_takeout: a Google-Takeout-shaped .tgz (Photos from YYYY/ folders, supplemental-metadata sidecars,
+- make_takeout: a Google-Takeout-shaped .tgz or .zip (Photos from YYYY/ folders, supplemental-metadata sidecars,
   '(N)' collision names, Live Photo pairs, optionally a pair split across two archives)
 """
 
@@ -11,6 +11,7 @@ import gzip
 import io
 import json
 import tarfile
+import zipfile
 
 from PIL import Image
 
@@ -18,12 +19,14 @@ QT_EPOCH_OFFSET = 2082844800
 FIXED_MTIME = 1_700_000_000
 
 
-def jpeg_bytes(w=64, h=48, color=(120, 80, 40), exif_dt=None):
+def jpeg_bytes(w=64, h=48, color=(120, 80, 40), exif_dt=None, exif_offset=None):
     img = Image.new("RGB", (w, h), color)
     buf = io.BytesIO()
     if exif_dt:
         exif = img.getexif()
         exif.get_ifd(0x8769)[0x9003] = exif_dt  # DateTimeOriginal "YYYY:MM:DD HH:MM:SS"
+        if exif_offset:
+            exif.get_ifd(0x8769)[0x9011] = exif_offset  # OffsetTimeOriginal "+HH:MM"
         img.save(buf, "JPEG", quality=90, exif=exif)
     else:
         img.save(buf, "JPEG", quality=90)
@@ -70,7 +73,15 @@ def _add(tar, path, data):
 
 
 def make_takeout(path, entries):
-    """Write a deterministic .tgz. entries: list of (relative path under 'Takeout/Google Photos/', bytes)."""
+    """Write a deterministic .tgz, or .zip if the path ends in .zip (Google's default export format).
+    entries: list of (relative path under 'Takeout/Google Photos/', bytes)."""
+    if str(path).endswith(".zip"):
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for rel, data in entries:
+                info = zipfile.ZipInfo(f"Takeout/Google Photos/{rel}", date_time=(2023, 11, 14, 22, 13, 20))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(info, data)
+        return path
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tar:
         for rel, data in entries:

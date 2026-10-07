@@ -25,17 +25,18 @@ import logging
 import os
 import sqlite3
 import sys
-import tarfile
 
 from PIL import Image
 
 from gp2sm.cli import run
 from gp2sm.media import aspect, mp4_dims
+from gp2sm.media.mp4 import clip_creation_ts
 from gp2sm.organize.consolidate import setup_logging
 from gp2sm.project import context
 from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import State, now
-from gp2sm.takeout.upload import clip_creation_ts, unique_name
+from gp2sm.takeout.archive import read_members
+from gp2sm.takeout.upload import unique_name
 
 log = logging.getLogger("gp2sm.organize.place_clips")
 
@@ -121,10 +122,8 @@ def resolve_source(row, takeout_dir, client):
         return open(row["staged_path"], "rb").read(), "staged"
     if row["archive"] and row["src_path"]:
         try:
-            with tarfile.open(os.path.join(takeout_dir, row["archive"]), "r|*") as tar:
-                for m in tar:
-                    if m.name == row["src_path"]:
-                        return tar.extractfile(m).read(), "takeout"
+            for _, data in read_members(os.path.join(takeout_dir, row["archive"]), [row["src_path"]]):
+                return data, "takeout"
         except FileNotFoundError:
             pass
     return client.download_item(row["image_key"], is_video=True), "destination"

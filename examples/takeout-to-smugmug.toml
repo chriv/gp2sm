@@ -45,7 +45,7 @@ legacy_dbs = []
 
 # --- Google Takeout import
 [takeout]
-# folder with the Google Takeout .tgz files
+# folder with the Google Takeout archives (.zip or .tgz)
 archives = "takeout"
 # Takeout index database
 index = "takeout_index.db"

@@ -20,7 +20,6 @@ import os
 import re
 import sqlite3
 import sys
-import tarfile
 
 from PIL import Image
 
@@ -28,6 +27,7 @@ from gp2sm.media.convert import render_small
 from gp2sm.organize import planning
 from gp2sm.project import context
 from gp2sm.state import State, now
+from gp2sm.takeout.archive import read_members
 
 log = logging.getLogger("gp2sm.organize.content_match")
 
@@ -144,13 +144,9 @@ def hash_takeout(idx, takeout_dir, wanted, workers):
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
         for archive in sorted({a for a, _ in todo}):
             futures = {}
-            with tarfile.open(os.path.join(takeout_dir, archive), "r|*") as tar:
-                for m in tar:
-                    item_id = todo.get((archive, m.name))
-                    if item_id is None:
-                        continue
-                    data = tar.extractfile(m).read()
-                    futures[pool.submit(render_hashes, data, os.path.splitext(m.name)[1].lower())] = item_id
+            names = {p for a, p in todo if a == archive}
+            for path, data in read_members(os.path.join(takeout_dir, archive), names):
+                futures[pool.submit(render_hashes, data, os.path.splitext(path)[1].lower())] = todo[(archive, path)]
             for n, fut in enumerate(concurrent.futures.as_completed(futures), 1):
                 item_id = futures[fut]
                 try:

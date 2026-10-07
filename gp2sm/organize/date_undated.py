@@ -25,20 +25,20 @@ import os
 import re
 import sqlite3
 import sys
-import tarfile
 from zoneinfo import ZoneInfo
 
 from PIL import Image
 
 from gp2sm.cli import run
 from gp2sm.media import aspect, mp4_dims, mp4_duration
+from gp2sm.media.mp4 import clip_creation_ts
 from gp2sm.organize import planning
 from gp2sm.organize.consolidate import ensure_target, setup_logging
 from gp2sm.organize.content_match import MARGIN_MIN, MATCH_MAX, dhash, hamming, hash_takeout
 from gp2sm.project import context
 from gp2sm.smugmug.client import SmugMugError
 from gp2sm.state import State, now
-from gp2sm.takeout.upload import clip_creation_ts
+from gp2sm.takeout.archive import read_members
 
 log = logging.getLogger("gp2sm.organize.date_undated")
 VIDEO_EXTS = (".mp4", ".mov")
@@ -163,14 +163,12 @@ def cmd_plan(st, cfg, client, args):
         info = {}
         log.info("reading headers of %d Takeout videos", len(wanted))
         for archive in sorted({a for a, _ in wanted}):
-            with tarfile.open(os.path.join(args.takeout_dir, archive), "r|*") as tar:
-                for m in tar:
-                    c = wanted.get((archive, m.name))
-                    if c:
-                        data = tar.extractfile(m).read()
-                        dims = mp4_dims(data)
-                        info[c["item_id"]] = (mp4_duration(data), aspect(*dims) if dims else None,
-                                              dims[0] * dims[1] if dims else None)
+            names = {p for a, p in wanted if a == archive}
+            for path, data in read_members(os.path.join(args.takeout_dir, archive), names):
+                c = wanted[(archive, path)]
+                dims = mp4_dims(data)
+                info[c["item_id"]] = (mp4_duration(data), aspect(*dims) if dims else None,
+                                      dims[0] * dims[1] if dims else None)
         taken_by = {}  # one-to-one: identical twins can each be claimed only once
         for key, (im, cands) in sorted(need_video.items(), key=lambda kv: kv[1][0]["filename"]):
             v = client.video_info(key, im["serial"])

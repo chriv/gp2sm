@@ -2,15 +2,15 @@
 
 Built on the Takeout index (takeout/index.py) and its sidecar/Live Photo pairing (takeout/match.py build_items);
 independent of any destination or legacy database. Items are yielded in a stable order. Reading bytes
-streams the gzip archive; prefer iter_bytes() for many items (one pass per archive).
+streams the archive (.zip or .tgz); prefer iter_bytes() for many items (one pass per archive).
 """
 
 import os
 import sqlite3
-import tarfile
 from collections import defaultdict
 
 from gp2sm.services.base import SourceItem
+from gp2sm.takeout.archive import read_members
 from gp2sm.takeout.match import MOTION_EXTS, build_items
 
 
@@ -79,14 +79,8 @@ class TakeoutSource:
             archive, path = _split(ref)
             wanted[archive].add(path)
         for archive in sorted(wanted):
-            remaining = set(wanted[archive])
-            with tarfile.open(os.path.join(self.takeout_dir, archive), "r|*") as tar:
-                for m in tar:
-                    if m.name in remaining:
-                        yield _ref(archive, m.name), tar.extractfile(m).read()
-                        remaining.discard(m.name)
-                        if not remaining:
-                            break
+            for path, data in read_members(os.path.join(self.takeout_dir, archive), wanted[archive]):
+                yield _ref(archive, path), data
 
     def iter_bytes(self, items):
         by_ref = {i.source_id: i for i in items}
