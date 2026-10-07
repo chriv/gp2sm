@@ -58,6 +58,26 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - Deleting an uploaded photo on SmugMug does **not** make the app upload it again. Editing a photo on the device after it was uploaded does **not** upload a new copy. Deleting a photo on the device does **not** delete it on SmugMug (SmugMug is a backup, not a mirror).
 - So the app's own month galleries rarely need organizing. The cleanup that matters is merging an old upload folder's galleries into the current one, and removing duplicates.
 
+## Album and folder settings (probed 2026-10-07 in a sandbox: probes/probe_settings_*.py)
+
+`OPTIONS` on an album or folder node lists its PATCH parameters with types and allowed values (50 for albums, 19 for folders), but the list isn't the whole truth: some listed values are refused, and some changes "succeed" without happening. Always read a value back after a PATCH.
+
+**Album settings that round-trip** (set, read back, restored): `SmugSearchable` (`No` / `Inherit from User`), `WorldSearchable` (bool), `AllowDownloads`, `LargestSize` (Medium … X5Large, 4K, 5K, Original), `Protected`, `Watermark`, `Share`, `Comments`, `CanRank`, `EXIF`, `Filenames`, `Geography`, `Slideshow`, `Printable`, `HideOwner`, `SortMethod` (Position, Caption, Filename, Date Uploaded, Date Modified, Date Taken), `SortDirection`, `Description`, `Keywords`, `Title`.
+
+**Traps:**
+- **Privacy:** set it on the album, but read it from the album's **node**. `Node.Privacy` is the album's own setting and `Node.EffectivePrivacy` is what applies. `Album.Privacy` reports the *effective* value: an album in a Private folder reads "Private" whatever it is set to, and setting it to Public there returns 200 while appearing unchanged. A Private folder makes everything in it effectively Private. An Unlisted folder does **not** cap a Public album (it stays effectively Public).
+- **`MaxPhotoDownloadSize`** is silently ignored while `AllowDownloads` is off. With downloads on it round-trips, independent of `LargestSize`.
+- **Album `Date`** isn't a PATCH parameter. Sending it returns 200 and changes nothing.
+- **Folder `SmugSearchable` `Local`/`LocalUser`/`Yes` and `WorldSearchable` `HomeOnly`/`Yes`** are listed but refused with 400, even on a Public folder. Only `No` and `Inherit from User` were accepted (account-level settings may be what decides).
+
+**Names and links:**
+- Changing an album's **`Name`** leaves its `UrlName` and links unchanged.
+- Changing **`UrlName`** moves the album's URL, and the **old path stops resolving** (`!urlpathlookup` on it returns no album; nothing redirects). Renaming `UrlName` breaks existing links, so only do it when the owner asks.
+- A `UrlName` that a sibling already uses is refused with **HTTP 409**. With `AutoRename: true` the same PATCH returns 200 and changes nothing (AutoRename doesn't help on PATCH).
+- Two albums in one folder may share the same display `Name`.
+
+**Folder settings that round-trip:** `Privacy` (Public, Unlisted, Private), `SortMethod` (SortIndex, Name, DateAdded, DateModified), `SortDirection`, `Description`, `ShowCoverImage`.
+
 ## Upload
 `POST https://upload.smugmug.com/` with the raw file bytes as the body and these headers:
 `X-Smug-AlbumUri`, `X-Smug-FileName`, `X-Smug-ResponseType: JSON`, `X-Smug-Version: v2`, `Content-MD5` (hex), `Content-Type`.

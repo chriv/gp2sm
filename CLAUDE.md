@@ -64,6 +64,7 @@ The goal is a plugin architecture with any photo service on either end (see `doc
 
 - Google: the Google Photos API can no longer export a library; Google Takeout is the only way out, and it always contains the whole service (no album selection). The legacy v1/v2 tool used the old API; its transfer databases are history, read only through `contrib/legacy_bridge`.
 - SmugMug collect: removing an item from its **original** album deletes every collected copy. Undo a collect by removing the copy in the target only; never delete or empty a source album items were collected from (organize refuses `delete-empty-sources` with collect).
+- SmugMug album settings: read privacy from the album's **node** (`Privacy`, `EffectivePrivacy`); `Album.Privacy` shows the effective value. Several PATCHes return 200 and do nothing (`Date`; `MaxPhotoDownloadSize` while downloads are off; `UrlName` collisions with `AutoRename`). Changing `UrlName` breaks old links. See `docs/smugmug-api.md`.
 - SmugMug converts HEIC to JPEG on upload (`NAME.HEIC` becomes `NAME.JPG`, and the original isn't kept). It re-encodes videos, rejects WebP/ICO/BMP and tiny videos (code 64 or 6), and silently accepts duplicate uploads.
 - `AlbumImage.Date` is the upload time. Capture time comes from `ImageMetadata.DateTimeCreated` (use `_expand=ImageMetadata` on `!images`).
 - Legacy conversion uploads lost their EXIF. Their capture dates come from the legacy transfer DBs (`media_items.creation_timestamp`), joined in `matches`.

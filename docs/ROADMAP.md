@@ -188,7 +188,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 
 **Album management:** bulk audit and repair of album **names** and **settings**, using the same model: inventory → plan (dry run, readable report) → apply with `--yes` → verify. Every change records the album's previous values, so `undo` restores them.
 
-### Stage A5: Probe what can be changed (album settings)
+### Stage A5: Probe what can be changed (album settings). ✅ Done (2026-10-07)
 
 - **Goal:** confirm which album and folder properties the API can read and change, before building on them.
 - **Method:** sandbox-album probes. For each property, read, `PATCH`, read back, then restore. Properties include:
