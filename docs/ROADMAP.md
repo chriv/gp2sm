@@ -292,6 +292,11 @@ Backwards compatibility isn't a goal before the first public release, and the fi
 
 ### Stage A9: Documentation and release
 
+- **Sub-stages:**
+  - A9.1 docs: README with a quickstart, SmugMug API key, Google Takeout, safety and undo, FAQ, troubleshooting, and a config reference generated from the schema (a test keeps it current)
+  - A9.2 release prep: version 3.0.0b1, CHANGELOG, package metadata, issue templates, and a clean-install check of the built wheel
+  - A9.3 going public, each step with the owner's go-ahead: full-history scan and rewrite, force-push, public repository, PyPI upload
+
 - **Deliverables:**
   - **README:** what it does, install, a 10-minute quickstart.
   - **docs/:**

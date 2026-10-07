@@ -1,36 +1,66 @@
 # gp2sm
 
-Tools for moving photo libraries into **SmugMug** and keeping them organized, with every step state-tracked, verified against the server, and undoable where possible.
+Move a photo library into **SmugMug** and keep it organized. Every step is planned before it runs, recorded, checked against SmugMug afterwards, and undoable where SmugMug allows it.
 
-> **Status: in active rework.** The modules below have been used for a real ~35,000-item migration (Google Takeout → SmugMug, with Live Photos and an earlier messy import consolidated). They're being turned into an installable, documented tool. See [`docs/ROADMAP.md`](docs/ROADMAP.md). The earlier v1/v2 script is preserved at the git tag `legacy-v2`.
+> **Status: beta (3.0.0b1).** Used on a real 35,000-item migration (Google Photos → SmugMug, Live Photos included). Expect rough edges; please report them.
 
-## What it does today
+## What it does
 
-- **Import from Google Takeout** (`gp2sm takeout …`). It reads the `.zip` or `.tgz` archives without extracting them, and checks what's already on SmugMug: same bytes, the same picture re-encoded (perceptual hash), or the same video shape. Only genuinely unclear cases are held for you, as side-by-side files you drag into `same/` or `different/`. New items go into month albums. Live Photo clips are paired with their still by capture time and shape and uploaded beside it under the same name. HEIC is converted to JPEG with EXIF kept (or uploaded as is), and a missing capture date is filled in from the Takeout metadata. Each choice is a setting in `gp2sm.toml`.
-- **Consolidate existing SmugMug albums.** It inventories them, links items to a source by hash, name + dimensions or image content (dHash), removes byte-identical duplicates, and moves everything into dated albums.
-- **Sort what's left.** It places unsorted clips beside their stills by capture time + aspect ratio, and dates undated items from evidence (own timestamps, names, video duration and shape, content).
-- **Safety model.** Writes are recorded before they're sent. Outcomes that can't be known (timeouts/5xx) are checked against the server instead of being retried blindly. Anything that changes SmugMug is a dry run unless you add `--yes`. Ctrl-C once stops after the work in flight; twice aborts, and the next run picks up where it left off. `verify` compares the server with the state database.
+- **Import a Google Takeout** (`gp2sm takeout …`). It reads the Takeout `.zip` or `.tgz` archives without extracting them. Before uploading anything, it checks what's already on SmugMug: the same file, the same picture saved differently (compared by appearance), or the same video. Only genuinely unclear cases are held back for you, as side-by-side files you drag into `same/` or `different/`. Everything new goes into month albums. Live Photos arrive as a JPEG with its video clip beside it under the same name. HEIC photos are converted to JPEG with their camera data kept, and missing capture dates are filled in from the Takeout.
+- **Organize what's already on SmugMug** (`gp2sm organize …`). It gathers items from the albums you name (for example a phone's auto-upload album) into month albums. Each item is dated by the camera, the file name, or the album name, and grouped by rules you write (by person, device, file name). Items are moved, or "collected" so the originals stay where the uploader app put them. Identical copies are parked for review.
+- **Tidy album names and settings** (`gp2sm albums …`). It proposes date-sortable names like `2019-06 Beach Trip`, reading the date from the name or from the photos inside, and renames only the display name, so links keep working. It also checks every album against the settings you want (privacy, downloads, sort order, …) and fixes the differences.
+- **Report** (`gp2sm report`). It accounts for what happened to every file: already there, uploaded, held for review, skipped and why. The counts have to add up, and the report says so.
 
-## Running it (current, pre-packaging)
+## Install
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/gp2sm init my-library          # creates my-library/gp2sm.toml (commented) and folders
-.venv/bin/gp2sm auth smugmug             # sign in once; credentials are stored per user, outside the project
-cd my-library && ../.venv/bin/gp2sm status
-
-.venv/bin/gp2sm plan                     # dry: what would happen (Takeout import and/or organize)
-.venv/bin/gp2sm apply --yes              # do it; then: gp2sm verify, gp2sm report
-.venv/bin/gp2sm --help                   # lists all commands
-.venv/bin/python -m pytest -q
+pipx install gp2sm            # or: python -m pip install gp2sm   (Python 3.10 or newer)
+gp2sm --help
 ```
 
-Commands find the project by looking upward from the current folder for `gp2sm.toml` (or use `--project DIR`). The state database, logs, Takeout archives and index all live in the project folder. Commands that change SmugMug take a per-project lock, so two runs can't collide. [`examples/`](examples) has commented configs for common setups.
+From a checkout: `python -m venv .venv && .venv/bin/pip install -e '.[dev]'`.
+
+## Quickstart: Google Photos to SmugMug in about 10 minutes of your time
+
+1. **Get a SmugMug API key** (once): see [docs/smugmug-api-key.md](docs/smugmug-api-key.md).
+2. **Create a project** (a folder holding settings, progress and logs) and sign in:
+   ```bash
+   gp2sm init family-photos          # asks a few questions; writes family-photos/gp2sm.toml
+   gp2sm auth smugmug                # API key and secret, then a 6-digit code from SmugMug
+   cd family-photos
+   ```
+3. **Request a Google Takeout** of Google Photos and put the downloaded archives in `family-photos/takeout/`: see [docs/google-takeout.md](docs/google-takeout.md).
+4. **Plan.** Nothing on SmugMug changes:
+   ```bash
+   gp2sm plan                        # indexes the archives, checks SmugMug, plans every upload
+   gp2sm report                      # reports/report.html: what would happen to every file
+   ```
+   If the plan holds anything for review, run `gp2sm takeout review`, sort the pairs in `review/`, then `gp2sm takeout review --read` and `gp2sm plan` again.
+5. **Upload and check:**
+   ```bash
+   gp2sm apply                       # prepares the files locally, then shows what it would upload
+   gp2sm apply --yes                 # uploads (stop any time with Ctrl-C; run it again to continue)
+   gp2sm verify                      # confirms every upload on SmugMug
+   gp2sm report
+   ```
+
+Every setting (album names, HEIC handling, Live Photo clips, what to skip) is in `gp2sm.toml`, with its help text. See [docs/config.md](docs/config.md).
+
+## Safety
+
+Anything that changes SmugMug is a dry run unless you add `--yes`. Deletions are separate commands that check the server first. Every change is recorded before it's sent. Outcomes that can't be known (a timeout, a server error) are checked against SmugMug before anything is retried. One command at a time can change a project. See [docs/safety.md](docs/safety.md) for what each command can undo.
 
 ## Documentation
 
-- [`docs/ROADMAP.md`](docs/ROADMAP.md): staged plan
-- [`docs/smugmug-api.md`](docs/smugmug-api.md): SmugMug API v2 behavior confirmed by probes, including several undocumented traps
+- [docs/smugmug-api-key.md](docs/smugmug-api-key.md): getting a SmugMug API key
+- [docs/google-takeout.md](docs/google-takeout.md): requesting and downloading a Google Takeout
+- [docs/config.md](docs/config.md): every setting in `gp2sm.toml`
+- [docs/safety.md](docs/safety.md): dry runs, verification, undo, and what can't be undone
+- [docs/faq.md](docs/faq.md): Live Photos, HEIC, rejected file types, album limits, uploader apps
+- [docs/troubleshooting.md](docs/troubleshooting.md)
+- [docs/smugmug-api.md](docs/smugmug-api.md): SmugMug API behavior confirmed by tests, including undocumented traps (for developers)
+- [docs/ROADMAP.md](docs/ROADMAP.md): how the tool was built, and what's next
+- [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 

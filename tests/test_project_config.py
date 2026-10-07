@@ -151,3 +151,9 @@ def test_policy_entries_validate_and_render(tmp_path):
     (tmp_path / "gp2sm.toml").write_text(render({"policy": pols}))
     cfg = load(str(tmp_path))
     assert cfg.tool_settings()["policy"] == pols
+
+
+def test_config_reference_doc_is_current():
+    from gp2sm.project.reference import markdown
+    path = os.path.join(os.path.dirname(__file__), "..", "docs", "config.md")
+    assert open(path).read() == markdown(), "regenerate: python -m gp2sm.project.reference > docs/config.md"
