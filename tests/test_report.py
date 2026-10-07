@@ -74,5 +74,5 @@ def test_renderers_escape_and_mark_problems():
     report = {"project": "<P>", "folder": "F", "in_progress": 0, "runs": [], "targets": [],
               "accounting": {"rows": [], "outcomes": [], "ok": False,
                              "totals": {"type": "all files", "total": 1}}}
-    assert "&lt;P&gt;" in render.to_html(report) and "WARNING" in render.to_html(report)
+    assert "gp2sm report: &lt;P&gt;" in render.to_html(report) and "WARNING" in render.to_html(report)
     assert "WARNING: the counts don't add up" in render.to_markdown(report)

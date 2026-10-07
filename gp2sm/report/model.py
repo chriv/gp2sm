@@ -169,7 +169,10 @@ def build(st, cfg, sources=None, policy_notes=None):
             "findings": [r[0] for r in q("SELECT note FROM album_changes WHERE kind='finding' LIMIT 30")],
         }
     report["runs"] = [dict(r) for r in q("SELECT command, started, finished, status FROM runs "
+                                         "WHERE NOT (command='report' AND finished IS NULL) "
                                          "ORDER BY run_id DESC LIMIT 30")]
-    report["targets"] = [dict(r) for r in q("SELECT name, kind, planned, server_count, checked_at FROM targets "
-                                            "ORDER BY name")]
+    report["targets"] = [dict(r) for r in q(
+        "SELECT t.name, t.kind, (SELECT COUNT(*) FROM plan p WHERE p.target_name=t.name) "
+        "+ (SELECT COUNT(*) FROM uploads u WHERE u.target_name=t.name) AS planned, t.server_count, t.checked_at "
+        "FROM targets t ORDER BY t.name")]
     return report

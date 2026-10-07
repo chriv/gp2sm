@@ -39,7 +39,7 @@ def sections(report):
                  f"Decided by you in review: {_counts(imp['reviewed'])}",
                  f"Uploads: {_counts(imp['uploads'])}; verified on the destination: {imp['verified']}, "
                  f"not yet verified: {imp['unverified']}",
-                 f"Live Photo clips: capture-time gap to their still: {_counts(imp['clip_gaps'])}"]
+                 f"Live Photo clips beside their still, by capture-time gap: {_counts(imp['clip_gaps']) if imp['clip_gaps'] else 'none planned yet'}"]
         if imp["not_planned_notes"]:
             lines.append(f"Not uploaded, and why: {_counts(imp['not_planned_notes'])}")
         lines += [f"Failed: {f['upload_name']} -> {f['target_name']}: {f['error']}" for f in imp["failures"]]
@@ -65,7 +65,7 @@ def sections(report):
 
 
 def to_markdown(report):
-    parts = [f"# {report['project'] or 'gp2sm'} report", "",
+    parts = [f"# gp2sm report: {report['project'] or 'project'}", "",
              f"Destination folder: {report['folder']}", ""]
     for title, kind, content in sections(report):
         parts += [f"## {title}", ""]
@@ -96,8 +96,8 @@ th{font-weight:600}tr:last-child td{font-weight:700}"""
 def to_html(report):
     e = html.escape
     parts = ["<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>",
-             f"<title>{e(report['project'] or 'gp2sm')} report</title><style>{CSS}</style></head><body>",
-             f"<h1>{e(report['project'] or 'gp2sm')} report</h1>",
+             f"<title>gp2sm report: {e(report['project'] or 'project')}</title><style>{CSS}</style></head><body>",
+             f"<h1>gp2sm report: {e(report['project'] or 'project')}</h1>",
              f"<p class='muted'>Destination folder: {e(report['folder'])}</p>"]
     for title, kind, content in sections(report):
         parts.append(f"<h2>{e(title)}</h2>")

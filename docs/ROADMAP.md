@@ -262,7 +262,7 @@ Backwards compatibility isn't a goal before the first public release, and the fi
   - undo didn't mark download-size restores as done (fixed)
   - turning downloads off resets the download size (A7.1)
 
-### Stage A8: Results reporting
+### Stage A8: Results reporting. ✅ Done (2026-10-07; owner to review a real report)
 
 - **Goal:** `gp2sm report` turns a project's state database into a clear, trustworthy account of what happened. Results are the point of the tool, so they get first-class output.
 - **Deliverables:**
@@ -288,6 +288,7 @@ Backwards compatibility isn't a goal before the first public release, and the fi
 - **Sub-stages:**
   - A8.1 `gp2sm report`: the data model and per-file accounting (every source file exactly one outcome, totals checked), evidence, verification and activity; Markdown, HTML, JSON and a per-file CSV in the project's `reports/` folder
   - A8.2 a real check: a one-month slice planned (not uploaded) to produce an in-progress report
+  - Real check result: a one-month slice (348 media files, 9 types) was accounted for exactly once each (298 same picture, 41 clips beside their stills, 8 clips not uploaded yet, 1 BMP skipped by policy), and the report said it was in progress. Polished from it: the title, per-album planned counts for imports, and the report's own run left out of the activity list.
 
 ### Stage A9: Documentation and release
 
