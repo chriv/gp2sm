@@ -15,6 +15,7 @@ dependencies = [
   "Pillow>=10.0",
   "piexif>=1.1",
   "pillow-heif>=0.18",
+  "tomli>=2; python_version < '3.11'",
   "tzdata; sys_platform == 'win32'",  # Windows has no system IANA time zone database for zoneinfo
 ]
 
