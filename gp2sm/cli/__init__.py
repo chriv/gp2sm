@@ -7,10 +7,15 @@ from gp2sm import __version__
 
 COMMANDS = {
     "init": ("gp2sm.project.init", "create a project folder with a commented gp2sm.toml"),
+    "plan": ("gp2sm.cli.verbs:plan", "plan the project's work (dry; nothing on the destination changes)"),
+    "apply": ("gp2sm.cli.verbs:apply", "carry out the plan (dry run unless --yes)"),
+    "verify": ("gp2sm.cli.verbs:verify", "check the destination against what was done"),
+    "report": ("gp2sm.cli.verbs:report", "what was planned and done, and why"),
+    "undo": ("gp2sm.cli.verbs:undo", "undo an organize move for one album (dry run unless --yes)"),
     "status": ("gp2sm.cli.status", "show project settings, credentials, lock and state summary"),
     "services": ("gp2sm.cli.services", "list installed photo services (sources and destinations)"),
     "auth": ("gp2sm.cli.auth", "sign in to a service and manage stored credentials"),
-    "takeout": ("gp2sm.takeout.cli", "import a Google Takeout: inventory, dedupe (more steps coming in A3)"),
+    "takeout": ("gp2sm.takeout.cli", "import a Google Takeout (index, inventory, dedupe, review, plan, stage, upload, verify)"),
     "organize": ("gp2sm.organize.cli", "gather items already on the destination into dated, grouped albums (rules)"),
     "consolidate": ("gp2sm.organize.consolidate", "legacy: the first migration's consolidation (legacy-dated); new projects use organize"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
@@ -39,8 +44,9 @@ def main(argv=None):
     if argv[0] not in COMMANDS:
         print(f"gp2sm: unknown command {argv[0]!r}\n\n{usage()}", file=sys.stderr)
         return 2
-    module = importlib.import_module(COMMANDS[argv[0]][0])
-    return module.main(argv[1:]) or 0
+    target, _, attr = COMMANDS[argv[0]][0].partition(":")
+    entry = getattr(importlib.import_module(target), attr or "main")
+    return entry(argv[1:]) or 0
 
 
 if __name__ == "__main__":

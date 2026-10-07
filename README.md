@@ -19,6 +19,8 @@ python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/gp2sm auth smugmug             # sign in once; credentials are stored per user, outside the project
 cd my-library && ../.venv/bin/gp2sm status
 
+.venv/bin/gp2sm plan                     # dry: what would happen (Takeout import and/or organize)
+.venv/bin/gp2sm apply --yes              # do it; then: gp2sm verify, gp2sm report
 .venv/bin/gp2sm --help                   # lists all commands
 .venv/bin/python -m pytest -q
 ```
