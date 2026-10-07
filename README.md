@@ -13,8 +13,10 @@ Move a photo library into **SmugMug** and keep it organized. Every step is plann
 
 ## Install
 
+gp2sm isn't on PyPI yet (it will be once its interfaces are stable). Install it from GitHub (Python 3.10 or newer):
+
 ```bash
-pipx install gp2sm            # or: python -m pip install gp2sm   (Python 3.10 or newer)
+pipx install git+https://github.com/chriv/gp2sm.git
 gp2sm --help
 ```
 

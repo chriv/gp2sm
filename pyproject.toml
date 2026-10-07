@@ -37,7 +37,7 @@ dependencies = [
 Homepage = "https://github.com/chriv/gp2sm"
 Documentation = "https://github.com/chriv/gp2sm#readme"
 Issues = "https://github.com/chriv/gp2sm/issues"
-Changelog = "https://github.com/chriv/gp2sm/blob/v2/CHANGELOG.md"
+Changelog = "https://github.com/chriv/gp2sm/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.5", "build>=1"]
