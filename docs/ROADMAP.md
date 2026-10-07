@@ -289,6 +289,8 @@ Each step below is its own project (separate config and state), so results stay 
 ### Stage B1: Auto-upload albums
 
 - **iOS uploads need little organizing:** the app already files them by month. The work is merging the old folder's `YYYY-MM` galleries into the current folder's same-month galleries, then removing duplicates (parked, then deleted with `--yes`). Keep the current "Automatic iOS Uploads" folder in place so the app keeps working.
+- **Android uploads** go to an album the user picks, with no month sub-galleries, rolling over to a new numbered album when one fills. These are what organize is for: collect them (originals stay, until it's known whether the Android app re-uploads moved or deleted items) into
+  `{uploader} auto-uploaded {yyyy}-{mm}`, with a rule matching each uploader's album.
 - **Other auto-upload sources** (other apps or devices, conversions): organize into `{uploader} auto-uploaded {yyyy}-{mm}` (e.g. `Sam auto-uploaded 2026-10`), where the group is the uploader's first name (by source folder or device rule). Never remove or rename an uploader's own folder.
 - Small samples first (one month), then the rest; verify after each.
 
