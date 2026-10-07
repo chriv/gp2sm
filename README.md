@@ -15,15 +15,15 @@ Tools for moving photo libraries into **SmugMug** and keeping them organized, wi
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
-cp consolidate.json.example data/consolidate.json   # then edit; data/ is gitignored
-cp smugmug_config.json.example smugmug_config.json  # then fill in credentials
+.venv/bin/gp2sm init my-library          # creates my-library/gp2sm.toml (commented) and folders
+.venv/bin/gp2sm auth smugmug             # sign in once; credentials are stored per user, outside the project
+cd my-library && ../.venv/bin/gp2sm status
 
-.venv/bin/gp2sm --help                 # lists all commands
-.venv/bin/gp2sm consolidate --help
+.venv/bin/gp2sm --help                   # lists all commands
 .venv/bin/python -m pytest -q
 ```
 
-A single `gp2sm` command, project setup (`gp2sm init`) and interactive SmugMug sign-in are planned in the roadmap (stages A0–A2).
+Commands find the project by looking upward from the current folder for `gp2sm.toml` (or use `--project DIR`). The state database, logs, Takeout archives and index all live in the project folder. Commands that change SmugMug take a per-project lock, so two runs can't collide. The older JSON setup (`--config FILE`, or `data/consolidate.json`) still works.
 
 ## Documentation
 

@@ -26,7 +26,7 @@ from PIL import Image
 
 from gp2sm.media.convert import render_small
 from gp2sm.organize import planning
-from gp2sm.smugmug.client import SmugMugClient
+from gp2sm.project import context
 from gp2sm.state import State, now
 
 log = logging.getLogger("gp2sm.organize.content_match")
@@ -204,7 +204,7 @@ def select_sets(idx):
 def cmd_compute(idx, args):
     smug, takeout = select_sets(idx)
     log.info("unlinked SmugMug photos: %d; Takeout stills with a same-name candidate: %d", len(smug), len(takeout))
-    client = SmugMugClient.from_config_file(args.smugmug_config)
+    client = context.client(args.settings)
     hash_smug(idx, client, list(smug), args.workers)
     hash_takeout(idx, args.takeout_dir, {(a, p): i for i, (a, p, _) in takeout.items()}, args.workers)
 
@@ -230,7 +230,7 @@ def cmd_compute(idx, args):
 
 def cmd_apply(idx, args):
     """Record clean matches: Takeout item -> SmugMug image; date the SmugMug copy and re-target it to its month."""
-    cfg = __import__("gp2sm.organize.consolidate", fromlist=["load_config"]).load_config(args.config)
+    cfg = args.settings
     st = State(args.state)
     st.start_run("content_match.apply", vars(args))
     rows = idx.execute("SELECT cm.item_id, cm.image_key, cm.dist, it.google_id, it.taken_ts FROM content_matches cm "
@@ -269,7 +269,7 @@ def cmd_burst_apply(idx, args):
     """Resolve 'review' items of a burst-prone name group (default lp_image): pair frames one-to-one,
     date + re-target the paired SmugMug copies, and release unpaired Takeout stills for upload."""
     import datetime
-    cfg = __import__("gp2sm.organize.consolidate", fromlist=["load_config"]).load_config(args.config)
+    cfg = args.settings
     st = State(args.state)
     st.start_run("content_match.burst_apply", vars(args))
     grp = args.burst_group
@@ -316,16 +316,13 @@ def cmd_burst_apply(idx, args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm content-match", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--index", default="data/takeout_index.db")
-    p.add_argument("--state", default="data/consolidation.db")
-    p.add_argument("--config", default="data/consolidate.json")
-    p.add_argument("--takeout-dir", default="data/takeout")
-    p.add_argument("--smugmug-config", default="smugmug_config.json")
+    context.add_args(p, paths=("index", "state", "takeout_dir"))
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--apply", action="store_true")
     p.add_argument("--burst-apply", action="store_true", help="resolve burst-frame review items (see cmd_burst_apply)")
     p.add_argument("--burst-group", default="lp_image")
     args = p.parse_args(argv)
+    args.settings = context.resolve(args)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
     for noisy in ("urllib3", "requests_oauthlib", "oauthlib"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

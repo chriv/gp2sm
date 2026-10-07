@@ -21,6 +21,8 @@ import sqlite3
 import sys
 from collections import defaultdict
 
+from gp2sm.project import context
+
 log = logging.getLogger("gp2sm.takeout.match")
 
 STILL_EXTS = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".dng", ""}
@@ -116,9 +118,9 @@ def build_items(idx):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm takeout-match", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--index", default="data/takeout_index.db")
-    p.add_argument("--state", default="data/consolidation.db")
+    context.add_args(p, paths=("index", "state"))
     args = p.parse_args(argv)
+    context.resolve(args)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
 
     idx = sqlite3.connect(args.index)

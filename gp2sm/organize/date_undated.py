@@ -33,9 +33,10 @@ from PIL import Image
 
 from gp2sm.media import aspect, mp4_dims, mp4_duration
 from gp2sm.organize import planning
-from gp2sm.organize.consolidate import ensure_target, load_config, setup_logging
+from gp2sm.organize.consolidate import ensure_target, setup_logging
 from gp2sm.organize.content_match import MARGIN_MIN, MATCH_MAX, dhash, hamming, hash_takeout
-from gp2sm.smugmug.client import SmugMugClient, SmugMugError
+from gp2sm.project import context
+from gp2sm.smugmug.client import SmugMugError
 from gp2sm.state import State, now
 from gp2sm.takeout.upload import clip_creation_ts
 
@@ -306,16 +307,16 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm date-undated", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["plan", "apply", "report"])
-    p.add_argument("--config", default="data/consolidate.json")
-    p.add_argument("--index", default="data/takeout_index.db")
-    p.add_argument("--takeout-dir", default="data/takeout")
+    context.add_args(p, paths=("index", "takeout_dir"))
     p.add_argument("--full-scan", action="store_true", help="plan: content-match name-less photos against all Takeout stills")
     p.add_argument("--workers", type=int, default=8)
     args = p.parse_args(argv)
-    cfg = load_config(args.config)
+    cfg = context.resolve(args)
     setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
-    client = SmugMugClient.from_config_file(cfg["smugmug_config"]) if args.command != "report" else None
+    client = context.client(cfg) if args.command != "report" else None
+    if args.command == "apply":
+        context.acquire_lock(cfg["state_db"], "date-undated apply")
     st.start_run(f"date_undated.{args.command}", vars(args))
     try:
         summary = {"plan": cmd_plan, "apply": cmd_apply, "report": cmd_report}[args.command](st, cfg, client, args)

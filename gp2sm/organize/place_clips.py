@@ -31,8 +31,9 @@ import tarfile
 from PIL import Image
 
 from gp2sm.media import aspect, mp4_dims
-from gp2sm.organize.consolidate import load_config, setup_logging
-from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
+from gp2sm.organize.consolidate import setup_logging
+from gp2sm.project import context
+from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import State, now
 from gp2sm.takeout.upload import clip_creation_ts, unique_name
 
@@ -284,10 +285,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm place-clips", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["plan", "upload", "verify", "finalize", "report"])
-    p.add_argument("--config", default="data/consolidate.json")
-    p.add_argument("--index", default="data/takeout_index.db")
-    p.add_argument("--takeout-dir", default="data/takeout")
-    p.add_argument("--stage-dir", default="data/stage")
+    context.add_args(p, paths=("index", "takeout_dir", "stage_dir"))
     p.add_argument("--album", help="unsorted album to place clips from (default: undated video album)")
     p.add_argument("--window", type=int, default=60)
     p.add_argument("--aspect-tol", type=float, default=0.02)
@@ -295,10 +293,12 @@ def main(argv=None):
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--yes", action="store_true", help="finalize: actually remove the old copies")
     args = p.parse_args(argv)
-    cfg = load_config(args.config)
+    cfg = context.resolve(args)
     setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
-    client = SmugMugClient.from_config_file(cfg["smugmug_config"]) if args.command != "report" else None
+    client = context.client(cfg) if args.command != "report" else None
+    if args.command in ("upload", "finalize"):
+        context.acquire_lock(cfg["state_db"], f"place-clips {args.command}")
     st.start_run(f"place_clips.{args.command}", vars(args))
     try:
         summary = {"plan": cmd_plan, "upload": cmd_upload, "verify": cmd_verify, "finalize": cmd_finalize,

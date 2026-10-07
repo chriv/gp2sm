@@ -36,8 +36,9 @@ import piexif
 
 from gp2sm.media.convert import to_jpeg
 from gp2sm.organize import planning
-from gp2sm.organize.consolidate import ensure_target, load_config, setup_logging
-from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
+from gp2sm.organize.consolidate import ensure_target, setup_logging
+from gp2sm.project import context
+from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import State, now
 
 log = logging.getLogger("gp2sm.takeout.upload")
@@ -477,10 +478,7 @@ def cmd_report(st, cfg, args):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm takeout-upload", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default="data/consolidate.json")
-    p.add_argument("--index", default="data/takeout_index.db")
-    p.add_argument("--takeout-dir", default="data/takeout")
-    p.add_argument("--stage-dir", default="data/stage")
+    context.add_args(p, paths=("index", "takeout_dir", "stage_dir"))
     p.add_argument("command", choices=["plan", "stage", "upload", "verify", "report", "remove"])
     p.add_argument("ids", nargs="*", help="remove: upload ids")
     p.add_argument("--yes", action="store_true", help="remove: actually delete (default dry run)")
@@ -490,11 +488,12 @@ def main(argv=None):
     p.add_argument("--limit", type=int)
     p.add_argument("--workers", type=int, default=4)
     args = p.parse_args(argv)
-    cfg = load_config(args.config)
+    cfg = context.resolve(args)
     setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
-    client = (SmugMugClient.from_config_file(cfg["smugmug_config"])
-              if args.command in ("upload", "verify", "remove") else None)
+    client = context.client(cfg) if args.command in ("upload", "verify", "remove") else None
+    if args.command in ("upload", "remove"):
+        context.acquire_lock(cfg["state_db"], f"takeout-upload {args.command}")
     st.start_run(f"takeout_upload.{args.command}", vars(args))
     try:
         if args.command == "plan":

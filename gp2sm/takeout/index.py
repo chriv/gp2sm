@@ -17,6 +17,8 @@ import sys
 import tarfile
 import time
 
+from gp2sm.project import context
+
 log = logging.getLogger("gp2sm.takeout.index")
 
 SCHEMA = """
@@ -63,10 +65,20 @@ def index_archive(path):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm takeout-index", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("archives", nargs="+")
-    p.add_argument("--db", default="data/takeout_index.db")
+    p.add_argument("archives", nargs="*", help="Takeout .tgz files (default: the project's takeout folder)")
+    context.add_args(p, paths=("db", "takeout_dir"))
     p.add_argument("--force", action="store_true", help="re-index archives already indexed")
     args = p.parse_args(argv)
+    if args.project or args.config or not args.archives or args.db is None:
+        try:
+            context.resolve(args)
+        except context.NoProject:
+            if not args.archives:
+                raise
+            args.db = args.db or context.LEGACY_PATHS["db"]
+    if not args.archives:
+        args.archives = sorted(os.path.join(args.takeout_dir, f) for f in os.listdir(args.takeout_dir)
+                               if f.endswith((".tgz", ".tar.gz")))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
 
     db = sqlite3.connect(args.db)

@@ -30,7 +30,8 @@ import sys
 import uuid
 
 from gp2sm.organize import planning
-from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
+from gp2sm.project import context
+from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import State, now
 
 log = logging.getLogger("gp2sm.organize.consolidate")
@@ -634,6 +635,7 @@ COMMANDS = {
     "delete-duplicates": cmd_delete_duplicates, "delete-empty-sources": cmd_delete_empty_sources,
     "delete-empty-targets": cmd_delete_empty_targets,
 }
+WRITES = {"apply", "undo", "delete-duplicates", "delete-empty-sources", "delete-empty-targets", "reconcile"}
 NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-duplicates", "delete-empty-sources",
                 "delete-empty-targets"}
 
@@ -641,7 +643,7 @@ NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-dup
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm consolidate", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default="data/consolidate.json")
+    context.add_args(p)
     p.add_argument("--debug", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("inventory")
@@ -669,10 +671,12 @@ def main(argv=None):
     s.add_argument("target", help="exact target album name to move back out")
     args = p.parse_args(argv)
 
-    cfg = load_config(args.config)
+    cfg = context.resolve(args)
     setup_logging(cfg["log_file"], args.debug)
     st = State(cfg["state_db"])
-    client = SmugMugClient.from_config_file(cfg["smugmug_config"]) if args.command in NEEDS_CLIENT else None
+    client = context.client(cfg) if args.command in NEEDS_CLIENT else None
+    if args.command in WRITES and getattr(args, "yes", True) is not False and not getattr(args, "dry_run", False):
+        context.acquire_lock(cfg["state_db"], f"consolidate {args.command}")
     st.start_run(args.command, vars(args))
     try:
         summary = COMMANDS[args.command](st, cfg, client, args)
