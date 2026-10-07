@@ -20,7 +20,7 @@ GP2SM_LIVE_SMUGMUG=smugmug_config.json .venv/bin/python -m pytest -q -m live   #
 ```
 
 Consolidation pipeline (`gp2sm consolidate <step>`; each step can be rerun; state lives in `data/consolidation.db`):
-`inventory → import-legacy → match → plan → report → apply [--dry-run|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
+`inventory → import-legacy → match → plan → report → apply [--yes|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
 
 Takeout pipeline (archives in `data/takeout/`, all gitignored):
 `gp2sm takeout-index data/takeout/*.tgz` → `gp2sm takeout-match` → `gp2sm content-match [--apply]` → `gp2sm takeout-upload plan|stage|upload|verify|report|remove`, then `gp2sm place-clips plan|upload|verify|finalize` and `gp2sm date-undated plan|apply`.
@@ -39,7 +39,7 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
   - `date_undated.py`: evidence chain for undated items, server-confirmed moves
 - `state/`: the SQLite schema, plus `migrations.py` (ordered, versioned, idempotent steps recorded in `schema_history`; new DBs are created at LATEST; to add one, append a step, update SCHEMA, and test an upgrade from the previous version). `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`. Specific TODOs for a neutral, versioned schema are in `state/__init__.py`.
 - `media/`: `mp4.py` (MP4 header parsing: duration, dimensions, aspect) and `convert.py` (cross-platform HEIC/any→JPEG via Pillow + pillow-heif; original EXIF bytes passed through untouched, Orientation reset to 1 since libheif applies the rotation; `render_small` for hashing; optional `sips` backend on macOS).
-- `cli/`: the `gp2sm <command>` dispatcher.
+- `cli/`: the `gp2sm <command>` dispatcher, `status`, `services`, `auth`, and `run.py`, which every tool uses: `add_yes` (anything that changes the destination is a dry run without `--yes`), `install_sigint`/`Stop` (first Ctrl-C finishes the work in flight; second aborts), `run_command` (records the run as ok/stopped/interrupted/failed, releases the project lock, exit 130 on abort) and `Progress`.
 
 ## Modularity rule (until Stage A1 adds the service layer)
 

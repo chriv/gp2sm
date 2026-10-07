@@ -91,7 +91,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 - **Tests:** unit tests per module. Media tests use only generated files. A migration test upgrades a synthetic v1 database.
 - **Exit:** all earlier behavior is reproduced on synthetic data. No module imports the CLI.
 
-### Stage A2: Projects, config and command-line UX
+### Stage A2: Projects, config and command-line UX. ✅ Done (2026-10-06)
 
 - **Goal:** a new user can reach a reviewed dry-run plan by following the README, with no code reading.
 - **Deliverables:**
@@ -107,6 +107,13 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - CLI smoke tests against the SmugMug fake
   - the lock file prevents concurrent runs
 - **Exit:** someone following only the README completes `init` → `plan` (dry run) on a sandbox account.
+- **Sub-stages** (one commit each; CI passed before the next):
+  - A2.1 project config (`gp2sm.toml`) with schema validation
+  - A2.2 per-user credential store (mode-0600 files in the user config dir) and `gp2sm auth` with the built-in SmugMug PIN sign-in
+  - A2.3 `gp2sm init` writes a commented `gp2sm.toml`
+  - A2.4 every command resolves the project (or legacy JSON), takes paths and credentials from it, and takes a per-project lock for destination writes; `gp2sm status`
+  - A2.5 dry run unless `--yes` for every destination write, progress display, consistent Ctrl-C handling and run bookkeeping; example configs; `gp2sm services`
+- **Moved to A4:** the single top-level verb set (`gp2sm plan|apply|verify|undo|report` across pipelines). It needs the generalized pipeline, so for now each pipeline keeps its own verbs (`gp2sm consolidate plan`, `gp2sm takeout-upload upload`, …), all following the same rules. The OS keyring is optional for later; the 0600 file store covers it.
 
 ### Stage A3: Generalized Takeout importer
 

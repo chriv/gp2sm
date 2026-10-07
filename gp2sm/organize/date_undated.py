@@ -20,7 +20,6 @@ Moves are reversible. Live Photo clips and stills go to photo month albums; regu
 import argparse
 import datetime
 import io
-import json
 import logging
 import os
 import re
@@ -31,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image
 
+from gp2sm.cli import run
 from gp2sm.media import aspect, mp4_dims, mp4_duration
 from gp2sm.organize import planning
 from gp2sm.organize.consolidate import ensure_target, setup_logging
@@ -249,8 +249,16 @@ def cmd_plan(st, cfg, client, args):
 
 def cmd_apply(st, cfg, client, args):
     rows = [dict(r) for r in st.q("SELECT * FROM datings WHERE status='planned' ORDER BY target_name, name")]
+    if not args.yes:
+        for r in rows:
+            print(f"  would move {r['name']} -> {r['target_name']} ({r['method']})")
+        print(f"  {len(rows)} items into {len({r['target_name'] for r in rows})} albums")
+        run.dry_run_footer()
+        return None
     if not rows:
         return {"moved": 0}
+    run.install_sigint()
+    progress = run.Progress(len(rows), "dating")
     folder = client.ensure_folder_path(client.root_folder(), cfg["target_folder"])
     album_of = {name: st.one("SELECT album_key FROM targets WHERE name=?", name) for name in {r["from_album"] for r in rows}}
     out = {"moved": 0, "failed": 0}
@@ -260,6 +268,8 @@ def cmd_apply(st, cfg, client, args):
         dest = ensure_target(st, cfg, client, folder, target)
         st.db.commit()
         for r in [x for x in rows if x["target_name"] == target]:
+            if run.Stop.requested:
+                break
             ref = client.item_ref(album_of[r["from_album"]], r["item_id"], r["serial"])
             try:
                 client.move_items(dest, [ref])
@@ -291,7 +301,9 @@ def cmd_apply(st, cfg, client, args):
                 st.event("item_dated", commit=False, item=r["item_id"], method=r["method"], target=target)
                 out["moved"] += 1
             st.db.commit()
+            progress.update(failed=int(not ok))
         log.info("-> %s done", target)
+    progress.close()
     return out
 
 
@@ -310,25 +322,17 @@ def main(argv=None):
     context.add_args(p, paths=("index", "takeout_dir"))
     p.add_argument("--full-scan", action="store_true", help="plan: content-match name-less photos against all Takeout stills")
     p.add_argument("--workers", type=int, default=8)
+    run.add_yes(p, "move the items (apply)")
     args = p.parse_args(argv)
     cfg = context.resolve(args)
     setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command != "report" else None
-    if args.command == "apply":
-        context.acquire_lock(cfg["state_db"], "date-undated apply")
-    st.start_run(f"date_undated.{args.command}", vars(args))
-    try:
-        summary = {"plan": cmd_plan, "apply": cmd_apply, "report": cmd_report}[args.command](st, cfg, client, args)
-    except BaseException as e:
-        st.db.rollback()
-        st.event("run_failed", level="error", error=repr(e))
-        st.finish_run("failed", {"error": repr(e)})
-        raise
-    st.finish_run("ok", summary)
-    if summary is not None:
-        print(json.dumps(summary, indent=1, default=str))
-    return 0
+    lock = None
+    if args.command == "apply" and args.yes:
+        lock = context.acquire_lock(cfg["state_db"], "date-undated apply")
+    command = {"plan": cmd_plan, "apply": cmd_apply, "report": cmd_report}[args.command]
+    return run.run_command(st, f"date_undated.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
 
 
 if __name__ == "__main__":

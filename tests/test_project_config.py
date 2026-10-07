@@ -1,3 +1,7 @@
+import glob
+import os
+import shutil
+
 import pytest
 
 from gp2sm.project.config import ConfigError, find_project, load, validate
@@ -77,3 +81,9 @@ def test_tool_settings_cover_every_setting_the_tools_use(tmp_path):
     from gp2sm.organize.consolidate import DEFAULTS
     settings = load(write(tmp_path, GOOD)).tool_settings()
     assert set(DEFAULTS) <= set(settings)
+
+
+@pytest.mark.parametrize("example", sorted(glob.glob(os.path.join(os.path.dirname(__file__), "..", "examples", "*.toml"))))
+def test_example_configs_are_valid(example, tmp_path):
+    shutil.copy(example, tmp_path / "gp2sm.toml")
+    load(str(tmp_path))

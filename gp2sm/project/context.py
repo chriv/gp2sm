@@ -114,6 +114,18 @@ def acquire_lock(state_db, label):
             continue
         with os.fdopen(fd, "w") as f:
             f.write(f"{os.getpid()} {label}")
-        atexit.register(lambda: os.path.exists(path) and os.remove(path))
+        atexit.register(release_lock, path)
         return path
     raise Locked(f"could not acquire {path}")
+
+
+def release_lock(path):
+    """Remove the lock if this process still holds it (idempotent)."""
+    if not path:
+        return
+    try:
+        pid = int(open(path).read().split(" ", 1)[0])
+    except (OSError, ValueError):
+        return
+    if pid == os.getpid():
+        os.remove(path)

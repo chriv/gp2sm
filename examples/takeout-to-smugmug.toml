@@ -1,0 +1,58 @@
+# Example: import a Google Takeout export into dated month albums on SmugMug.
+# Put the Takeout .tgz files in takeout/, then: gp2sm takeout-index, takeout-match, takeout-upload plan/stage/upload.
+# gp2sm project configuration. Paths are relative to this folder.
+# Reference: every key, its meaning and default, is listed below.
+
+# --- General
+[project]
+# a name for this project (shown in reports)
+name = "Family photos"
+# time zone for capture dates and month albums, e.g. America/New_York
+timezone = "America/Chicago"
+
+# --- Where items go
+[destination]
+# destination service (see `gp2sm services`)
+service = "smugmug"
+# name of the stored credentials (see `gp2sm auth`)
+credentials = "smugmug"
+# folder that holds this project's albums
+folder = "Family Photos"
+
+# --- Album names and limits
+[albums]
+# dated album name; {yyyy} and {mm} come from the capture date
+photo = "Photos {yyyy}-{mm}"
+# dated album for videos (same as photo keeps them together)
+video = "Photos {yyyy}-{mm}"
+# album for photos with no confident date
+undated_photo = "Photos Undated"
+# album for videos with no confident date
+undated_video = "Videos Undated"
+# album for byte-identical extra copies (moved, not deleted)
+duplicates = "Duplicates (review)"
+# split an album into '- Part N' above this many items
+soft_cap = 4000
+# never put more than this many items in one album
+hard_cap = 5000
+
+# --- Reorganizing existing albums (`gp2sm consolidate`)
+[consolidate]
+# substrings of album paths to consolidate from
+sources = []
+# optional legacy transfer databases (Google item lists) for dating
+legacy_dbs = []
+
+# --- Google Takeout import
+[takeout]
+# folder with the Google Takeout .tgz files
+archives = "takeout"
+# Takeout index database
+index = "takeout_index.db"
+
+# --- Performance
+[run]
+# items per batch move
+move_batch_size = 25
+# parallel network workers
+workers = 8

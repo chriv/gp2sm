@@ -21,7 +21,6 @@ destination (last resort; a re-encoded rendition, not the original).
 import argparse
 import concurrent.futures
 import datetime
-import json
 import logging
 import os
 import sqlite3
@@ -30,6 +29,7 @@ import tarfile
 
 from PIL import Image
 
+from gp2sm.cli import run
 from gp2sm.media import aspect, mp4_dims
 from gp2sm.organize.consolidate import setup_logging
 from gp2sm.project import context
@@ -174,30 +174,61 @@ def cmd_plan(st, cfg, client, args):
 
 
 def cmd_upload(st, cfg, client, args):
-    rows = [dict(r) for r in st.q("SELECT * FROM placements WHERE status IN ('planned','unknown') ORDER BY new_target, new_name")]
+    unknown = st.one("SELECT COUNT(*) FROM placements WHERE status='unknown'")
+    if unknown:
+        # Re-uploading these blindly could duplicate them; verify finds them on the server or re-plans them.
+        log.warning("%d uploads from an earlier run have an unknown outcome: run `gp2sm place-clips verify` first",
+                    unknown)
+    rows = [dict(r) for r in st.q("SELECT * FROM placements WHERE status='planned' ORDER BY new_target, new_name")]
     if args.limit:
         rows = rows[:args.limit]
+    if not args.yes:
+        by_album = {}
+        for r in rows:
+            by_album[r["new_target"]] = by_album.get(r["new_target"], 0) + 1
+        for name, n in sorted(by_album.items()):
+            print(f"  would upload {n:5} clips -> {name}")
+        print(f"  {len(rows)} clips into {len(by_album)} albums")
+        run.dry_run_footer()
+        return None
+    run.install_sigint()
     album_ids = {n: st.one("SELECT album_key FROM targets WHERE name=?", n) for n in {r["new_target"] for r in rows}}
 
     def one(r):
         return client.upload_file(album_ids[r["new_target"]], r["source_path"], r["new_name"], "video/mp4")
 
     out = {"uploaded": 0, "failed": 0, "unknown": 0}
+    # Recorded before sending: if this run is killed, `verify` looks these up on the server instead of
+    # them being uploaded twice.
+    st.db.executemany("UPDATE placements SET status='unknown', updated_at=? WHERE placement_id=?",
+                      [(now(), r["placement_id"]) for r in rows])
+    st.db.commit()
+    progress = run.Progress(len(rows), "uploading clips")
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
         futures = {pool.submit(one, r): r for r in rows}
         for fut in concurrent.futures.as_completed(futures):
             r = futures[fut]
+            if run.Stop.requested:
+                for f in futures:
+                    f.cancel()  # only cancels uploads that haven't started
+            if fut.cancelled():
+                st.db.execute("UPDATE placements SET status='planned', updated_at=? WHERE placement_id=?",
+                              (now(), r["placement_id"]))
+                st.db.commit()
+                continue
             try:
                 item = fut.result()
                 st.db.execute("UPDATE placements SET status='uploaded', new_item_id=?, new_item_ref=?, last_error=NULL, "
                               "updated_at=? WHERE placement_id=?", (item["item_id"], item["item_ref"], now(), r["placement_id"]))
-                out["uploaded"] += 1
+                status = "uploaded"
             except SmugMugError as e:
                 status = "unknown" if e.ambiguous else "failed"
                 st.db.execute("UPDATE placements SET status=?, last_error=?, updated_at=? WHERE placement_id=?",
                               (status, str(e)[:500], now(), r["placement_id"]))
-                out[status] += 1
+            out[status] += 1
             st.db.commit()
+            progress.update(failed=int(status == "failed"))
+    progress.close()
     st.event("placements_uploaded", **out)
     return out
 
@@ -230,10 +261,11 @@ def cmd_verify(st, cfg, client, args):
 def cmd_finalize(st, cfg, client, args):
     rows = [dict(r) for r in st.q("SELECT * FROM placements WHERE status='verified'")]
     if not args.yes:
-        log.info("dry run: would remove %d old copies from their unsorted album (new copies verified). "
-                 "Pass --yes to remove.", len(rows))
-        return {"would_remove": len(rows)}
+        print(f"  would remove {len(rows)} old copies from their unsorted album (new copies verified)")
+        run.dry_run_footer()
+        return None
     out = {"removed": 0, "already_gone": 0, "failed": 0}
+    progress = run.Progress(len(rows), "removing old copies")
 
     def remove(r):  # worker thread: network only, no database access
         try:
@@ -245,7 +277,7 @@ def cmd_finalize(st, cfg, client, args):
             return r, "failed", str(e)
 
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
-        for n, (r, result, err) in enumerate(pool.map(remove, rows), 1):
+        for r, result, err in pool.map(remove, rows):
             out[result] += 1
             if result == "failed":
                 st.db.execute("UPDATE placements SET last_error=?, updated_at=? WHERE placement_id=?",
@@ -260,9 +292,8 @@ def cmd_finalize(st, cfg, client, args):
                 st.event("clip_placed", commit=False, upload_id=r["upload_id"], old=r["old_item_ref"],
                          new=r["new_item_ref"], target=r["new_target"], name=r["new_name"])
             st.db.commit()
-            if n % 250 == 0:
-                log.info("finalize: %d/%d (removed %d, already gone %d, failed %d)", n, len(rows), out["removed"],
-                         out["already_gone"], out["failed"])
+            progress.update(failed=int(result == "failed"))
+    progress.close()
     for name in {r["new_target"] for r in rows}:
         try:
             client.set_sort_by_filename(st.one("SELECT album_key FROM targets WHERE name=?", name))
@@ -291,27 +322,18 @@ def main(argv=None):
     p.add_argument("--aspect-tol", type=float, default=0.02)
     p.add_argument("--limit", type=int)
     p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--yes", action="store_true", help="finalize: actually remove the old copies")
+    run.add_yes(p, "upload (upload) / remove the old copies (finalize)")
     args = p.parse_args(argv)
     cfg = context.resolve(args)
     setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command != "report" else None
-    if args.command in ("upload", "finalize"):
-        context.acquire_lock(cfg["state_db"], f"place-clips {args.command}")
-    st.start_run(f"place_clips.{args.command}", vars(args))
-    try:
-        summary = {"plan": cmd_plan, "upload": cmd_upload, "verify": cmd_verify, "finalize": cmd_finalize,
-                   "report": cmd_report}[args.command](st, cfg, client, args)
-    except BaseException as e:
-        st.db.rollback()
-        st.event("run_failed", level="error", error=repr(e))
-        st.finish_run("failed", {"error": repr(e)})
-        raise
-    st.finish_run("ok", summary)
-    if summary is not None:
-        print(json.dumps(summary, indent=1))
-    return 0
+    lock = None
+    if args.command in ("upload", "finalize") and args.yes:
+        lock = context.acquire_lock(cfg["state_db"], f"place-clips {args.command}")
+    command = {"plan": cmd_plan, "upload": cmd_upload, "verify": cmd_verify, "finalize": cmd_finalize,
+               "report": cmd_report}[args.command]
+    return run.run_command(st, f"place_clips.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
 
 
 if __name__ == "__main__":

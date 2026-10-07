@@ -122,3 +122,15 @@ def test_status_summarizes_state(store):
     status.main(["--project", str(root)], show=lines.append)
     text = "\n".join(lines)
     assert "schema version" in text and "plan" in text
+
+
+def test_release_lock_only_removes_own_lock(tmp_path):
+    db = str(tmp_path / "state.db")
+    path = context.acquire_lock(db, "mine")
+    context.release_lock(path)
+    assert not os.path.exists(path)
+    with open(path, "w") as f:
+        f.write(f"{os.getppid()} someone else")
+    context.release_lock(path)
+    assert os.path.exists(path)
+    context.release_lock(None)

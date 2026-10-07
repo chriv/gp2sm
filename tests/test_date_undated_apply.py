@@ -29,9 +29,18 @@ def st(tmp_path):
 
 def test_move_is_confirmed_on_server_and_silent_noops_fail(st):
     fake = FakeSmugMug(albums={"A_Undated": {"k1", "k2"}}, processing={"k2"})
-    out = date_undated.cmd_apply(st, CFG, fake, argparse.Namespace())
+    out = date_undated.cmd_apply(st, CFG, fake, argparse.Namespace(yes=True))
     assert out == {"moved": 1, "failed": 1}
     status = dict(st.q("SELECT ref_id, status FROM datings"))
     assert status == {"k1": "done", "k2": "failed"}            # the ignored move is not recorded as done
     assert fake.albums["A_P202307"] == {"k1"} and "k2" in fake.albums["A_Undated"]
     assert st.one("SELECT target_name FROM plan WHERE image_key='k1'") == "P 2023-07"
+
+
+def test_apply_without_yes_is_a_dry_run(st, capsys):
+    fake = FakeSmugMug(albums={"A_Undated": {"k1", "k2"}})
+    assert date_undated.cmd_apply(st, CFG, fake, argparse.Namespace(yes=False)) is None
+    out = capsys.readouterr().out
+    assert "would move k1.jpg -> P 2023-07" in out and "Dry run" in out
+    assert fake.albums == {"A_Undated": {"k1", "k2"}}
+    assert dict(st.q("SELECT ref_id, status FROM datings")) == {"k1": "planned", "k2": "planned"}

@@ -24,11 +24,11 @@ import fnmatch
 import json
 import logging
 import os
-import signal
 import sqlite3
 import sys
 import uuid
 
+from gp2sm.cli import run
 from gp2sm.organize import planning
 from gp2sm.project import context
 from gp2sm.smugmug.client import NotFound, SmugMugError
@@ -271,19 +271,6 @@ def cmd_report(st, cfg, client, args):
 
 # -------------------------------------------------------------------- apply
 
-class Stop:
-    requested = False
-
-
-def _install_sigint():
-    def handler(sig, frame):
-        if Stop.requested:
-            raise KeyboardInterrupt
-        Stop.requested = True
-        log.warning("stop requested; finishing current batch (Ctrl-C again to abort immediately)")
-    signal.signal(signal.SIGINT, handler)
-
-
 def ensure_target(st, cfg, client, folder_node_uri, name):
     row = st.q("SELECT * FROM targets WHERE name=?", name)[0]
     if row["album_key"]:
@@ -383,7 +370,7 @@ def move_batch(st, client, target_key, items, batch_id):
 
 def cmd_apply(st, cfg, client, args):
     stuck = [r[0] for r in st.q("SELECT image_key FROM plan WHERE status IN ('in_progress','unknown')")]
-    if stuck and not args.dry_run:
+    if stuck and args.yes:
         log.info("reconciling %d in-progress/unknown items from a previous run", len(stuck))
         reconcile_keys(st, client, stuck)
 
@@ -396,18 +383,24 @@ def cmd_apply(st, cfg, client, args):
         targets = [t for t in targets if t["kind"] in args.kind]
     targets.sort(key=lambda t: (KIND_ORDER.get(t["kind"], 9), t["name"]))
     limit = args.limit
-    if args.dry_run:
+    if not args.yes:
         for t in targets:
             print(f"  would move {t['pending']:5} -> {t['name']} ({t['kind']})")
-        print(f"  {sum(t['pending'] for t in targets)} items across {len(targets)} albums (limit {limit})")
+        total = sum(t["pending"] for t in targets)
+        print(f"  {total if limit is None else min(total, limit)} items across {len(targets)} albums"
+              + (f" (limit {limit})" if limit is not None else ""))
+        if stuck:
+            print(f"  plus {len(stuck)} items from an earlier run to check against the server first")
+        run.dry_run_footer()
         return None
 
-    _install_sigint()
+    run.install_sigint()
+    progress = run.Progress(min(sum(t["pending"] for t in targets), limit or 10**12), "moving")
     folder_uri = client.ensure_folder_path(client.root_folder(), cfg["target_folder"])
     totals = {"moved": 0, "failed": 0, "albums": 0}
     consecutive_failures = 0
     for t in targets:
-        if Stop.requested or (limit is not None and totals["moved"] + totals["failed"] >= limit):
+        if run.Stop.requested or (limit is not None and totals["moved"] + totals["failed"] >= limit):
             break
         target_key = ensure_target(st, cfg, client, folder_uri, t["name"])
         st.db.commit()
@@ -427,7 +420,7 @@ def cmd_apply(st, cfg, client, args):
         bs = args.batch_size or cfg["move_batch_size"]
         # batch within a single source album
         i = 0
-        while i < len(rows) and not Stop.requested:
+        while i < len(rows) and not run.Stop.requested:
             src = rows[i]["current_album_key"]
             batch = [rows[i]]
             i += 1
@@ -437,15 +430,17 @@ def cmd_apply(st, cfg, client, args):
             done, failed = move_batch(st, client, target_key, batch, uuid.uuid4().hex[:12])
             totals["moved"] += len(done)
             totals["failed"] += len(failed)
+            progress.update(len(done) + len(failed), failed=len(failed))
             consecutive_failures = consecutive_failures + 1 if failed and not done else 0
             if consecutive_failures >= cfg["max_consecutive_failures"]:
                 log.error("too many consecutive failed batches; stopping")
-                Stop.requested = True
+                run.Stop.requested = True
         count = client.album_item_count(target_key)
         st.db.execute("UPDATE targets SET server_count=?, checked_at=? WHERE name=?", (count, now(), t["name"]))
         st.db.commit()
         log.info("   %s now has %s items (moved so far %d, failed %d)", t["name"], count, totals["moved"],
                  totals["failed"])
+    progress.close()
     return totals
 
 
@@ -611,9 +606,17 @@ def cmd_undo(st, cfg, client, args):
         "SELECT p.image_key, i.serial, i.src_album_key, t.album_key AS target_key FROM plan p "
         "JOIN images i USING(image_key) JOIN targets t ON t.name=p.target_name "
         "WHERE p.target_name=? AND p.status='done' ORDER BY i.src_album_key", args.target)]
+    if not args.yes:
+        sources = {r["src_album_key"] for r in rows}
+        print(f"  would move {len(rows)} items from {args.target!r} back to {len(sources)} source albums")
+        run.dry_run_footer()
+        return None
     log.info("moving %d items from %r back to their source albums", len(rows), args.target)
+    run.install_sigint()
     moved = 0
     for src in sorted({r["src_album_key"] for r in rows}):
+        if run.Stop.requested:
+            break
         group = [r for r in rows if r["src_album_key"] == src]
         for i in range(0, len(group), cfg["move_batch_size"]):
             batch = group[i:i + cfg["move_batch_size"]]
@@ -635,7 +638,7 @@ COMMANDS = {
     "delete-duplicates": cmd_delete_duplicates, "delete-empty-sources": cmd_delete_empty_sources,
     "delete-empty-targets": cmd_delete_empty_targets,
 }
-WRITES = {"apply", "undo", "delete-duplicates", "delete-empty-sources", "delete-empty-targets", "reconcile"}
+WRITES = {"apply", "undo", "delete-duplicates", "delete-empty-sources", "delete-empty-targets"}
 NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-duplicates", "delete-empty-sources",
                 "delete-empty-targets"}
 
@@ -654,7 +657,7 @@ def main(argv=None):
     s = sub.add_parser("report")
     s.add_argument("--targets", action="store_true", help="list every target album")
     s = sub.add_parser("apply")
-    s.add_argument("--dry-run", action="store_true")
+    run.add_yes(s, "move the items")
     s.add_argument("--limit", type=int, help="max items to move this run")
     s.add_argument("--target", action="append", help="only these target album names (glob ok; repeatable)")
     s.add_argument("--kind", action="append", choices=list(KIND_ORDER), help="only these target kinds")
@@ -664,32 +667,25 @@ def main(argv=None):
     sub.add_parser("verify")
     for name in ("delete-duplicates", "delete-empty-sources", "delete-empty-targets"):
         s = sub.add_parser(name)
-        s.add_argument("--yes", action="store_true", help="actually delete (permanent); default is a dry run")
+        run.add_yes(s, "delete (permanent)")
         if name == "delete-empty-targets":
             s.add_argument("--name", action="append", help="only target albums matching this glob (repeatable)")
     s = sub.add_parser("undo")
     s.add_argument("target", help="exact target album name to move back out")
+    run.add_yes(s, "move the items back")
     args = p.parse_args(argv)
 
     cfg = context.resolve(args)
     setup_logging(cfg["log_file"], args.debug)
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command in NEEDS_CLIENT else None
-    if args.command in WRITES and getattr(args, "yes", True) is not False and not getattr(args, "dry_run", False):
-        context.acquire_lock(cfg["state_db"], f"consolidate {args.command}")
-    st.start_run(args.command, vars(args))
-    try:
-        summary = COMMANDS[args.command](st, cfg, client, args)
-    except BaseException as e:
-        st.db.rollback()
-        st.event("run_failed", level="error", error=repr(e))
-        st.finish_run("failed", {"error": repr(e)})
-        raise
-    status = "stopped" if Stop.requested else "ok"
-    st.finish_run(status, summary)
-    if summary is not None:
-        print(json.dumps(summary, indent=1, default=str))
-    return 0
+    lock = None
+    if args.command in WRITES and args.yes:
+        lock = context.acquire_lock(cfg["state_db"], f"consolidate {args.command}")
+    code = run.run_command(st, args.command, args, lambda: COMMANDS[args.command](st, cfg, client, args), lock=lock)
+    if args.command.startswith("delete-") and not args.yes:
+        run.dry_run_footer()
+    return code
 
 
 if __name__ == "__main__":

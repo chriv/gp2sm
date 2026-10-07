@@ -8,6 +8,7 @@ from gp2sm import __version__
 COMMANDS = {
     "init": ("gp2sm.project.init", "create a project folder with a commented gp2sm.toml"),
     "status": ("gp2sm.cli.status", "show project settings, credentials, lock and state summary"),
+    "services": ("gp2sm.cli.services", "list installed photo services (sources and destinations)"),
     "auth": ("gp2sm.cli.auth", "sign in to a service and manage stored credentials"),
     "consolidate": ("gp2sm.organize.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),

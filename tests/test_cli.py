@@ -23,3 +23,11 @@ def test_unknown_command_exits_2(capsys):
 def test_every_command_module_has_main(name):
     import importlib
     assert callable(importlib.import_module(cli.COMMANDS[name][0]).main)
+
+
+def test_services_lists_builtins():
+    from gp2sm.cli import services
+    lines = []
+    assert services.main([], show=lines.append) == 0
+    text = "\n".join(lines)
+    assert "google-takeout" in text and "smugmug" in text

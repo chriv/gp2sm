@@ -22,11 +22,9 @@ import concurrent.futures
 import datetime
 import fnmatch
 import hashlib
-import json
 import logging
 import os
 import re
-import signal
 import sqlite3
 import sys
 import tarfile
@@ -34,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 import piexif
 
+from gp2sm.cli import run
 from gp2sm.media.convert import to_jpeg
 from gp2sm.organize import planning
 from gp2sm.organize.consolidate import ensure_target, setup_logging
@@ -271,10 +270,6 @@ def cmd_stage(st, cfg, args):
 
 # ---------------------------------------------------------------------- upload
 
-class Stop:
-    requested = False
-
-
 class PairingError(Exception):
     """A motion clip whose own timestamp doesn't fit its still."""
 
@@ -308,19 +303,25 @@ def reconcile_uploads(st, client, rows):
 
 def cmd_upload(st, cfg, client, args):
     stuck = [dict(r) for r in st.q("SELECT * FROM uploads WHERE status IN ('uploading','unknown')")]
+    if not args.yes:
+        rows = select(st, ("staged",), args)
+        by_album = {}
+        for r in rows:
+            by_album[r["target_name"]] = by_album.get(r["target_name"], 0) + 1
+        for name, n in sorted(by_album.items()):
+            print(f"  would upload {n:5} -> {name}")
+        print(f"  {len(rows)} files into {len(by_album)} albums")
+        if stuck:
+            print(f"  plus {len(stuck)} uploads from an earlier run to check against the server first")
+        run.dry_run_footer()
+        return None
     if stuck:
         log.info("reconciling %d uploads with unknown outcome", len(stuck))
         reconcile_uploads(st, client, stuck)
     rows = select(st, ("staged",), args)
     if not rows:
         return {"uploaded": 0}
-
-    def handler(sig, frame):
-        if Stop.requested:
-            raise KeyboardInterrupt
-        Stop.requested = True
-        log.warning("stop requested; finishing in-flight uploads (Ctrl-C again to abort)")
-    signal.signal(signal.SIGINT, handler)
+    run.install_sigint()
 
     folder_uri = client.ensure_folder_path(client.root_folder(), cfg["target_folder"])
     albums = {}
@@ -335,13 +336,14 @@ def cmd_upload(st, cfg, client, args):
         return client.upload_file(albums[r["target_name"]], r["staged_path"], r["upload_name"], CONTENT_TYPES[ext])
 
     totals = {"uploaded": 0, "failed": 0, "unknown": 0}
+    progress = run.Progress(len(rows), "uploading")
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
         pending = iter(rows)
         inflight = {}
 
         def submit_next():
             r = next(pending, None)
-            if r is None or Stop.requested:
+            if r is None or run.Stop.requested:
                 return False
             st.db.execute("UPDATE uploads SET status='uploading', attempts=attempts+1, updated_at=? WHERE upload_id=?",
                           (now(), r["upload_id"]))
@@ -360,17 +362,17 @@ def cmd_upload(st, cfg, client, args):
                 st.db.execute("UPDATE uploads SET status='done', image_key=?, album_image_uri=?, last_error=NULL, "
                               "updated_at=? WHERE upload_id=?", (item["item_id"], item["item_ref"], now(), r["upload_id"]))
                 totals["uploaded"] += 1
+                progress.update()
             except SmugMugError as e:
                 status = "unknown" if e.ambiguous else "failed"
                 st.db.execute("UPDATE uploads SET status=?, last_error=?, updated_at=? WHERE upload_id=?",
                               (status, str(e)[:500], now(), r["upload_id"]))
                 totals[status] += 1
+                progress.update(**{status: 1})
                 st.event("upload_error", level="warning", commit=False, upload_id=r["upload_id"], error=str(e))
             st.db.commit()
-            if (totals["uploaded"] + totals["failed"]) % 100 == 0:
-                log.info("uploaded %d, failed %d, unknown %d (remaining %d)", totals["uploaded"], totals["failed"],
-                         totals["unknown"], len(rows) - sum(totals.values()))
             submit_next()
+    progress.close()
     unknown = [dict(r) for r in st.q("SELECT * FROM uploads WHERE status='unknown'")]
     if unknown:
         totals["reconciled"] = reconcile_uploads(st, client, unknown)
@@ -481,7 +483,7 @@ def main(argv=None):
     context.add_args(p, paths=("index", "takeout_dir", "stage_dir"))
     p.add_argument("command", choices=["plan", "stage", "upload", "verify", "report", "remove"])
     p.add_argument("ids", nargs="*", help="remove: upload ids")
-    p.add_argument("--yes", action="store_true", help="remove: actually delete (default dry run)")
+    run.add_yes(p, "upload / remove")
     p.add_argument("--reason", default="misplaced", help="remove: recorded reason")
     p.add_argument("--all", action="store_true", help="verify: re-check everything, not just unverified uploads")
     p.add_argument("--target", action="append", help="only these target albums (glob; repeatable)")
@@ -492,31 +494,16 @@ def main(argv=None):
     setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command in ("upload", "verify", "remove") else None
-    if args.command in ("upload", "remove"):
-        context.acquire_lock(cfg["state_db"], f"takeout-upload {args.command}")
-    st.start_run(f"takeout_upload.{args.command}", vars(args))
-    try:
-        if args.command == "plan":
-            summary = cmd_plan(st, cfg, args)
-        elif args.command == "stage":
-            summary = cmd_stage(st, cfg, args)
-        elif args.command == "upload":
-            summary = cmd_upload(st, cfg, client, args)
-        elif args.command == "verify":
-            summary = cmd_verify(st, cfg, client, args)
-        elif args.command == "remove":
-            summary = cmd_remove(st, cfg, client, args)
-        else:
-            summary = cmd_report(st, cfg, args)
-    except BaseException as e:
-        st.db.rollback()
-        st.event("run_failed", level="error", error=repr(e))
-        st.finish_run("failed", {"error": repr(e)})
-        raise
-    st.finish_run("stopped" if Stop.requested else "ok", summary)
-    if summary is not None:
-        print(json.dumps(summary, indent=1, default=str))
-    return 0
+    lock = None
+    if args.command in ("upload", "remove") and args.yes:
+        lock = context.acquire_lock(cfg["state_db"], f"takeout-upload {args.command}")
+    commands = {"plan": lambda: cmd_plan(st, cfg, args), "stage": lambda: cmd_stage(st, cfg, args),
+                "upload": lambda: cmd_upload(st, cfg, client, args), "verify": lambda: cmd_verify(st, cfg, client, args),
+                "remove": lambda: cmd_remove(st, cfg, client, args), "report": lambda: cmd_report(st, cfg, args)}
+    code = run.run_command(st, f"takeout_upload.{args.command}", args, commands[args.command], lock=lock)
+    if args.command == "remove" and not args.yes:
+        run.dry_run_footer()
+    return code
 
 
 if __name__ == "__main__":

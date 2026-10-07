@@ -9,7 +9,7 @@ Tools for moving photo libraries into **SmugMug** and keeping them organized, wi
 - **Import from Google Takeout.** It reads the `.tgz` archives without extracting them, pairs metadata files and Live Photo motion clips, and uploads each Live Photo as a JPEG still plus its MP4 clip, side by side. HEIC is converted to JPEG with EXIF kept, and a missing capture date is filled in from the Takeout metadata.
 - **Consolidate existing SmugMug albums.** It inventories them, links items to a source by hash, name + dimensions or image content (dHash), removes byte-identical duplicates, and moves everything into dated albums.
 - **Sort what's left.** It places unsorted clips beside their stills by capture time + aspect ratio, and dates undated items from evidence (own timestamps, names, video duration and shape, content).
-- **Safety model.** Writes are recorded before they're sent. Outcomes that can't be known (timeouts/5xx) are checked against the server instead of being retried blindly. Deletions need `--yes`. `verify` compares the server with the state database.
+- **Safety model.** Writes are recorded before they're sent. Outcomes that can't be known (timeouts/5xx) are checked against the server instead of being retried blindly. Anything that changes SmugMug is a dry run unless you add `--yes`. Ctrl-C once stops after the work in flight; twice aborts, and the next run picks up where it left off. `verify` compares the server with the state database.
 
 ## Running it (current, pre-packaging)
 
@@ -23,7 +23,7 @@ cd my-library && ../.venv/bin/gp2sm status
 .venv/bin/python -m pytest -q
 ```
 
-Commands find the project by looking upward from the current folder for `gp2sm.toml` (or use `--project DIR`). The state database, logs, Takeout archives and index all live in the project folder. Commands that change SmugMug take a per-project lock, so two runs can't collide. The older JSON setup (`--config FILE`, or `data/consolidate.json`) still works.
+Commands find the project by looking upward from the current folder for `gp2sm.toml` (or use `--project DIR`). The state database, logs, Takeout archives and index all live in the project folder. Commands that change SmugMug take a per-project lock, so two runs can't collide. The older JSON setup (`--config FILE`, or `data/consolidate.json`) still works. [`examples/`](examples) has commented configs for common setups.
 
 ## Documentation
 
