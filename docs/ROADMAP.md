@@ -237,7 +237,7 @@ Backwards compatibility isn't a goal before the first public release, and the fi
   The engine organize uses is kept as `organize/engine.py`; `gp2sm takeout remove` is exposed.
 - C2: a clean state schema with neutral names (items, albums), without the legacy tables; migrations restart, and older state databases are refused with a clear message. Found on the way: `delete-duplicates` checked kept copies through a table only the old consolidation filled, so for organize projects the check passed vacuously. Parked duplicates now record their kept copy, and deletion verifies each one is in its album on the server.
 
-### Stage A7: Settings policy (audit and bulk fix)
+### Stage A7: Settings policy (audit and bulk fix). ✅ Done (2026-10-07; the owner chooses real policies)
 
 - **Goal:** state the preferred album settings once, and find and fix drift.
 - **Deliverables:**
@@ -257,6 +257,10 @@ Backwards compatibility isn't a goal before the first public release, and the fi
   - A7.1 neutral album settings in the adapter (`album_settings`, `set_album_settings`, `Capabilities.album_settings`)
   - A7.2 `[[policy]]` plus `gp2sm albums audit | fix | verify | undo`
   - A7.3 a real audit on a small sample, then fix and undo on sandbox albums
+- **Found in A7.3:**
+  - galleries the iOS app creates carry search values outside the documented ones; changes to unknown values go to review, since they couldn't be written back
+  - undo didn't mark download-size restores as done (fixed)
+  - turning downloads off resets the download size (A7.1)
 
 ### Stage A8: Results reporting
 

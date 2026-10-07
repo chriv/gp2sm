@@ -56,6 +56,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - Uploads go to a root folder **"Automatic iOS Uploads"**, which the app creates and names (you can't choose). Inside it the app makes one gallery per month, named `YYYY-MM`, under a year folder. Older accounts can also have an earlier "Automatic iOS Uploads" folder elsewhere (e.g. under another folder) that the app no longer writes to.
 - **Live Photos lose their motion**: only the still is uploaded.
 - Deleting an uploaded photo on SmugMug does **not** make the app upload it again. Editing a photo on the device after it was uploaded does **not** upload a new copy. Deleting a photo on the device does **not** delete it on SmugMug (SmugMug is a backup, not a mirror).
+- Galleries the iOS app creates carry search settings outside the documented values: `SmugSearchable` empty and `WorldSearchable` `3` (seen on every app-created gallery in a 30-album sample, 2026-10-07). gp2sm reports those for review instead of changing them, since the original value couldn't be written back.
 - So the app's own month galleries rarely need organizing. The cleanup that matters is merging an old upload folder's galleries into the current one, and removing duplicates.
 
 ## Album and folder settings (probed 2026-10-07 in a sandbox: probes/probe_settings_*.py)

@@ -148,7 +148,9 @@ def report_settings(st, args):
                 "WHERE c.kind IN ('setting', 'finding') ORDER BY a.folder, a.name, c.field")
     if not rows:
         return
-    for title, kind, status in (("Setting fixes planned", "setting", "planned"), ("Settings applied", "setting", "done"),
+    for title, kind, status in (("Setting fixes planned", "setting", "planned"),
+                                ("Setting fixes for review (approve --name ALBUM)", "setting", "review"),
+                                ("Settings applied", "setting", "done"),
                                 ("Setting fixes failed or skipped", "setting", "failed"),
                                 ("Findings and warnings", "finding", "info")):
         sel = [r for r in rows if r["kind"] == kind and (r["status"] == status or
@@ -180,7 +182,7 @@ def cmd_audit(st, cfg, client, args):
     progress = run.Progress(len(albums), "albums audited")
     counts, stamp = {"albums": len(albums), "fixes": 0, "warnings": 0, "findings": 0}, now()
     with st.db:
-        st.db.execute("DELETE FROM album_changes WHERE kind='setting' AND status='planned'")
+        st.db.execute("DELETE FROM album_changes WHERE kind='setting' AND status IN ('planned', 'review')")
         st.db.execute("DELETE FROM album_changes WHERE kind='finding'")
         st.db.execute("DELETE FROM album_settings_seen")
     for a in albums:
@@ -192,10 +194,13 @@ def cmd_audit(st, cfg, client, args):
             st.db.execute("INSERT OR REPLACE INTO album_settings_seen VALUES(?,?,?,?,?,?)",
                           (a["album_id"], info["name"], a.get("folder"), info["item_count"], json.dumps(actual), stamp))
             for f in fixes:
+                known = f["actual"] in allowed.get(f["setting"], ())
+                status, note = ("planned", None) if known else (
+                    "review", f"current value {f['actual']!r} isn't one gp2sm knows, so the change couldn't be undone")
                 st.db.execute("INSERT INTO album_changes(album_id, kind, field, old_value, new_value, source, note, "
                               "status, planned_at) VALUES(?,?,?,?,?,?,?,?,?)",
                               (a["album_id"], "setting", f["setting"], json.dumps(f["actual"]), json.dumps(f["desired"]),
-                               f"policy {f['policy']}", None, "planned", stamp))
+                               f"policy {f['policy']}", note, status, stamp))
             for note in warnings + found:
                 st.db.execute("INSERT INTO album_changes(album_id, kind, note, status, planned_at) VALUES(?,?,?,?,?)",
                               (a["album_id"], "finding", note, "info", stamp))
@@ -266,6 +271,9 @@ def cmd_approve(st, cfg, client, args):
         raise SystemExit("name the reviewed albums to approve with --name GLOB (old or new name)")
     rows = matching([dict(r) for r in st.q("SELECT * FROM album_changes WHERE kind='rename' AND status='review'")],
                     args.name)
+    rows += [dict(r) for r in st.q("SELECT c.* , a.name FROM album_changes c JOIN album_settings_seen a USING(album_id) "
+                                   "WHERE c.kind='setting' AND c.status='review'")
+             if any(fnmatch.fnmatch((r["name"] or "").lower(), g.lower()) for g in args.name)]
     with st.db:
         for r in rows:
             st.db.execute("UPDATE album_changes SET status='planned', note=? WHERE change_id=?",
@@ -384,19 +392,26 @@ def undo_settings(st, client, args, out):
         if run.Stop.requested:
             break
         current = client.album_settings(album_id)
+        allowed = client.capabilities.album_settings
         todo = {}
         for c in changes:
-            if current.get(c["field"]) == json.loads(c["new_value"]):
-                todo[c["field"]] = json.loads(c["old_value"])
-            else:
+            old = json.loads(c["old_value"])
+            if current.get(c["field"]) != json.loads(c["new_value"]):
                 out["skipped"].append(f"{c['name']}: {c['field']} was changed since; left alone")
+            elif old not in allowed.get(c["field"], ()):
+                out["skipped"].append(f"{c['name']}: {c['field']} was {old!r}, which can't be written back")
+            else:
+                todo[c["field"]] = old
+        results = {}
         # download size can only be restored with downloads on: restore it before switching downloads off
         if "download_size" in todo and todo.get("downloads") is False:
-            client.set_album_settings(album_id, {"download_size": todo.pop("download_size")})
+            first = client.set_album_settings(album_id, {"download_size": todo["download_size"]})
+            results["download_size"] = first.get("download_size") == todo.pop("download_size")
         got = client.set_album_settings(album_id, todo) if todo else current
+        results.update({k: got.get(k) == v for k, v in todo.items()})
         for c in changes:
-            if c["field"] in todo:
-                ok = got.get(c["field"]) == todo[c["field"]]
+            if c["field"] in results:
+                ok = results[c["field"]]
                 st.db.execute("UPDATE album_changes SET status=? WHERE change_id=?", ("undone" if ok else "done",
                                                                                      c["change_id"]))
                 out["restored" if ok else "failed"] += 1

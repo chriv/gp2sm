@@ -133,4 +133,16 @@ def test_settings_audit_fix_verify_undo(policy_project, capsys):
     assert run(root, "undo", "--yes") == 0
     beach = fake.album_settings(ids["beach"])
     assert (beach["downloads"], beach["download_size"]) == (False, "original")
+    assert st.one("SELECT COUNT(*) FROM album_changes WHERE kind='setting' AND status='done'") == 0   # all undone
     assert fake.album_settings(ids["secret"])["privacy"] == "unlisted"   # left as the person set it
+
+
+def test_unknown_current_values_go_to_review(policy_project):
+    root, fake, ids = policy_project
+    fake.settings.setdefault(ids["beach"], {})["sort"] = "Shuffle (app-made)"   # a value gp2sm doesn't know
+    assert run(root, "audit") == 0
+    st = State(str(root / "state.db"))
+    row = st.q("SELECT status, note FROM album_changes WHERE album_id=? AND field='sort'", ids["beach"])[0]
+    assert row["status"] == "review" and "couldn't be undone" in row["note"]
+    assert run(root, "approve", "--name", "Beach") == 0
+    assert st.one("SELECT status FROM album_changes WHERE album_id=? AND field='sort'", ids["beach"]) == "planned"
