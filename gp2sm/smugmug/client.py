@@ -374,6 +374,31 @@ class SmugMugClient:
         """Reference to an item *in a specific album* (what moves and removals operate on)."""
         return f"/api/v2/album/{album_id}/image/{item_id}-{serial or 0}"
 
+    def album_info(self, album_id):
+        a = self.album(album_id)
+        return {"album_id": album_id, "name": a.get("Name"), "url_name": a.get("UrlName"),
+                "item_count": a.get("ImageCount", 0) or 0}
+
+    def rename_album(self, album_id, name):
+        """Change an album's display name. Never its UrlName: changing that breaks existing links (no redirect).
+        Returns the name read back, since some PATCHes return OK without changing anything."""
+        self.request("PATCH", f"/api/v2/album/{album_id}", json_body={"Name": name}, idempotent=True)
+        return self.album(album_id).get("Name")
+
+    def album_items_page(self, album_id, start, count, with_metadata=False):
+        """One page of an album's items (start is 1-based), e.g. to sample a large album."""
+        params = {"start": start, "count": count}
+        if with_metadata:
+            params["_expand"] = "ImageMetadata"
+        body = self.request("GET", f"/api/v2/album/{album_id}!images", params=params)
+        expansions = body.get("Expansions", {})
+        out = []
+        for img in body.get("Response", {}).get("AlbumImage", []) or []:
+            md_uri = img.get("Uris", {}).get("ImageMetadata", {}).get("Uri")
+            md = expansions.get(md_uri, {}).get("ImageMetadata", {}) if md_uri else {}
+            out.append(self._neutral_item(img, md))
+        return out
+
     def album_item_count(self, album_id):
         return self.album(album_id).get("ImageCount", 0) or 0
 
@@ -437,10 +462,6 @@ class SmugMugClient:
 
     def set_sort_by_filename(self, album_id):
         return self.set_album_sort(album_id, "FileName")
-
-    def rename_album(self, album_key, name):
-        return self.request("PATCH", f"/api/v2/album/{album_key}", idempotent=True,
-                            json_body={"Name": name, "UrlName": url_name_for(name)})["Response"]["Album"]
 
     def delete_folder(self, folder_ref):
         """Delete a folder node (and anything in it). Used for sandbox cleanup."""

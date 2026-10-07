@@ -22,6 +22,7 @@ class FakeSmugMug:
         self.folders = dict(folders or {})   # album_id -> display folder path ("" = top level)
         self.names = {}                      # album_id -> display name (default: the id)
         self.home = {}                       # item_id -> its original album (where removing it deletes it)
+        self.frozen_names = set()            # albums whose rename "succeeds" without changing (a silent no-op)
         self.items = dict(items or {})
         self.bad, self.processing = set(bad), set(processing)
         self.ambiguous = ambiguous
@@ -70,6 +71,24 @@ class FakeSmugMug:
             folder = album["folder"]
             if not want or folder == want or folder.startswith(want + "/"):
                 yield dict(album, item_count=None)
+
+    def album_info(self, album_id):
+        if album_id not in self.albums:
+            raise NotFound("no album", http_status=404)
+        return {"album_id": album_id, "name": self.names.get(album_id, album_id), "url_name": album_id,
+                "item_count": len(self.albums[album_id])}
+
+    def rename_album(self, album_id, name):
+        if album_id not in self.albums:
+            raise NotFound("no album", http_status=404)
+        self.calls.append(("rename", album_id, name))
+        if album_id not in self.frozen_names:
+            self.names[album_id] = name
+        return self.names.get(album_id, album_id)
+
+    def album_items_page(self, album_id, start, count, with_metadata=False):
+        items = list(self.list_album_items(album_id, with_metadata=with_metadata))
+        return items[start - 1:start - 1 + count]
 
     def album_item_count(self, album_id):
         if album_id not in self.albums:

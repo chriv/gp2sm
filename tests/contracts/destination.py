@@ -72,6 +72,20 @@ class DestinationContract:
         d.remove_item(d.item_ref(b, up["item_id"]))                   # undo: remove the collected copy
         assert d.item_album_ids(up["item_id"]) == [a]
 
+    def test_rename_album_and_sample_a_page(self, albums, tmp_path):
+        d, a, _ = albums
+        before = d.album_info(a)
+        old = before["name"]
+        assert d.rename_album(a, old + " renamed") == old + " renamed"
+        info = d.album_info(a)
+        assert info["name"] == old + " renamed" and info["item_count"] == 0
+        assert info["url_name"] == before["url_name"]          # links keep working: only the display name changes
+        for n in range(3):
+            _upload(d, a, tmp_path, f"page_{n}.jpg")
+        page = d.album_items_page(a, 2, 2)
+        assert len(page) == 2 and all(p["item_id"] for p in page)
+        assert d.album_items_page(a, 4, 2) == []
+
     def test_upload_listing_count_and_refs(self, albums, tmp_path):
         d, a, _ = albums
         up = _upload(d, a, tmp_path, "contract_1.jpg")
