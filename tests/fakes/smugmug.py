@@ -23,6 +23,8 @@ class FakeSmugMug:
         self.names = {}                      # album_id -> display name (default: the id)
         self.home = {}                       # item_id -> its original album (where removing it deletes it)
         self.frozen_names = set()            # albums whose rename "succeeds" without changing (a silent no-op)
+        self.settings = {}                   # album_id -> neutral settings (defaults below)
+        self.private_folders = set()         # folders that make everything in them effectively private
         self.items = dict(items or {})
         self.bad, self.processing = set(bad), set(processing)
         self.ambiguous = ambiguous
@@ -85,6 +87,40 @@ class FakeSmugMug:
         if album_id not in self.frozen_names:
             self.names[album_id] = name
         return self.names.get(album_id, album_id)
+
+    DEFAULT_SETTINGS = {"privacy": "private", "search": "inherit", "web_search": True, "downloads": False,
+                        "download_size": "original", "largest_size": "5k", "protected": True, "watermark": False,
+                        "share": True, "comments": True, "ranking": True, "exif": True, "filenames": False,
+                        "geography": True, "slideshow": True, "printable": True, "hide_owner": False,
+                        "sort": "date_taken", "sort_direction": "ascending"}
+
+    def album_settings(self, album_id):
+        if album_id not in self.albums:
+            raise NotFound("no album", http_status=404)
+        s = dict(self.DEFAULT_SETTINGS, **self.settings.get(album_id, {}))
+        folder = self.folders.get(album_id, "")
+        capped = any(folder == f or folder.startswith(f + "/") for f in self.private_folders)
+        s["effective_privacy"] = "private" if capped else s["privacy"]
+        return s
+
+    def set_album_settings(self, album_id, changes):
+        allowed = self.capabilities.album_settings
+        for name, value in changes.items():
+            if name not in allowed or value not in allowed[name]:
+                raise ValueError(f"bad setting {name}={value!r}")
+        self.calls.append(("settings", album_id, dict(changes)))
+        current = self.settings.setdefault(album_id, {})
+        if "downloads" in changes:
+            current["downloads"] = changes["downloads"]
+            if not changes["downloads"]:
+                current["download_size"] = "original"   # turning downloads off resets the size, as on SmugMug
+        downloads_on = dict(self.DEFAULT_SETTINGS, **current)["downloads"]
+        for name, value in changes.items():
+            if name == "download_size" and not downloads_on:
+                continue   # silently ignored while downloads are off, as on SmugMug
+            if name != "downloads":
+                current[name] = value
+        return self.album_settings(album_id)
 
     def album_items_page(self, album_id, start, count, with_metadata=False):
         items = list(self.list_album_items(album_id, with_metadata=with_metadata))

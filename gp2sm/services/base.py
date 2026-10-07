@@ -77,6 +77,7 @@ class Capabilities:
     min_video_pixels: Optional[int] = None      # videos smaller than this (w*h) are rejected; None = unknown/none
     max_items_per_album: Optional[int] = None
     can_collect: bool = False                   # an item can appear in several albums (collect = add, not move)
+    album_settings: dict = field(default_factory=dict)   # neutral setting name -> tuple of allowed values
     removing_original_removes_collected: bool = False  # deleting from its own album deletes every collected copy
 
 
@@ -99,6 +100,8 @@ class PhotoDestination(Protocol):
     def rename_album(self, album_id: str, name: str) -> str: ...     # display name only; returns it read back
     def album_items_page(self, album_id: str, start: int, count: int,
                          with_metadata: bool = False) -> list: ...   # one page (start is 1-based)
+    def album_settings(self, album_id: str) -> dict: ...             # neutral names; plus effective_privacy
+    def set_album_settings(self, album_id: str, changes: dict) -> dict: ...   # returns the settings read back
     def list_album_items(self, album_id: str, with_metadata: bool = False,
                          ids_only: bool = False) -> Iterator[ItemRecord]: ...
     def item_ref(self, album_id: str, item_id: str, serial: int = 0) -> str: ...

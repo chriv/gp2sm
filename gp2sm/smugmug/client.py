@@ -27,6 +27,34 @@ log = logging.getLogger(__name__)
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 # Behavior verified by probes (docs/smugmug-api.md), declared for the service-neutral core.
+SIZES = {"medium": "Medium", "large": "Large", "xlarge": "XLarge", "x2large": "X2Large", "x3large": "X3Large",
+         "x4large": "X4Large", "x5large": "X5Large", "4k": "4K", "5k": "5K", "original": "Original"}
+# Neutral album setting -> (SmugMug Album field, {neutral value: SmugMug value}, or None for a boolean).
+# Each was confirmed to round-trip by the A5 probe (docs/smugmug-api.md "Album and folder settings").
+ALBUM_SETTINGS = {
+    "privacy": ("Privacy", {"public": "Public", "unlisted": "Unlisted", "private": "Private"}),
+    "search": ("SmugSearchable", {"inherit": "Inherit from User", "no": "No"}),
+    "web_search": ("WorldSearchable", None),
+    "downloads": ("AllowDownloads", None),
+    "download_size": ("MaxPhotoDownloadSize", SIZES),
+    "largest_size": ("LargestSize", SIZES),
+    "protected": ("Protected", None),
+    "watermark": ("Watermark", None),
+    "share": ("Share", None),
+    "comments": ("Comments", None),
+    "ranking": ("CanRank", None),
+    "exif": ("EXIF", None),
+    "filenames": ("Filenames", None),
+    "geography": ("Geography", None),
+    "slideshow": ("Slideshow", None),
+    "printable": ("Printable", None),
+    "hide_owner": ("HideOwner", None),
+    "sort": ("SortMethod", {"position": "Position", "caption": "Caption", "filename": "Filename",
+                            "date_uploaded": "Date Uploaded", "date_modified": "Date Modified",
+                            "date_taken": "Date Taken"}),
+    "sort_direction": ("SortDirection", {"ascending": "Ascending", "descending": "Descending"}),
+}
+
 SMUGMUG_CAPABILITIES = Capabilities(
     name="smugmug",
     atomic_batch_moves=True,
@@ -41,6 +69,7 @@ SMUGMUG_CAPABILITIES = Capabilities(
     max_items_per_album=5000,
     can_collect=True,
     removing_original_removes_collected=True,
+    album_settings={k: tuple(values) if values else (True, False) for k, (_, values) in ALBUM_SETTINGS.items()},
 )
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -384,6 +413,48 @@ class SmugMugClient:
         Returns the name read back, since some PATCHes return OK without changing anything."""
         self.request("PATCH", f"/api/v2/album/{album_id}", json_body={"Name": name}, idempotent=True)
         return self.album(album_id).get("Name")
+
+    def album_settings(self, album_id):
+        """The album's settings in neutral names. Privacy is the album's own setting (from its node; Album.Privacy
+        reports the effective value instead), and effective_privacy is what applies under its folders."""
+        album = self.album(album_id)
+        node = self.request("GET", album["Uris"]["Node"]["Uri"],
+                            params={"_filter": "Privacy,EffectivePrivacy"})["Response"]["Node"]
+        out = {}
+        for name, (field, values) in ALBUM_SETTINGS.items():
+            raw = node.get("Privacy") if name == "privacy" else album.get(field)
+            if values:
+                back = {v.lower(): k for k, v in values.items()}
+                out[name] = back.get(str(raw).lower(), raw)
+            else:
+                out[name] = raw
+        privacy_back = {v: k for k, v in ALBUM_SETTINGS["privacy"][1].items()}
+        out["effective_privacy"] = privacy_back.get(node.get("EffectivePrivacy"), node.get("EffectivePrivacy"))
+        return out
+
+    def set_album_settings(self, album_id, changes):
+        """Change album settings (neutral names and values); returns all settings read back, since some PATCHes
+        return OK without changing anything. Downloads are switched first: the download size is ignored while
+        they're off."""
+        body = {}
+        for name, value in changes.items():
+            if name not in ALBUM_SETTINGS:
+                raise ValueError(f"unknown album setting {name!r}")
+            field, values = ALBUM_SETTINGS[name]
+            if values:
+                if value not in values:
+                    raise ValueError(f"{name} must be one of {list(values)}, got {value!r}")
+                body[field] = values[value]
+            else:
+                if not isinstance(value, bool):
+                    raise ValueError(f"{name} must be true or false, got {value!r}")
+                body[field] = value
+        if "AllowDownloads" in body:
+            self.request("PATCH", f"/api/v2/album/{album_id}", json_body={"AllowDownloads": body.pop("AllowDownloads")},
+                         idempotent=True)
+        if body:
+            self.request("PATCH", f"/api/v2/album/{album_id}", json_body=body, idempotent=True)
+        return self.album_settings(album_id)
 
     def album_items_page(self, album_id, start, count, with_metadata=False):
         """One page of an album's items (start is 1-based), e.g. to sample a large album."""

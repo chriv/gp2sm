@@ -86,6 +86,20 @@ class DestinationContract:
         assert len(page) == 2 and all(p["item_id"] for p in page)
         assert d.album_items_page(a, 4, 2) == []
 
+    def test_album_settings_round_trip(self, albums):
+        d, a, _ = albums
+        allowed = d.capabilities.album_settings
+        before = d.album_settings(a)
+        assert set(allowed) <= set(before) and "effective_privacy" in before
+        change = {"sort": "filename", "sort_direction": "descending", "comments": not before["comments"],
+                  "downloads": True, "download_size": "large", "largest_size": "x3large"}
+        after = d.set_album_settings(a, change)
+        assert {k: after[k] for k in change} == change
+        restored = d.set_album_settings(a, {k: before[k] for k in change})
+        assert {k: restored[k] for k in change} == {k: before[k] for k in change}
+        with pytest.raises(ValueError):
+            d.set_album_settings(a, {"sort": "by mood"})
+
     def test_upload_listing_count_and_refs(self, albums, tmp_path):
         d, a, _ = albums
         up = _upload(d, a, tmp_path, "contract_1.jpg")

@@ -66,7 +66,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 
 **Traps:**
 - **Privacy:** set it on the album, but read it from the album's **node**. `Node.Privacy` is the album's own setting and `Node.EffectivePrivacy` is what applies. `Album.Privacy` reports the *effective* value: an album in a Private folder reads "Private" whatever it is set to, and setting it to Public there returns 200 while appearing unchanged. A Private folder makes everything in it effectively Private. An Unlisted folder does **not** cap a Public album (it stays effectively Public).
-- **`MaxPhotoDownloadSize`** is silently ignored while `AllowDownloads` is off. With downloads on it round-trips, independent of `LargestSize`.
+- **`MaxPhotoDownloadSize`** is silently ignored while `AllowDownloads` is off, and **turning downloads off resets it to `Original`** (it isn't remembered when downloads come back on; confirmed 2026-10-07). With downloads on it round-trips, independent of `LargestSize`. A policy should only check the download size together with downloads on.
 - **Album `Date`** isn't a PATCH parameter. Sending it returns 200 and changes nothing.
 - **Folder `SmugSearchable` `Local`/`LocalUser`/`Yes` and `WorldSearchable` `HomeOnly`/`Yes`** are listed but refused with 400, even on a Public folder. Only `No` and `Inherit from User` were accepted (account-level settings may be what decides).
 
