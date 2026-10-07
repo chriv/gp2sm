@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS source_matches(source_ref TEXT PRIMARY KEY, decision 
 -- album_changes.status: planned -> done | failed ; review (needs a person's approve) ; undone ; skipped
 CREATE TABLE IF NOT EXISTS albums_seen(album_id TEXT PRIMARY KEY, name TEXT, folder TEXT, item_count INT,
   photo_dates TEXT, listed_at TEXT);
+CREATE TABLE IF NOT EXISTS album_settings_seen(album_id TEXT PRIMARY KEY, name TEXT, folder TEXT, item_count INT,
+  settings TEXT, listed_at TEXT);
+-- kind: rename (field name) | setting (field = the setting) | finding (a warning or check, status info)
 CREATE TABLE IF NOT EXISTS album_changes(
   change_id INTEGER PRIMARY KEY AUTOINCREMENT, album_id TEXT, kind TEXT, field TEXT,
   old_value TEXT, new_value TEXT, confidence TEXT, source TEXT, note TEXT,

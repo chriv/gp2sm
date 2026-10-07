@@ -137,3 +137,17 @@ def test_naming_section_defaults_and_template_check():
     assert any("[naming] month must use {yyyy} and {subject}" in p for p in problems)
     values, problems = validate({})
     assert problems == [] and values["naming"]["min_confidence"] == "high" and values["naming"]["keep_day"] is True
+
+
+def test_policy_entries_validate_and_render(tmp_path):
+    _, problems = validate({"policy": [{"scope": ["*"], "sort": "by mood"}, {"privacy": "secret"},
+                                       {"scope": ["A/*"], "colour": "red", "downloads": "yes"}]})
+    text = "\n".join(problems)
+    assert "[[policy]] 1: sort must be one of" in text
+    assert "[[policy]] 2: needs a scope" in text and "[[policy]] 2: privacy must be one of" in text
+    assert "[[policy]] 3: unknown setting 'colour'" in text and "[[policy]] 3: downloads must be one of" in text
+    from gp2sm.project.init import render
+    pols = [{"scope": ["*"], "sort": "date_taken"}, {"scope": ["Family/*"], "privacy": "private", "downloads": True}]
+    (tmp_path / "gp2sm.toml").write_text(render({"policy": pols}))
+    cfg = load(str(tmp_path))
+    assert cfg.tool_settings()["policy"] == pols

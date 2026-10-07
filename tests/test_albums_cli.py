@@ -80,3 +80,57 @@ def test_sample_limits_inventory(project):
     root, fake, ids = project
     assert run(root, "inventory", "--sample", "3") == 0
     assert State(str(root / "state.db")).one("SELECT COUNT(*) FROM albums_seen") == 3
+
+
+@pytest.fixture
+def policy_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("GP2SM_CONFIG_DIR", str(tmp_path / "userconf"))
+    root = tmp_path / "pol"
+    init_main([str(root), "--non-interactive", "--name", "P", "--timezone", "UTC"], show=lambda *a: None)
+    with open(root / "gp2sm.toml", "a") as f:
+        f.write('\n[[policy]]\nscope = ["*"]\nsort = "date_taken"\n'
+                '\n[[policy]]\nscope = ["Family/*"]\nexclude = ["*Auto Upload*"]\ndownloads = true\n'
+                'download_size = "x3large"\n'
+                '\n[[policy]]\nscope = ["Hidden/*"]\nprivacy = "public"\n')
+    fake = FakeSmugMug()
+    fam = fake.ensure_folder_path(fake.root_folder(), "Family")
+    hid = fake.ensure_folder_path(fake.root_folder(), "Hidden")
+    ids = {"beach": fake.ensure_album(fam, "Beach")[0], "auto": fake.ensure_album(fam, "Phone Auto Upload")[0],
+           "secret": fake.ensure_album(hid, "Secret")[0]}
+    for key in ("beach", "auto", "secret"):
+        fake.items[f"I{key}"] = {"name": f"{key}.jpg"}
+        fake.albums[ids[key]].add(f"I{key}")
+    ids["empty"] = fake.ensure_album(fam, "Empty one")[0]
+    fake.private_folders.add("Hidden")
+    monkeypatch.setattr(context, "client", lambda cfg: fake)
+    return root, fake, ids
+
+
+def test_settings_audit_fix_verify_undo(policy_project, capsys):
+    root, fake, ids = policy_project
+    assert run(root, "audit") == 0
+    st = State(str(root / "state.db"))
+    planned = {(r["album_id"], r["field"]): (r["old_value"], r["new_value"]) for r in
+               st.q("SELECT * FROM album_changes WHERE kind='setting' AND status='planned'")}
+    assert planned[(ids["beach"], "downloads")] == ("false", "true")
+    assert planned[(ids["beach"], "download_size")] == ('"original"', '"x3large"')
+    assert (ids["auto"], "downloads") not in planned                      # excluded from the Family policy
+    assert (ids["secret"], "privacy") in planned                          # its own setting can still be fixed ...
+    notes = [r["note"] for r in st.q("SELECT note FROM album_changes WHERE kind='finding'")]
+    assert any("containing folder makes it private" in n for n in notes)   # ... but the folder keeps it private
+    assert "empty" in notes
+    assert run(root, "report") == 0 and "Setting fixes planned" in capsys.readouterr().out
+
+    assert run(root, "fix") == 0 and "Dry run" in capsys.readouterr().out
+    assert fake.album_settings(ids["beach"])["downloads"] is False
+    fake.set_album_settings(ids["secret"], {"privacy": "unlisted"})      # someone changes it after the audit
+    assert run(root, "fix", "--yes") == 0
+    beach = fake.album_settings(ids["beach"])
+    assert (beach["downloads"], beach["download_size"]) == (True, "x3large")   # downloads first, then the size
+    assert st.one("SELECT status FROM album_changes WHERE album_id=? AND field='privacy'", ids["secret"]) == "skipped"
+    assert run(root, "verify") == 0
+
+    assert run(root, "undo", "--yes") == 0
+    beach = fake.album_settings(ids["beach"])
+    assert (beach["downloads"], beach["download_size"]) == (False, "original")
+    assert fake.album_settings(ids["secret"])["privacy"] == "unlisted"   # left as the person set it

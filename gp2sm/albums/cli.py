@@ -1,13 +1,19 @@
-"""gp2sm albums: consistent, date-sortable album names (A6); settings policy follows in A7.
+"""gp2sm albums: date-sortable album names ([naming]) and album settings ([[policy]]).
 
-  inventory   list the albums in [naming] scope; for albums with no date in their name, sample a few pages
-              of photos for their capture dates (--sample N checks only N random albums)
+Names:
+  inventory   list the albums in [naming] scope; for albums with no date in their name (or only a year),
+              sample a few pages of photos for their capture dates (--sample N checks only N random albums)
   plan        propose new names: confident ones are planned, the rest wait for review
-  report      the planned renames, the ones for review, and why the others are left alone
   approve     move reviewed proposals into the plan (--name GLOB, repeatable)
   apply       rename (display names only; links never change); dry run unless --yes
-  verify      check that applied names are still in place
-  undo        restore the previous names (dry run unless --yes; skips albums renamed since)
+Settings:
+  audit       read the settings of every album a [[policy]] covers (--sample N, --name GLOB) and plan the fixes;
+              also flags empty albums and albums near the item cap
+  fix         apply the planned setting fixes (dry run unless --yes; skips settings changed since the audit)
+Both:
+  report      what is planned, for review, applied, and found
+  verify      check that applied names and settings are still in place
+  undo        restore previous names and settings (dry run unless --yes; skips anything changed since)
 """
 
 import argparse
@@ -17,7 +23,7 @@ import logging
 import random
 import sys
 
-from gp2sm.albums import naming
+from gp2sm.albums import naming, policy
 from gp2sm.cli import run
 from gp2sm.importer.inventory import albums_in_scope
 from gp2sm.project import context
@@ -133,7 +139,119 @@ def cmd_report(st, cfg, client, args):
         for r in rows[:args.limit or 200]:
             extra = f"  [{r['source']}, {r['confidence']}{'; ' + r['note'] if r['note'] else ''}]"
             print(f"  {r['folder'] or ''}/{r['old_value']}  ->  {r['new_value']}{extra}")
+    report_settings(st, args)
     return None
+
+
+def report_settings(st, args):
+    rows = st.q("SELECT c.*, a.folder, a.name FROM album_changes c LEFT JOIN album_settings_seen a USING(album_id) "
+                "WHERE c.kind IN ('setting', 'finding') ORDER BY a.folder, a.name, c.field")
+    if not rows:
+        return
+    for title, kind, status in (("Setting fixes planned", "setting", "planned"), ("Settings applied", "setting", "done"),
+                                ("Setting fixes failed or skipped", "setting", "failed"),
+                                ("Findings and warnings", "finding", "info")):
+        sel = [r for r in rows if r["kind"] == kind and (r["status"] == status or
+                                                          (status == "failed" and r["status"] == "skipped"))]
+        print(f"\n== {title}: {len(sel)} ==")
+        for r in sel[:args.limit or 200]:
+            where = f"{r['folder'] or ''}/{r['name']}"
+            if kind == "finding":
+                print(f"  {where}: {r['note']}")
+            else:
+                extra = f"  ({r['note']})" if r["note"] else ""
+                print(f"  {where}: {r['field']} {json.loads(r['old_value'])!r} -> {json.loads(r['new_value'])!r}{extra}")
+
+
+def cmd_audit(st, cfg, client, args):
+    policies = cfg["policy"]
+    if not policies:
+        raise SystemExit("no [[policy]] entries in gp2sm.toml: add at least one (see the commented example there)")
+    allowed = client.capabilities.album_settings
+    unsupported = sorted({k for p in policies for k in p if k not in ("scope", "exclude") and k not in allowed})
+    if unsupported:
+        raise SystemExit(f"{client.capabilities.name} can't change: {unsupported}")
+    albums = [a for a in albums_in_scope(client, ["/"])
+              if any(policy.matches(a, p["scope"]) and not policy.matches(a, p.get("exclude", [])) for p in policies)]
+    if args.name:
+        albums = [a for a in albums if any(fnmatch.fnmatch((a["name"] or "").lower(), g.lower()) for g in args.name)]
+    if args.sample and args.sample < len(albums):
+        albums = random.Random(args.seed).sample(albums, args.sample)
+    progress = run.Progress(len(albums), "albums audited")
+    counts, stamp = {"albums": len(albums), "fixes": 0, "warnings": 0, "findings": 0}, now()
+    with st.db:
+        st.db.execute("DELETE FROM album_changes WHERE kind='setting' AND status='planned'")
+        st.db.execute("DELETE FROM album_changes WHERE kind='finding'")
+        st.db.execute("DELETE FROM album_settings_seen")
+    for a in albums:
+        info = client.album_info(a["album_id"])
+        actual = client.album_settings(a["album_id"])
+        fixes, warnings = policy.drift(actual, policy.desired(a, policies))
+        found = policy.findings(info, cfg["album_soft_cap"], cfg["album_hard_cap"])
+        with st.db:
+            st.db.execute("INSERT OR REPLACE INTO album_settings_seen VALUES(?,?,?,?,?,?)",
+                          (a["album_id"], info["name"], a.get("folder"), info["item_count"], json.dumps(actual), stamp))
+            for f in fixes:
+                st.db.execute("INSERT INTO album_changes(album_id, kind, field, old_value, new_value, source, note, "
+                              "status, planned_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                              (a["album_id"], "setting", f["setting"], json.dumps(f["actual"]), json.dumps(f["desired"]),
+                               f"policy {f['policy']}", None, "planned", stamp))
+            for note in warnings + found:
+                st.db.execute("INSERT INTO album_changes(album_id, kind, note, status, planned_at) VALUES(?,?,?,?,?)",
+                              (a["album_id"], "finding", note, "info", stamp))
+        counts["fixes"] += len(fixes)
+        counts["warnings"] += len(warnings)
+        counts["findings"] += len(found)
+        progress.update()
+    progress.close()
+    return counts
+
+
+def cmd_fix(st, cfg, client, args):
+    rows = [dict(r) for r in st.q("SELECT c.*, a.name FROM album_changes c LEFT JOIN album_settings_seen a "
+                                  "USING(album_id) WHERE c.kind='setting' AND c.status='planned' ORDER BY c.change_id")]
+    if args.name:
+        rows = [r for r in rows if any(fnmatch.fnmatch((r["name"] or "").lower(), g.lower()) for g in args.name)]
+    by_album = {}
+    for r in rows:
+        by_album.setdefault(r["album_id"], []).append(r)
+    albums = list(by_album.items())[:args.limit] if args.limit else list(by_album.items())
+    if not args.yes:
+        for _, changes in albums:
+            print(f"  {changes[0]['name']}: " + ", ".join(
+                f"{c['field']} {json.loads(c['old_value'])!r} -> {json.loads(c['new_value'])!r}" for c in changes))
+        print(f"  {sum(len(c) for _, c in albums)} settings in {len(albums)} albums")
+        run.dry_run_footer()
+        return None
+    run.install_sigint()
+    out = {"fixed": 0, "failed": 0, "skipped": 0}
+    progress = run.Progress(len(albums), "albums fixed")
+    for album_id, changes in albums:
+        if run.Stop.requested:
+            break
+        current = client.album_settings(album_id)
+        todo = {}
+        for c in changes:
+            if current.get(c["field"]) != json.loads(c["old_value"]):   # changed by someone since the audit
+                st.db.execute("UPDATE album_changes SET status='skipped', last_error=? WHERE change_id=?",
+                              (f"now {current.get(c['field'])!r}", c["change_id"]))
+                out["skipped"] += 1
+            else:
+                todo[c["field"]] = json.loads(c["new_value"])
+        got = client.set_album_settings(album_id, todo) if todo else current
+        for c in changes:
+            if c["field"] not in todo:
+                continue
+            ok = got.get(c["field"]) == todo[c["field"]]
+            st.db.execute("UPDATE album_changes SET status=?, applied_at=?, last_error=? WHERE change_id=?",
+                          ("done" if ok else "failed", now(), None if ok else f"read back {got.get(c['field'])!r}",
+                           c["change_id"]))
+            out["fixed" if ok else "failed"] += 1
+        st.event("album_settings_fixed", album_id=album_id, commit=False, changes=todo)
+        st.db.commit()
+        progress.update()
+    progress.close()
+    return out
 
 
 def matching(rows, globs):
@@ -198,6 +316,18 @@ def cmd_apply(st, cfg, client, args):
 
 def cmd_verify(st, cfg, client, args):
     out = {"in_place": 0, "changed_since": []}
+    settings = {}
+    for r in st.q("SELECT * FROM album_changes WHERE kind='setting' AND status='done'"):
+        if r["album_id"] not in settings:
+            try:
+                settings[r["album_id"]] = client.album_settings(r["album_id"])
+            except NotFound:
+                settings[r["album_id"]] = {}
+        value = settings[r["album_id"]].get(r["field"])
+        if value == json.loads(r["new_value"]):
+            out["in_place"] += 1
+        else:
+            out["changed_since"].append(f"{r['album_id']} {r['field']} is now {value!r}")
     for r in st.q("SELECT * FROM album_changes WHERE kind='rename' AND status='done'"):
         try:
             name = client.album_info(r["album_id"])["name"]
@@ -216,11 +346,13 @@ def cmd_undo(st, cfg, client, args):
     if not args.yes:
         for r in rows:
             print(f"  would rename {r['new_value']!r} back to {r['old_value']!r}")
-        print(f"  {len(rows)} albums")
+        settings = st.one("SELECT COUNT(*) FROM album_changes WHERE kind='setting' AND status='done'")
+        print(f"  {len(rows)} renames and {settings} settings to restore")
         run.dry_run_footer()
         return None
     run.install_sigint()
     out = {"restored": 0, "skipped": [], "failed": 0}
+    undo_settings(st, client, args, out)
     for r in rows:
         if run.Stop.requested:
             break
@@ -239,10 +371,42 @@ def cmd_undo(st, cfg, client, args):
     return out
 
 
+def undo_settings(st, client, args, out):
+    """Restore settings changed by fix, per album, unless they were changed again since."""
+    rows = [dict(r) for r in st.q("SELECT c.*, a.name FROM album_changes c LEFT JOIN album_settings_seen a "
+                                  "USING(album_id) WHERE c.kind='setting' AND c.status='done' ORDER BY change_id DESC")]
+    if args.name:
+        rows = [r for r in rows if any(fnmatch.fnmatch((r["name"] or "").lower(), g.lower()) for g in args.name)]
+    by_album = {}
+    for r in rows:
+        by_album.setdefault(r["album_id"], []).append(r)
+    for album_id, changes in by_album.items():
+        if run.Stop.requested:
+            break
+        current = client.album_settings(album_id)
+        todo = {}
+        for c in changes:
+            if current.get(c["field"]) == json.loads(c["new_value"]):
+                todo[c["field"]] = json.loads(c["old_value"])
+            else:
+                out["skipped"].append(f"{c['name']}: {c['field']} was changed since; left alone")
+        # download size can only be restored with downloads on: restore it before switching downloads off
+        if "download_size" in todo and todo.get("downloads") is False:
+            client.set_album_settings(album_id, {"download_size": todo.pop("download_size")})
+        got = client.set_album_settings(album_id, todo) if todo else current
+        for c in changes:
+            if c["field"] in todo:
+                ok = got.get(c["field"]) == todo[c["field"]]
+                st.db.execute("UPDATE album_changes SET status=? WHERE change_id=?", ("undone" if ok else "done",
+                                                                                     c["change_id"]))
+                out["restored" if ok else "failed"] += 1
+        st.db.commit()
+
+
 COMMANDS = {"inventory": cmd_inventory, "plan": cmd_plan, "report": cmd_report, "approve": cmd_approve,
-            "apply": cmd_apply, "verify": cmd_verify, "undo": cmd_undo}
-NEEDS_CLIENT = {"inventory", "apply", "verify", "undo"}
-WRITES = {"apply", "undo"}
+            "apply": cmd_apply, "audit": cmd_audit, "fix": cmd_fix, "verify": cmd_verify, "undo": cmd_undo}
+NEEDS_CLIENT = {"inventory", "apply", "audit", "fix", "verify", "undo"}
+WRITES = {"apply", "fix", "undo"}
 
 
 def main(argv=None):
@@ -250,11 +414,11 @@ def main(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=list(COMMANDS))
     context.add_args(p)
-    p.add_argument("--sample", type=int, help="inventory: check only this many random albums")
-    p.add_argument("--seed", type=int, default=1, help="inventory: which random sample (repeatable)")
-    p.add_argument("--name", action="append", help="approve/apply/undo: only albums whose old or new name matches")
-    p.add_argument("--limit", type=int, help="apply: at most this many; report: rows shown per section")
-    run.add_yes(p, "rename / undo")
+    p.add_argument("--sample", type=int, help="inventory/audit: check only this many random albums")
+    p.add_argument("--seed", type=int, default=1, help="inventory/audit: which random sample (repeatable)")
+    p.add_argument("--name", action="append", help="only albums whose name (old or new) matches this glob")
+    p.add_argument("--limit", type=int, help="apply/fix: at most this many albums; report: rows shown per section")
+    run.add_yes(p, "rename / fix / undo")
     args = p.parse_args(argv)
     cfg = context.resolve(args)
     run.setup_logging(cfg["log_file"])

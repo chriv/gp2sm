@@ -81,6 +81,22 @@ class Capabilities:
     removing_original_removes_collected: bool = False  # deleting from its own album deletes every collected copy
 
 
+# Neutral album settings: name -> allowed values (a destination declares the ones it supports in
+# Capabilities.album_settings, with these values).
+SIZES = ("medium", "large", "xlarge", "x2large", "x3large", "x4large", "x5large", "4k", "5k", "original")
+ALBUM_SETTING_VALUES = {
+    "privacy": ("public", "unlisted", "private"),
+    "search": ("inherit", "no"),
+    "web_search": (True, False), "downloads": (True, False),
+    "download_size": SIZES, "largest_size": SIZES,
+    "protected": (True, False), "watermark": (True, False), "share": (True, False), "comments": (True, False),
+    "ranking": (True, False), "exif": (True, False), "filenames": (True, False), "geography": (True, False),
+    "slideshow": (True, False), "printable": (True, False), "hide_owner": (True, False),
+    "sort": ("position", "caption", "filename", "date_uploaded", "date_modified", "date_taken"),
+    "sort_direction": ("ascending", "descending"),
+}
+
+
 # --------------------------------------------------------------- interfaces
 
 @runtime_checkable

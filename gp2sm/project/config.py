@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from gp2sm.services.base import ALBUM_SETTING_VALUES
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:  # pragma: no cover - exercised on 3.10 in CI
@@ -141,6 +143,7 @@ class ProjectConfig:
             "takeout": takeout_policies(self.values),
             "organize": organize_settings(self.values),
             "naming": section_settings("naming", self.values),
+            "policy": list(self.values.get("policy", [])),
         }
 
 
@@ -201,12 +204,36 @@ def _check(section, key, kind, value, problems):
             problems.append(f"{where} is not a known time zone: {value!r} (e.g. America/New_York, UTC)")
 
 
+def check_policies(raw_policies, problems):
+    """[[policy]] entries: scope (and optional exclude) globs plus neutral album settings."""
+    if not isinstance(raw_policies, list) or not all(isinstance(p, dict) for p in raw_policies):
+        problems.append("[[policy]] must be a list of tables")
+        return []
+    for n, pol in enumerate(raw_policies, 1):
+        where = f"[[policy]] {n}"
+        for key in ("scope", "exclude"):
+            if key in pol and (not isinstance(pol[key], list) or not all(isinstance(v, str) for v in pol[key])):
+                problems.append(f"{where}: {key} must be a list of folder/album globs")
+        if not pol.get("scope"):
+            problems.append(f"{where}: needs a scope, e.g. scope = [\"Family/*\"] ([\"*\"] = every album)")
+        for key, value in pol.items():
+            if key in ("scope", "exclude"):
+                continue
+            if key not in ALBUM_SETTING_VALUES:
+                problems.append(f"{where}: unknown setting {key!r}; known: {sorted(ALBUM_SETTING_VALUES)}")
+            elif value not in ALBUM_SETTING_VALUES[key] or isinstance(value, bool) != isinstance(
+                    ALBUM_SETTING_VALUES[key][0], bool):
+                problems.append(f"{where}: {key} must be one of {list(ALBUM_SETTING_VALUES[key])}, got {value!r}")
+    return raw_policies
+
+
 def validate(raw):
     """Return (values with defaults, problems)."""
     problems, values = [], {}
     for section in raw:
-        if section not in SCHEMA:
-            problems.append(f"unknown section [{section}]; expected one of {sorted(SCHEMA)}")
+        if section not in SCHEMA and section != "policy":
+            problems.append(f"unknown section [{section}]; expected one of {sorted(SCHEMA) + ['policy']}")
+    values["policy"] = check_policies(raw.get("policy", []), problems)
     for section, keys in SCHEMA.items():
         given = raw.get(section, {})
         if not isinstance(given, dict):

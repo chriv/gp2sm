@@ -253,6 +253,10 @@ Backwards compatibility isn't a goal before the first public release, and the fi
     - albums whose name date disagrees with their contents
 - **Tests:** policy precedence and scope matching, drift computation, apply/undo against the SmugMug fake.
 - **Exit:** an audit on a real account, then a fix on one scope, then verify (re-audit shows no drift), then undo works on that scope.
+- **Sub-stages:**
+  - A7.1 neutral album settings in the adapter (`album_settings`, `set_album_settings`, `Capabilities.album_settings`)
+  - A7.2 `[[policy]]` plus `gp2sm albums audit | fix | verify | undo`
+  - A7.3 a real audit on a small sample, then fix and undo on sandbox albums
 
 ### Stage A8: Results reporting
 

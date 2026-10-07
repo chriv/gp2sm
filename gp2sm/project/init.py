@@ -7,6 +7,7 @@ import sys
 
 from gp2sm.project import credentials
 from gp2sm.project.config import CONFIG_NAME, SCHEMA, load
+from gp2sm.services.base import ALBUM_SETTING_VALUES
 
 SECTION_HELP = {
     "project": "General",
@@ -54,6 +55,21 @@ def render(values):
         for key, (_, default, help_) in keys.items():
             lines.append(f"# {help_}")
             lines.append(f"{key} = {_toml(values.get(section, {}).get(key, default))}")
+        lines.append("")
+    lines += ["# --- Album settings policy (`gp2sm albums audit`, `fix`): ordered [[policy]] entries. Each has a scope",
+              "# (folder/album globs; [\"*\"] = every album), an optional exclude, and settings; the last match wins.",
+              "# Settings: " + ", ".join(sorted(ALBUM_SETTING_VALUES)) + ".",
+              "# Example:",
+              "#   [[policy]]",
+              "#   scope = [\"*\"]",
+              "#   sort = \"date_taken\"",
+              "#   [[policy]]",
+              "#   scope = [\"Family/*\"]",
+              "#   privacy = \"private\"",
+              ""]
+    for pol in values.get("policy", []):
+        lines.append("[[policy]]")
+        lines += [f"{k} = {_toml(v)}" for k, v in pol.items()]
         lines.append("")
     return "\n".join(lines)
 
