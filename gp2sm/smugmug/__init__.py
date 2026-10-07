@@ -6,4 +6,4 @@ def service():
     from gp2sm.smugmug.client import SmugMugClient
     return ServiceInfo(name="smugmug", kind="destination",
                        factory=lambda config: SmugMugClient.from_config_file(config),
-                       description="SmugMug (OAuth 1.0a; config: path to smugmug_config.json)")
+                       description="SmugMug (sign in with `gp2sm auth smugmug`)")

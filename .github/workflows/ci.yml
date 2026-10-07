@@ -31,3 +31,21 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m pytest -q
       - run: gp2sm --version
+
+  package:
+    # build the wheel and use it from a clean environment, as a user would install it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build && python -m build
+      - run: python -m venv /tmp/clean && /tmp/clean/bin/pip install dist/*.whl
+      - run: |
+          cd /tmp
+          /tmp/clean/bin/gp2sm --version
+          /tmp/clean/bin/gp2sm --help
+          /tmp/clean/bin/gp2sm init /tmp/demo --non-interactive --name demo --timezone UTC
+          test -f /tmp/demo/gp2sm.toml
+          /tmp/clean/bin/gp2sm services
