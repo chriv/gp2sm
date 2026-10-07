@@ -237,7 +237,8 @@ def reconcile_keys(st, client, keys):
     """Ask the server where each image is now and fix plan/images accordingly."""
     fixed = {"done": 0, "pending": 0, "failed": 0}
     for key in keys:
-        row = st.q("SELECT p.target_name, t.album_key AS target_key, i.serial, i.src_album_key "
+        row = st.q("SELECT p.target_name, p.action, t.album_key AS target_key, i.serial, i.src_album_key, "
+                   "i.current_album_key "
                    "FROM plan p JOIN images i USING(image_key) LEFT JOIN targets t ON t.name=p.target_name "
                    "WHERE p.image_key=?", key)[0]
         try:
@@ -245,7 +246,9 @@ def reconcile_keys(st, client, keys):
         except NotFound:
             where = []
         if row["target_key"] and row["target_key"] in where:
-            status, current = "done", row["target_key"]
+            # a collected item stays where it was too; refs keep pointing at that copy
+            status = "done"
+            current = row["current_album_key"] if row["action"] == "collect" else row["target_key"]
         elif where:
             status, current = "pending", where[0]
         else:
@@ -260,15 +263,16 @@ def reconcile_keys(st, client, keys):
     return fixed
 
 
-def move_batch(st, client, target_key, items, batch_id):
-    """Move items (list of plan/image rows) into target. Returns (done_keys, failed_keys)."""
+def move_batch(st, client, target_key, items, batch_id, collect=False):
+    """Move (or collect) items (list of plan/image rows) into target. Returns (done_keys, failed_keys)."""
     keys = [r["image_key"] for r in items]
+    transfer = client.collect_items if collect else client.move_items
     st.set_plan_status(keys, "in_progress", batch_id=batch_id, bump_attempts=True)
     st.db.commit()
     refs = [client.item_ref(r["current_album_key"], r["image_key"], r["serial"]) for r in items]
     before = client.album_item_count(target_key)
     try:
-        client.move_items(target_key, refs)
+        transfer(target_key, refs)
     except SmugMugError as e:
         if e.http_status == 400 and not e.ambiguous:
             # Batch moves are all-or-nothing: nothing moved. Isolate the bad item(s).
@@ -285,7 +289,7 @@ def move_batch(st, client, target_key, items, batch_id):
                 return [], keys
             done, failed = [], []
             for it in items:
-                d, f = move_batch(st, client, target_key, [it], f"{batch_id}.{it['image_key']}")
+                d, f = move_batch(st, client, target_key, [it], f"{batch_id}.{it['image_key']}", collect)
                 done += d
                 failed += f
             return done, failed
@@ -307,12 +311,14 @@ def move_batch(st, client, target_key, items, batch_id):
         done = [r["image_key"] for r in items if client.album_contains(target_key, r["image_key"], r["serial"])]
     failed = [k for k in keys if k not in done]
     st.set_plan_status(done, "done")
-    st.db.executemany("UPDATE images SET current_album_key=? WHERE image_key=?", [(target_key, k) for k in done])
+    if not collect:
+        st.db.executemany("UPDATE images SET current_album_key=? WHERE image_key=?", [(target_key, k) for k in done])
     if failed:
         st.set_plan_status(failed, "unknown", error="not found in target after move")
         st.db.commit()
         reconcile_keys(st, client, failed)
-    st.event("batch_moved", album_key=target_key, commit=False, batch_id=batch_id, moved=len(done),
+    st.event("batch_collected" if collect else "batch_moved", album_key=target_key, commit=False, batch_id=batch_id,
+             moved=len(done),
              failed=len(failed), count_before=before, count_after=after)
     st.db.commit()
     return done, failed
@@ -356,8 +362,9 @@ def cmd_apply(st, cfg, client, args):
         st.db.commit()
         server_count = client.album_item_count(target_key)
         rows = [dict(r) for r in st.q(
-            "SELECT p.image_key, i.serial, i.current_album_key FROM plan p JOIN images i USING(image_key) "
-            "WHERE p.target_name=? AND p.status='pending' ORDER BY i.current_album_key, p.image_key", t["name"])]
+            "SELECT p.image_key, p.action, i.serial, i.current_album_key FROM plan p JOIN images i USING(image_key) "
+            "WHERE p.target_name=? AND p.status='pending' ORDER BY p.action, i.current_album_key, p.image_key",
+            t["name"])]
         if limit is not None:
             rows = rows[:limit - totals["moved"] - totals["failed"]]
         if server_count + len(rows) > cfg["album_hard_cap"]:
@@ -368,16 +375,16 @@ def cmd_apply(st, cfg, client, args):
         totals["albums"] += 1
         log.info("-> %s: moving %d (server has %d)", t["name"], len(rows), server_count)
         bs = args.batch_size or cfg["move_batch_size"]
-        # batch within a single source album
+        # batch within a single source album and action (move | collect)
         i = 0
         while i < len(rows) and not run.Stop.requested:
-            src = rows[i]["current_album_key"]
+            src, action = rows[i]["current_album_key"], rows[i]["action"]
             batch = [rows[i]]
             i += 1
-            while i < len(rows) and len(batch) < bs and rows[i]["current_album_key"] == src:
+            while i < len(rows) and len(batch) < bs and (rows[i]["current_album_key"], rows[i]["action"]) == (src, action):
                 batch.append(rows[i])
                 i += 1
-            done, failed = move_batch(st, client, target_key, batch, uuid.uuid4().hex[:12])
+            done, failed = move_batch(st, client, target_key, batch, uuid.uuid4().hex[:12], collect=action == "collect")
             totals["moved"] += len(done)
             totals["failed"] += len(failed)
             progress.update(len(done) + len(failed), failed=len(failed))
@@ -553,16 +560,21 @@ def cmd_delete_empty_targets(st, cfg, client, args):
 
 def cmd_undo(st, cfg, client, args):
     rows = [dict(r) for r in st.q(
-        "SELECT p.image_key, i.serial, i.src_album_key, t.album_key AS target_key FROM plan p "
+        "SELECT p.image_key, p.action, i.serial, i.src_album_key, t.album_key AS target_key FROM plan p "
         "JOIN images i USING(image_key) JOIN targets t ON t.name=p.target_name "
         "WHERE p.target_name=? AND p.status='done' ORDER BY i.src_album_key", args.target)]
+    collected = [r for r in rows if r["action"] == "collect"]
+    rows = [r for r in rows if r["action"] != "collect"]
     if not args.yes:
         sources = {r["src_album_key"] for r in rows}
         print(f"  would move {len(rows)} items from {args.target!r} back to {len(sources)} source albums")
+        if collected:
+            print(f"  would remove {len(collected)} collected copies from {args.target!r} (their originals stay)")
         run.dry_run_footer()
         return None
-    log.info("moving %d items from %r back to their source albums", len(rows), args.target)
     run.install_sigint()
+    removed = undo_collected(st, client, collected, args.target)
+    log.info("moving %d items from %r back to their source albums", len(rows), args.target)
     moved = 0
     for src in sorted({r["src_album_key"] for r in rows}):
         if run.Stop.requested:
@@ -577,7 +589,27 @@ def cmd_undo(st, cfg, client, args):
             st.event("undo_batch", album_key=src, commit=False, target=args.target, size=len(batch))
             st.db.commit()
             moved += len(batch)
-    return {"moved_back": moved}
+    return {"moved_back": moved, "collected_copies_removed": removed}
+
+
+def undo_collected(st, client, rows, target):
+    """Remove collected copies from the target album. Only ever the copy in the target: the original (in the
+    source) is never touched, since removing an original deletes every collected copy too."""
+    removed = 0
+    for r in rows:
+        if run.Stop.requested:
+            break
+        if r["target_key"] == r["src_album_key"]:
+            continue   # never the original
+        try:
+            client.remove_item(client.item_ref(r["target_key"], r["image_key"], r["serial"]))
+        except NotFound:
+            pass   # already gone from the target
+        st.set_plan_status([r["image_key"]], "pending")
+        st.event("undo_collect", image_key=r["image_key"], album_key=r["target_key"], commit=False, target=target)
+        st.db.commit()
+        removed += 1
+    return removed
 
 
 # --------------------------------------------------------------------- main

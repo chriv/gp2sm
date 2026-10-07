@@ -70,7 +70,7 @@ def cmd_plan(st, cfg, client, args):
     settings = {"photo": cfg["photo_album_template"], "video": cfg["video_album_template"],
                 "undated_photo": cfg["undated_photo_album"], "undated_video": cfg["undated_video_album"],
                 "duplicates_album": cfg["duplicates_album"], "duplicates": org["duplicates"],
-                "soft_cap": cfg["album_soft_cap"]}
+                "soft_cap": cfg["album_soft_cap"], "mode": org["mode"]}
     rows = planning.plan_organize(items, settings, existing)
     with st.db:   # recent items wait for a later run; only plan rows that haven't started are withdrawn
         st.db.executemany("DELETE FROM plan WHERE image_key=? AND status IN ('pending', 'failed')",
@@ -87,15 +87,22 @@ def cmd_plan(st, cfg, client, args):
 
 
 def cmd_apply(st, cfg, client, args):
-    if cfg["organize"]["mode"] == "collect":
-        raise SystemExit("[organize] mode = \"collect\" isn't available yet (roadmap A4.3); use mode = \"move\"")
+    if cfg["organize"]["mode"] == "collect" and not client.capabilities.can_collect:
+        raise SystemExit(f"{client.capabilities.name} can't collect; use [organize] mode = \"move\"")
     return consolidate.cmd_apply(st, cfg, client, args)
+
+
+def cmd_delete_empty_sources(st, cfg, client, args):
+    if cfg["organize"]["mode"] == "collect" or st.one("SELECT COUNT(*) FROM plan WHERE action='collect'"):
+        # deleting an album deletes the originals of everything collected from it
+        raise SystemExit("not available with collect: removing a source album would delete its collected items too")
+    return consolidate.cmd_delete_empty_sources(st, cfg, client, args)
 
 
 COMMANDS = {"inventory": cmd_inventory, "plan": cmd_plan, "report": consolidate.cmd_report, "apply": cmd_apply,
             "reconcile": consolidate.cmd_reconcile, "verify": consolidate.cmd_verify, "undo": consolidate.cmd_undo,
             "delete-duplicates": consolidate.cmd_delete_duplicates,
-            "delete-empty-sources": consolidate.cmd_delete_empty_sources,
+            "delete-empty-sources": cmd_delete_empty_sources,
             "delete-empty-targets": consolidate.cmd_delete_empty_targets}
 NEEDS_CLIENT = set(COMMANDS) - {"plan", "report"}
 WRITES = {"apply", "undo", "delete-duplicates", "delete-empty-sources", "delete-empty-targets"}

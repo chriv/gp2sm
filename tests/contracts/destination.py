@@ -60,6 +60,18 @@ class DestinationContract:
         finally:
             d.delete_album(album_id)
 
+    def test_collect_then_undo_keeps_the_original(self, albums, tmp_path):
+        d, a, b = albums
+        if not d.capabilities.can_collect:
+            pytest.skip("destination can't collect")
+        up = _upload(d, a, tmp_path, "collect_1.jpg")
+        d.collect_items(b, [d.item_ref(a, up["item_id"])])
+        assert set(d.item_album_ids(up["item_id"])) == {a, b}
+        d.collect_items(b, [d.item_ref(a, up["item_id"])])           # again: no error, no extra copy
+        assert d.album_item_count(b) == 1
+        d.remove_item(d.item_ref(b, up["item_id"]))                   # undo: remove the collected copy
+        assert d.item_album_ids(up["item_id"]) == [a]
+
     def test_upload_listing_count_and_refs(self, albums, tmp_path):
         d, a, _ = albums
         up = _upload(d, a, tmp_path, "contract_1.jpg")

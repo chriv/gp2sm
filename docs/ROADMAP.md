@@ -284,6 +284,7 @@ Each step below is its own project (separate config and state), so results stay 
   1. What gets uploaded for a Live Photo (still format, any motion clip, filenames, dates).
   2. Whether **moving** an uploaded photo to another album, or deleting it, makes the app upload it again. (Hypothesis: the app decides by a content hash.)
   3. Whether editing a photo on the device uploads a new copy.
+  4. What deleting a photo on the device does to its uploaded copy. If the app deletes it on SmugMug, collected copies in organized albums vanish with it (collect semantics: removing an original deletes every collected copy; see `docs/smugmug-api.md`).
 - **Deliverables:** findings added to `docs/smugmug-api.md` (an "uploader app" section), and the choice of `move` vs `collect` for auto-upload sources.
 - **Exit:** all three questions answered, and the test images removed.
 

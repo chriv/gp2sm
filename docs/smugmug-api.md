@@ -80,6 +80,12 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 ## Reorganizing
 - Move: `POST /api/v2/album/{dest}!moveimages` with JSON `{"MoveUris": "<AlbumImage uri>[,<uri>...]"}` removes the image from the source album.
 - Collect: `POST /api/v2/album/{dest}!collectimages` with JSON `{"CollectUris": "<AlbumImage uri>"}` keeps it in the source too, and counts toward the destination's `ImageCount`.
+- **Collect semantics** (probed 2026-10-07 in a sandbox, `probes/probe_collect.py`):
+  - The collected copy is the same image (same `ImageKey`). `!albums` lists both albums, and its AlbumImage URI in the destination is `/album/{dest}/image/{key}-0`.
+  - **Removing the collected copy** (`DELETE` its AlbumImage in the destination) leaves the original untouched. This is how to undo a collect.
+  - **⚠️ Removing the original** from its own album **deletes the image everywhere**: the collected copies vanish too. Never delete or empty an album whose items were collected elsewhere.
+  - Moving the original to another album keeps the collected copy, and the image is then in both of those albums.
+  - Collecting an item that is already in the destination is a silent no-op (no error, no extra copy).
 - Delete from an album: `DELETE <AlbumImage uri>` → 200.
 - **Moving an item that's still processing is silently ignored.** (Observed 2026-10-06.) A video stuck in `Status: "Preprocess"`, `Processing: true` hours after upload: `!moveimages` returned `200 Ok`, but the item stayed in its source album, repeatably. **Always confirm a move on the server** (`image!albums`, or the target's `ImageCount` delta) instead of trusting the response, and retry once processing has finished.
 - Moves occasionally fail with HTTP 500 without being applied. Once the server confirms the item didn't move, retrying is safe. (6 of 6 succeeded on retry.)

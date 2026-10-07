@@ -141,15 +141,18 @@ def plan_organize(items, settings, existing=None):
 
     items: [dict(item_id, filename, is_video, md5, uploaded, capture_local, method, group)]
     settings: dict(photo, video, undated_photo, undated_video (templates; {yyyy} {mm} {group}),
-                   duplicates_album, duplicates ('park' | 'keep'), soft_cap)
+                   duplicates_album, duplicates ('park' | 'keep'), soft_cap, mode ('move' | 'collect'))
     existing: {item_id: dict(status, target_name)}; items whose move is done keep their album.
     Byte-identical copies: with 'park', one keeper per MD5 (earliest upload) is organized and the others go to
     the duplicates album; any copy's date can date the keeper. Albums over soft_cap continue as '- Part N'.
+    mode 'collect' adds items to their album and leaves them in the source (action 'collect'); nothing is
+    parked then, since moving items out of a source an uploader app still writes to may make it upload again.
     Returns [dict(item_id, action, target_name, kind, reason)].
     """
     existing = existing or {}
+    collect = settings.get("mode") == "collect"
     groups = {}
-    if settings["duplicates"] == "park":
+    if settings["duplicates"] == "park" and not collect:
         for it in items:
             if it.get("md5"):
                 groups.setdefault(it["md5"], []).append(it)
@@ -185,7 +188,7 @@ def plan_organize(items, settings, existing=None):
             base = fill(settings["undated_video" if video else "undated_photo"], None, it.get("group"))
             kind = "video_undated" if video else "photo_undated"
         group = f", group {it['group']}" if it.get("group") else ""
-        rows.append({"item_id": it["item_id"], "action": "move", "base": base, "kind": kind,
+        rows.append({"item_id": it["item_id"], "action": "collect" if collect else "move", "base": base, "kind": kind,
                      "sort": (when or "", it["item_id"]), "reason": f"date via {method}{group}"})
 
     by_base = defaultdict(list)

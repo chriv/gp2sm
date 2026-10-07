@@ -21,6 +21,7 @@ class FakeSmugMug:
         self.albums = {k: set(v) for k, v in (albums or {}).items()}
         self.folders = dict(folders or {})   # album_id -> display folder path ("" = top level)
         self.names = {}                      # album_id -> display name (default: the id)
+        self.home = {}                       # item_id -> its original album (where removing it deletes it)
         self.items = dict(items or {})
         self.bad, self.processing = set(bad), set(processing)
         self.ambiguous = ambiguous
@@ -109,6 +110,23 @@ class FakeSmugMug:
                 continue  # silently ignored, like an item still processing on SmugMug
             self.albums[src].discard(item_id)
             self.albums[dest].add(item_id)
+            if self.home.get(item_id, src) == src:
+                self.home[item_id] = dest
+        if self.ambiguous:
+            self.ambiguous -= 1
+            raise SmugMugError("504 after applying", http_status=504, ambiguous=True)
+
+    def collect_items(self, dest, refs):
+        self.calls.append(("collect", dest, list(refs)))
+        adds = []
+        for ref in refs:
+            src, item_id = self._parse(ref)
+            if item_id in self.bad or item_id not in self.albums.get(src, ()):
+                raise SmugMugError("bad ref", http_status=400)
+            adds.append((src, item_id))
+        for src, item_id in adds:
+            self.home.setdefault(item_id, src)
+            self.albums[dest].add(item_id)    # already there: a silent no-op, as on SmugMug
         if self.ambiguous:
             self.ambiguous -= 1
             raise SmugMugError("504 after applying", http_status=504, ambiguous=True)
@@ -117,6 +135,10 @@ class FakeSmugMug:
         album_id, item_id = self._parse(ref)
         if item_id not in self.albums.get(album_id, ()):
             raise NotFound("not in album", http_status=404)
+        if self.home.get(item_id, album_id) == album_id and sum(item_id in a for a in self.albums.values()) > 1:
+            for items in self.albums.values():   # removing the original deletes every collected copy
+                items.discard(item_id)
+            return
         self.albums[album_id].discard(item_id)
 
     def upload_file(self, album_id, path, filename, content_type):

@@ -39,6 +39,8 @@ SMUGMUG_CAPABILITIES = Capabilities(
     rejected_extensions=frozenset({".webp", ".ico", ".bmp"}),
     min_video_pixels=None,  # low-resolution clips are rejected; exact threshold unknown (~250-460 px long side)
     max_items_per_album=5000,
+    can_collect=True,
+    removing_original_removes_collected=True,
 )
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -389,6 +391,12 @@ class SmugMugClient:
 
     def item_album_ids(self, item_id, serial=0):
         return self.image_album_keys(item_id, serial)
+
+    def collect_items(self, dest_album_id, item_refs):
+        """Add items to another album without removing them from where they are (see docs: collect semantics).
+        Not idempotent-retried: an ambiguous failure is checked against the server by the caller."""
+        self.request("POST", f"/api/v2/album/{dest_album_id}!collectimages",
+                     json_body={"CollectUris": ",".join(item_refs)})
 
     def move_items(self, dest_album_id, item_refs):
         """All-or-nothing on SmugMug: a rejected batch (HTTP 400) moves nothing."""

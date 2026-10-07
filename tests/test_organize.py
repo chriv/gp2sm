@@ -115,3 +115,28 @@ def test_organize_end_to_end(project, capsys):
     assert run(root, "plan") == 0                                            # re-planning keeps done items
     assert dict(st.q("SELECT image_key, status FROM plan")) == {k: "done" for k in ("P1", "P2", "P3", "P4")}
     assert not os.path.exists(root / ".gp2sm.lock")
+
+
+def test_collect_mode_plans_collects_and_parks_nothing():
+    rows = planning.plan_organize([item("k", "2023-01-02", md5="same"), item("x", None, md5="same")],
+                                  dict(SETTINGS, mode="collect"))
+    assert {r["action"] for r in rows} == {"collect"}
+
+
+def test_organize_collect_end_to_end(project):
+    root, fake, src = project
+    text = (root / "gp2sm.toml").read_text().replace('mode = "move"', 'mode = "collect"')
+    (root / "gp2sm.toml").write_text(text)
+    for step in ("inventory", "plan"):
+        assert run(root, step) == 0
+    assert run(root, "apply", "--yes") == 0
+    names = {fake.names.get(a, a): items for a, items in fake.albums.items()}
+    assert names["Phone 2023-05"] == {"P1", "P3"}                       # identical copies aren't parked
+    assert fake.albums[src] == {"P1", "P2", "P3", "P4", "P5"}            # nothing left the uploader's album
+    assert set(fake.item_album_ids("P1")) == {src, next(a for a, n in fake.names.items() if n == "Phone 2023-05")}
+    assert run(root, "verify") == 0
+    with pytest.raises(SystemExit, match="collected items too"):
+        run(root, "delete-empty-sources", "--yes")
+    assert run(root, "undo", "Phone 2023-05", "--yes") == 0                # removes only the collected copy
+    assert fake.albums[src] == {"P1", "P2", "P3", "P4", "P5"}
+    assert fake.item_album_ids("P1") == [src]
