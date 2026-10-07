@@ -56,7 +56,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
 - **Tests:** the existing 50 tests move onto the shared fakes. A test checks that the fixture generator is deterministic.
 - **Exit:** `pipx install .` gives a working `gp2sm --help`. CI is green on all three operating systems. No legacy files remain on the default branch.
 
-### Stage A1: Modular core and service plugins
+### Stage A1: Modular core and service plugins. ✅ Done (2026-10-06)
 
 - **Goal:** separate the existing code into stable modules without changing behavior, and make photo services pluggable on both ends (sources and destinations), so services other than Google Takeout and SmugMug can be added later without a redesign.
 - **Service layer:**
