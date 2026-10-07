@@ -1,4 +1,4 @@
-from gp2sm.organize.content_match import assign, group_key
+from gp2sm.contrib.legacy_bridge.content_match import assign, group_key
 
 
 def test_group_key_strips_extension_case_and_counter():
@@ -47,7 +47,7 @@ def test_different_group_never_compared():
 
 
 def test_assign_bursts_one_to_one_closest_first():
-    from gp2sm.organize.content_match import assign_bursts
+    from gp2sm.contrib.legacy_bridge.content_match import assign_bursts
     takeout = {1: rot(0b0), 2: rot(0b1), 3: rot((1 << 40) - 1)}
     smug = {"A": 0b0, "B": 0b11}
     paired, unpaired = assign_bursts(takeout, smug)
@@ -57,6 +57,6 @@ def test_assign_bursts_one_to_one_closest_first():
 
 
 def test_assign_bursts_respects_max_dist():
-    from gp2sm.organize.content_match import assign_bursts
+    from gp2sm.contrib.legacy_bridge.content_match import assign_bursts
     paired, unpaired = assign_bursts({1: rot((1 << 10) - 1)}, {"A": 0}, max_dist=6)
     assert paired == {} and unpaired == [1]

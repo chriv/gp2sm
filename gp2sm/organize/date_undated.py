@@ -30,11 +30,11 @@ from zoneinfo import ZoneInfo
 from PIL import Image
 
 from gp2sm.cli import run
+from gp2sm.contrib.legacy_bridge.content_match import MARGIN_MIN, MATCH_MAX, dhash, hamming, hash_takeout
 from gp2sm.media import aspect, mp4_dims, mp4_duration
 from gp2sm.media.mp4 import clip_creation_ts
 from gp2sm.organize import planning
 from gp2sm.organize.consolidate import ensure_target, setup_logging
-from gp2sm.organize.content_match import MARGIN_MIN, MATCH_MAX, dhash, hamming, hash_takeout
 from gp2sm.project import context
 from gp2sm.smugmug.client import SmugMugError
 from gp2sm.state import State, now

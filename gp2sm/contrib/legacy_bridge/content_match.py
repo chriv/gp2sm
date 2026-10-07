@@ -1,4 +1,4 @@
-"""Perceptual (content) matching of unlinked Takeout stills to unlinked SmugMug copies.
+"""Perceptual (content) matching of unlinked Takeout stills to unlinked SmugMug copies (legacy bridge).
 
 Legacy uploads came from Google's re-processed downloads, so their bytes (and often names) differ from
 the Takeout originals. Matching uses a 64-bit difference hash (dHash) of small renderings:
@@ -30,7 +30,7 @@ from gp2sm.project import context
 from gp2sm.state import State, now
 from gp2sm.takeout.archive import read_members
 
-log = logging.getLogger("gp2sm.organize.content_match")
+log = logging.getLogger("gp2sm.contrib.legacy_bridge.content_match")
 
 MATCH_MAX = 6
 MARGIN_MIN = 12

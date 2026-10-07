@@ -160,7 +160,7 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
     - the pure planner, with clips paired by time and shape across all stills
     - stage, upload and verify reused
     - end-to-end synthetic test
-  - A3.4 the old-database bridge moves to `gp2sm.contrib.legacy_bridge`
+  - A3.4 the old-database bridge moves to `gp2sm.contrib.legacy_bridge` (Takeout side; `consolidate`'s legacy import follows in A4)
   - A3.5 live sandbox test, then a real one-album Takeout
 
 ### Stage A4: Generalized organize (consolidation)

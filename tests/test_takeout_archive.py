@@ -9,7 +9,7 @@ from PIL import Image
 from gp2sm.media.probe import probe
 from gp2sm.takeout import archive
 from gp2sm.takeout import index as takeout_index
-from gp2sm.takeout.match import build_items
+from gp2sm.takeout.items import build_items
 from tests.fixtures.synthetic import jpeg_bytes, make_takeout, mp4_bytes, png_bytes, standard_takeout_entries
 
 

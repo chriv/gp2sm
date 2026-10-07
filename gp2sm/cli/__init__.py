@@ -13,9 +13,9 @@ COMMANDS = {
     "takeout": ("gp2sm.takeout.cli", "import a Google Takeout: inventory, dedupe (more steps coming in A3)"),
     "consolidate": ("gp2sm.organize.consolidate", "organize existing SmugMug albums (inventory/match/plan/apply/verify/...)"),
     "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
-    "takeout-match": ("gp2sm.takeout.match", "pair metadata files and Live Photo clips; compare with consolidation state"),
-    "content-match": ("gp2sm.organize.content_match", "perceptual matching of Takeout stills to existing SmugMug copies"),
-    "takeout-upload": ("gp2sm.takeout.upload", "plan/stage/upload/verify Takeout items (Live Photo pairs, HEIC)"),
+    "takeout-match": ("gp2sm.contrib.legacy_bridge.takeout_match", "legacy: link a Takeout index to the old transfer database"),
+    "content-match": ("gp2sm.contrib.legacy_bridge.content_match", "legacy: perceptual matching of Takeout stills to old uploads"),
+    "takeout-upload": ("gp2sm.contrib.legacy_bridge.takeout_upload", "legacy: the first migration's upload plan (stage/upload/verify shared)"),
     "place-clips": ("gp2sm.organize.place_clips", "place unsorted clips beside their stills by capture time"),
     "date-undated": ("gp2sm.organize.date_undated", "date items in undated albums from evidence and move them"),
 }
