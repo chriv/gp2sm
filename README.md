@@ -19,7 +19,7 @@ Move a photo library into **SmugMug** and keep it organized. Every step is plann
 
 ## Install
 
-gp2sm isn't on PyPI yet (it will be once its interfaces are stable). Install it from GitHub (Python 3.10 or newer):
+Install it from GitHub (Python 3.10 or newer):
 
 ```bash
 pipx install git+https://github.com/chriv/gp2sm.git
@@ -83,6 +83,10 @@ gp2sm albums undo --yes                           # restores the previous names 
 ## Safety
 
 Anything that changes SmugMug is a dry run unless you add `--yes`. Deletions are separate commands that check the server first. Every change is recorded before it's sent. Outcomes that can't be known (a timeout, a server error) are checked against SmugMug before anything is retried. One command at a time can change a project. See [docs/safety.md](docs/safety.md) for what each command can undo.
+
+## Extending: photo services are plugins
+
+gp2sm talks to photo services only through two interfaces in `gp2sm/services/base.py`: a **source** (where items come from, such as a Google Takeout) and a **destination** (where they go, such as SmugMug). A destination also declares its capabilities: which formats it converts or rejects, album size limits, whether items can sit in several albums, and which album settings it supports. The core reads those instead of hard-coding one service. The built-in Google Takeout source and SmugMug destination register like any third-party plugin, through the `gp2sm.services` entry-point group. `gp2sm services` lists what's installed, and shared contract tests (`tests/contracts/`) check that a new service behaves the way the core expects.
 
 ## Documentation
 
