@@ -5,7 +5,7 @@ every .json sidecar, and reads each photo/video's own facts: dimensions, duratio
 the file itself records (camera EXIF, or the clip's Apple/MP4 date). Archives are processed in parallel;
 each archive is committed only when fully read, so an interrupted run simply re-reads that archive.
 
-Usage: gp2sm takeout-index [ARCHIVE ...] [--db FILE]   (default: every archive in the project's takeout folder)
+Usage: gp2sm takeout index   (every archive in the project's takeout folder)
 """
 
 import argparse
@@ -19,8 +19,7 @@ import time
 
 from gp2sm.media.mp4 import Partial
 from gp2sm.media.probe import VIDEO_EXTS, is_media, probe
-from gp2sm.project import context
-from gp2sm.takeout.archive import iter_members, list_archives
+from gp2sm.takeout.archive import iter_members
 
 log = logging.getLogger("gp2sm.takeout.index")
 
@@ -93,20 +92,13 @@ def index_archive(path):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="gp2sm takeout-index", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("archives", nargs="*", help="Takeout .zip/.tgz files (default: the project's takeout folder)")
-    context.add_args(p, paths=("db", "takeout_dir"))
+    """Index the given archives into --db (`gp2sm takeout index` calls this for a project's takeout folder)."""
+    p = argparse.ArgumentParser(prog="gp2sm takeout index", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("archives", nargs="+", help="Takeout .zip/.tgz files")
+    p.add_argument("--db", required=True, help="index database")
     p.add_argument("--force", action="store_true", help="re-index archives already indexed")
     args = p.parse_args(argv)
-    if args.project or args.config or not args.archives or args.db is None:
-        try:
-            context.resolve(args)
-        except context.NoProject:
-            if not args.archives:
-                raise
-            args.db = args.db or context.LEGACY_PATHS["db"]
-    if not args.archives:
-        args.archives = [os.path.join(args.takeout_dir, f) for f in list_archives(args.takeout_dir)]
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
 
     db = sqlite3.connect(args.db)

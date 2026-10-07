@@ -1,6 +1,6 @@
 import pytest
 
-from gp2sm.organize import consolidate
+from gp2sm.organize import engine
 from gp2sm.state import State
 from tests.fakes.smugmug import FakeSmugMug
 
@@ -34,7 +34,7 @@ def status(st):
 
 def test_clean_batch_moves_and_records(st):
     fake = FakeSmug({"SRC": "abcd", "DST": ""})
-    done, failed = consolidate.move_batch(st, fake, "DST", rows(st), "b1")
+    done, failed = engine.move_batch(st, fake, "DST", rows(st), "b1")
     assert sorted(done) == list("abcd") and failed == []
     assert set(status(st).values()) == {"done"}
     assert {r["current_album_key"] for r in rows(st)} == {"DST"}
@@ -43,7 +43,7 @@ def test_clean_batch_moves_and_records(st):
 
 def test_bad_item_is_isolated_and_rest_still_move(st):
     fake = FakeSmug({"SRC": "abcd", "DST": ""}, bad={"c"})
-    done, failed = consolidate.move_batch(st, fake, "DST", rows(st), "b1")
+    done, failed = engine.move_batch(st, fake, "DST", rows(st), "b1")
     assert sorted(done) == list("abd") and failed == ["c"]
     assert status(st)["c"] == "failed"
     assert fake.albums["DST"] == set("abd")
@@ -51,7 +51,7 @@ def test_bad_item_is_isolated_and_rest_still_move(st):
 
 def test_unknown_outcome_is_reconciled_from_server(st):
     fake = FakeSmug({"SRC": "abcd", "DST": ""}, fail_network=1)
-    done, failed = consolidate.move_batch(st, fake, "DST", rows(st), "b1")
+    done, failed = engine.move_batch(st, fake, "DST", rows(st), "b1")
     assert sorted(done) == list("abcd") and failed == []
     assert set(status(st).values()) == {"done"}
 
@@ -60,18 +60,18 @@ def test_reconcile_sets_pending_when_still_in_source(st):
     fake = FakeSmug({"SRC": "abcd", "DST": ""})
     st.set_plan_status(["a"], "in_progress")
     st.db.commit()
-    assert consolidate.reconcile_keys(st, fake, ["a"]) == {"done": 0, "pending": 1, "failed": 0}
+    assert engine.reconcile_keys(st, fake, ["a"]) == {"done": 0, "pending": 1, "failed": 0}
     assert status(st)["a"] == "pending"
 
 
 def test_ambiguous_504_is_reconciled_not_failed(st):
     fake = FakeSmug({"SRC": "abcd", "DST": ""}, fail_network=1)
-    done, failed = consolidate.move_batch(st, fake, "DST", rows(st), "b1")
+    done, failed = engine.move_batch(st, fake, "DST", rows(st), "b1")
     assert sorted(done) == list("abcd") and failed == []
 
 
 def test_single_400_already_in_target_counts_as_done(st):
     fake = FakeSmug({"SRC": "bcd", "DST": "a"})  # 'a' already moved by an earlier, unrecorded request
     a = [r for r in rows(st) if r["image_key"] == "a"]
-    done, failed = consolidate.move_batch(st, fake, "DST", a, "b1")
+    done, failed = engine.move_batch(st, fake, "DST", a, "b1")
     assert done == ["a"] and failed == []

@@ -25,7 +25,7 @@ cd my-library && ../.venv/bin/gp2sm status
 .venv/bin/python -m pytest -q
 ```
 
-Commands find the project by looking upward from the current folder for `gp2sm.toml` (or use `--project DIR`). The state database, logs, Takeout archives and index all live in the project folder. Commands that change SmugMug take a per-project lock, so two runs can't collide. The older JSON setup (`--config FILE`, or `data/consolidate.json`) still works. [`examples/`](examples) has commented configs for common setups.
+Commands find the project by looking upward from the current folder for `gp2sm.toml` (or use `--project DIR`). The state database, logs, Takeout archives and index all live in the project folder. Commands that change SmugMug take a per-project lock, so two runs can't collide. [`examples/`](examples) has commented configs for common setups.
 
 ## Documentation
 

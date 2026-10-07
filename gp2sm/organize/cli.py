@@ -4,7 +4,7 @@
               folder are never sources) with each item's camera date, make and model
   plan        date every item (the [organize] dates chain), group it ([[organize.group]]), pick its album
   report      what the plan does, per album
-  apply       move the items (dry run unless --yes); verify | reconcile | undo as in `gp2sm consolidate`
+  apply       move the items (dry run unless --yes); then verify, reconcile, undo
   delete-duplicates | delete-empty-sources | delete-empty-targets   permanent, dry run unless --yes
 
 Re-running is safe: items already moved keep their album, and new items are added to the plan.
@@ -15,9 +15,8 @@ import logging
 import sys
 
 from gp2sm.cli import run
-from gp2sm.contrib.legacy_bridge import legacy_dates
 from gp2sm.importer.inventory import albums_in_scope
-from gp2sm.organize import consolidate, planning, rules
+from gp2sm.organize import engine, planning, rules
 from gp2sm.project import context
 from gp2sm.state import State
 
@@ -35,18 +34,12 @@ def cmd_inventory(st, cfg, client, args):
         raise SystemExit("[organize] sources is empty: name the folders or albums to organize")
     albums = [a for a in albums_in_scope(client, sources) if not inside(a["folder"], cfg["target_folder"])]
     log.info("%d source albums under %s", len(albums), sources)
-    return consolidate.inventory_albums(st, client, albums, args.workers)
-
-
-def plugins(st):
-    """Extra date sources: 'legacy' reads dates linked from the old transfer databases (gp2sm consolidate match)."""
-    return {"legacy": legacy_dates.plugin(st)}
+    return engine.inventory_albums(st, client, albums, args.workers)
 
 
 def organize_items(st, cfg):
     """Items with their date, method and group (pure rules applied to the inventory)."""
     org = cfg["organize"]
-    extra = plugins(st)
     out, skipped = [], []
     for r in st.q("SELECT i.image_key AS item_id, i.filename, i.is_video, i.archived_md5 AS md5, i.uploaded, "
                   "i.capture_dt_smug AS capture_time, i.make, i.model, a.name AS album_name, a.folder "
@@ -55,7 +48,7 @@ def organize_items(st, cfg):
         if rules.recent(it["uploaded"], org["skip_newer_than_days"]):
             skipped.append(it["item_id"])
             continue
-        it["capture_local"], it["method"] = rules.date_for(it, org["dates"], cfg["timezone"], plugins=extra)
+        it["capture_local"], it["method"] = rules.date_for(it, org["dates"], cfg["timezone"])
         album = "/".join(p for p in (it["folder"], it["album_name"]) if p)
         it["group"] = rules.group_for({"album": album, "make": it["make"], "model": it["model"],
                                        "filename": it["filename"]}, org["group"], org["unassigned"])
@@ -75,7 +68,7 @@ def cmd_plan(st, cfg, client, args):
     with st.db:   # recent items wait for a later run; only plan rows that haven't started are withdrawn
         st.db.executemany("DELETE FROM plan WHERE image_key=? AND status IN ('pending', 'failed')",
                           [(k,) for k in skipped])
-    out = consolidate.write_plan(st, rows, existing)
+    out = engine.write_plan(st, rows, existing)
     methods = {}
     for it in items:
         key = it["method"].split(":")[0]
@@ -89,21 +82,21 @@ def cmd_plan(st, cfg, client, args):
 def cmd_apply(st, cfg, client, args):
     if cfg["organize"]["mode"] == "collect" and not client.capabilities.can_collect:
         raise SystemExit(f"{client.capabilities.name} can't collect; use [organize] mode = \"move\"")
-    return consolidate.cmd_apply(st, cfg, client, args)
+    return engine.cmd_apply(st, cfg, client, args)
 
 
 def cmd_delete_empty_sources(st, cfg, client, args):
     if cfg["organize"]["mode"] == "collect" or st.one("SELECT COUNT(*) FROM plan WHERE action='collect'"):
         # deleting an album deletes the originals of everything collected from it
         raise SystemExit("not available with collect: removing a source album would delete its collected items too")
-    return consolidate.cmd_delete_empty_sources(st, cfg, client, args)
+    return engine.cmd_delete_empty_sources(st, cfg, client, args)
 
 
-COMMANDS = {"inventory": cmd_inventory, "plan": cmd_plan, "report": consolidate.cmd_report, "apply": cmd_apply,
-            "reconcile": consolidate.cmd_reconcile, "verify": consolidate.cmd_verify, "undo": consolidate.cmd_undo,
-            "delete-duplicates": consolidate.cmd_delete_duplicates,
+COMMANDS = {"inventory": cmd_inventory, "plan": cmd_plan, "report": engine.cmd_report, "apply": cmd_apply,
+            "reconcile": engine.cmd_reconcile, "verify": engine.cmd_verify, "undo": engine.cmd_undo,
+            "delete-duplicates": engine.cmd_delete_duplicates,
             "delete-empty-sources": cmd_delete_empty_sources,
-            "delete-empty-targets": consolidate.cmd_delete_empty_targets}
+            "delete-empty-targets": engine.cmd_delete_empty_targets}
 NEEDS_CLIENT = set(COMMANDS) - {"plan", "report"}
 WRITES = {"apply", "undo", "delete-duplicates", "delete-empty-sources", "delete-empty-targets"}
 
@@ -123,7 +116,7 @@ def main(argv=None):
     run.add_yes(s, "move the items")
     s.add_argument("--limit", type=int, help="max items to move this run")
     s.add_argument("--target", action="append", help="only these target album names (glob ok; repeatable)")
-    s.add_argument("--kind", action="append", choices=list(consolidate.KIND_ORDER), help="only these target kinds")
+    s.add_argument("--kind", action="append", choices=list(engine.KIND_ORDER), help="only these target kinds")
     s.add_argument("--batch-size", type=int)
     s = sub.add_parser("reconcile")
     s.add_argument("--include-failed", action="store_true")
@@ -139,7 +132,7 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     cfg = context.resolve(args)
-    consolidate.setup_logging(cfg["log_file"], args.debug)
+    run.setup_logging(cfg["log_file"], args.debug)
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command in NEEDS_CLIENT else None
     lock = None

@@ -153,3 +153,13 @@ def test_delete_empty_targets_says_why_it_kept_an_album(project, capsys):
     out = capsys.readouterr().out
     assert "Phone 2023-05: 1 items still planned for it" in out
     assert any(n == "Phone 2023-05" for n in fake.names.values())        # kept
+
+
+def test_apply_refuses_while_another_run_holds_the_lock(project):
+    root, fake, src = project
+    for step in ("inventory", "plan"):
+        run(root, step)
+    (root / ".gp2sm.lock").write_text(f"{os.getppid()} organize apply")
+    with pytest.raises(context.Locked):
+        run(root, "apply", "--yes")
+    assert fake.albums[src] == {"P1", "P2", "P3", "P4", "P5"}

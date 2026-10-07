@@ -65,7 +65,7 @@ def make_main(verb):
         steps = STEPS[chosen].get(verb)
         if not steps:
             raise SystemExit(f"`{verb}` isn't available for {chosen}")
-        common = (["--project", args.project] if args.project else []) + (["--config", args.config] if args.config else [])
+        common = ["--project", args.project] if args.project else []
         run = runner(chosen)
         for i, step in enumerate(steps):
             show(f"== {chosen} {step}")

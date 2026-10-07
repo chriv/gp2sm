@@ -5,7 +5,7 @@ Dates come from an ordered chain; the first source that gives a plausible date w
   filename  a date in the file name, from common camera, phone and app patterns (FILENAME_PATTERNS)
   album     a date in the source album's name (e.g. "2004-03-17 New puppy"), with the same patterns
   upload    when the item was uploaded (a last resort; off unless listed)
-Other sources can be added by plugins (e.g. the legacy transfer database in gp2sm.contrib.legacy_bridge).
+Other sources can be added by plugins (date_for's `plugins`).
 
 Groups come from ordered rules; the first rule whose conditions all match names the group. Conditions are
 case-insensitive globs on the source album, camera make, camera model and file name.

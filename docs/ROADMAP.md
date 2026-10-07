@@ -226,6 +226,17 @@ Everything that makes gp2sm a better tool: import, organize, album naming and se
   - albums whose photos were uploaded over a long time aren't dated
   - an apply/undo round trip on sandbox albums left links unchanged
 
+### Cleanup before A7 (owner-approved, 2026-10-07)
+
+Backwards compatibility isn't a goal before the first public release, and the first migration's state can't be relied on any more.
+- C1: remove the first migration's tools:
+  - `consolidate`, `takeout-match`, `content-match`, `takeout-upload`, `place-clips`, `date-undated`, the `takeout-index` alias
+  - `contrib/legacy_bridge`
+  - the JSON-config fallback, `[consolidate]`, and the `legacy` date source
+
+  The engine organize uses is kept as `organize/engine.py`; `gp2sm takeout remove` is exposed.
+- C2: a clean state schema with neutral names (items, albums), without the legacy tables; migrations restart, and older state databases are refused with a clear message.
+
 ### Stage A7: Settings policy (audit and bulk fix)
 
 - **Goal:** state the preferred album settings once, and find and fix drift.

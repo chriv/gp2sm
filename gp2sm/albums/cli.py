@@ -20,7 +20,6 @@ import sys
 from gp2sm.albums import naming
 from gp2sm.cli import run
 from gp2sm.importer.inventory import albums_in_scope
-from gp2sm.organize.consolidate import setup_logging
 from gp2sm.project import context
 from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import State, now
@@ -258,7 +257,7 @@ def main(argv=None):
     run.add_yes(p, "rename / undo")
     args = p.parse_args(argv)
     cfg = context.resolve(args)
-    setup_logging(cfg["log_file"])
+    run.setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command in NEEDS_CLIENT else None
     lock = None

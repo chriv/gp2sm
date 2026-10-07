@@ -36,14 +36,7 @@ soft_cap = 4000
 # never put more than this many items in one album
 hard_cap = 5000
 
-# --- Reorganizing existing albums (`gp2sm consolidate`)
-[consolidate]
-# substrings of album paths to consolidate from
-sources = []
-# optional legacy transfer databases (Google item lists) for dating
-legacy_dbs = []
-
-# --- Google Takeout import
+# --- Google Takeout import (`gp2sm takeout`)
 [takeout]
 # folder with the Google Takeout archives (.zip or .tgz)
 archives = "takeout"
@@ -70,11 +63,11 @@ pair_window = 60
 # a clip pairs only with a still of the same shape, within this percent
 aspect_tolerance_pct = 2
 
-# --- organize
+# --- Organizing items already on the destination (`gp2sm organize`)
 [organize]
 # folders or albums (by name) whose items are organized, e.g. ["Uploads"]
 sources = []
-# where capture dates come from, in order: camera (the file's own date), filename, album (a date in the source album's name), upload (last resort), legacy (old transfer DBs)
+# where capture dates come from, in order: camera (the file's own date), filename, album (a date in the source album's name), upload (last resort)
 dates = ["camera", "filename"]
 # move items into the dated albums, or collect them (copies stay in the source; use for albums an uploader app still writes to)
 mode = "move"
@@ -87,7 +80,7 @@ unassigned = "Unassigned"
 # ordered rules naming a group, e.g. [[organize.group]] name = "Phone" model = "iPhone*" (also: album, make, filename; case-insensitive globs)
 group = []
 
-# --- naming
+# --- Album names (`gp2sm albums`)
 [naming]
 # folders or albums (by name) whose album names are checked; ["/"] = the whole account
 scope = []
@@ -99,7 +92,7 @@ month = "{yyyy}-{mm} {subject}"
 year = "{yyyy} {subject}"
 # new name when keep_day is on and the day is known
 day = "{yyyy}-{mm}-{dd} {subject}"
-# keep the day when the old name has one
+# keep the day when the old name has one (false drops it: less information)
 keep_day = false
 # apply renames this sure without review; the rest are listed
 min_confidence = "high"
@@ -107,6 +100,8 @@ min_confidence = "high"
 date_from_photos = true
 # photos sampled per undated album (a few random pages)
 photo_sample = 60
+# an undated album needs at least this many dated photos to be dated from them
+min_photos = 5
 # photos spread over more days than this don't date an album
 max_spread_days = 45
 

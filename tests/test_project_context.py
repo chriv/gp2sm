@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 
 import pytest
@@ -21,7 +20,7 @@ def make_project(root, credentials_name="smugmug"):
     return root
 
 
-def parse(argv, paths=("index", "takeout_dir", "stage_dir", "state")):
+def parse(argv, paths=("index", "takeout_dir", "stage_dir", "db")):
     p = argparse.ArgumentParser()
     context.add_args(p, paths=paths)
     return p.parse_args(argv)
@@ -32,7 +31,7 @@ def test_explicit_project_fills_paths_and_settings(store):
     args = parse(["--project", str(root)])
     cfg = context.resolve(args)
     assert args.project_root == str(root)
-    assert cfg["state_db"] == str(root / "state.db") == args.state
+    assert cfg["state_db"] == str(root / "state.db")
     assert args.index == str(root / "takeout_index.db")
     assert args.takeout_dir == str(root / "takeout")
     assert args.stage_dir == str(root / "stage")
@@ -70,17 +69,6 @@ def test_missing_credentials_error_names_auth_command(store):
     cfg = context.resolve(parse(["--project", str(root)]))
     with pytest.raises(context.NoProject, match="gp2sm auth smugmug --name mine"):
         context.client(cfg)
-
-
-def test_legacy_json_config(store, monkeypatch):
-    monkeypatch.chdir(store)
-    (store / "data").mkdir()
-    (store / "data" / "consolidate.json").write_text(json.dumps({"state_db": "data/x.db"}))
-    args = parse([])
-    cfg = context.resolve(args)
-    assert args.project_root is None
-    assert cfg["state_db"] == "data/x.db" == args.state
-    assert args.index == "data/takeout_index.db"
 
 
 def test_no_project_suggests_init(store, monkeypatch):

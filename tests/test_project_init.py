@@ -16,7 +16,7 @@ def test_non_interactive_init_writes_valid_commented_config(tmp_path):
                       "--source", "Old-Import"], show=out.append) == 0
     cfg = load(str(proj))
     assert cfg.get("albums", "photo") == "Family {yyyy}-{mm}" and cfg.get("project", "timezone") == "America/Chicago"
-    assert cfg.get("consolidate", "sources") == ["Old-Import"]
+    assert cfg.get("organize", "sources") == ["Old-Import"]
     text = (proj / "gp2sm.toml").read_text()
     assert "# split an album into '- Part N'" in text                 # help text is in the file
     assert (proj / "logs").is_dir() and (proj / "takeout").is_dir()

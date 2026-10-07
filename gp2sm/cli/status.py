@@ -42,13 +42,9 @@ def main(argv=None, show=print):
     context.add_args(p, paths=("index",))
     args = p.parse_args(argv)
     cfg = context.resolve(args)
-    if args.project_root:
-        show(f"project:      {args.project_root}")
-        name = cfg["_credentials_name"]
-        show(f"credentials:  {name} ({'stored' if credentials.exists(name) else 'MISSING: run `gp2sm auth smugmug --name ' + name + '`'})")
-    else:
-        show(f"settings:     legacy JSON ({args.config or context.LEGACY_CONFIG})")
-        show(f"credentials:  {cfg['smugmug_config']}")
+    show(f"project:      {args.project_root}")
+    name = cfg["_credentials_name"]
+    show(f"credentials:  {name} ({'stored' if credentials.exists(name) else 'MISSING: run `gp2sm auth smugmug --name ' + name + '`'})")
     show(f"destination:  folder {cfg['target_folder']!r}")
     show(f"state:        {cfg['state_db']}")
     show(f"index:        {args.index}{'' if os.path.exists(args.index) else ' (not built yet)'}")

@@ -8,22 +8,18 @@ Orientation is reset to 1. Otherwise viewers would rotate the image a second tim
 import io
 import os
 import subprocess
-import sys
 import tempfile
 
+import pillow_heif
 from PIL import Image, ImageOps
 
-try:  # registered once; HEIC/HEIF then opens like any other format
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-except ImportError:  # pragma: no cover - dependency is declared; only missing in unusual installs
-    pillow_heif = None
+pillow_heif.register_heif_opener()   # registered once; HEIC/HEIF then opens like any other format
 
 HEIF_EXTS = (".heic", ".heif", ".hif")
 
 
 def default_backend():
-    return "pillow" if pillow_heif is not None else ("sips" if sys.platform == "darwin" else "pillow")
+    return "pillow"
 
 
 def to_jpeg(data, src_ext, dest, quality=92, backend=None):

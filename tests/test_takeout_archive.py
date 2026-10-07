@@ -125,3 +125,9 @@ def test_mp4_parsing_reads_the_box_structure_not_stray_bytes():
     part = Partial(data[:100], data[-400:], len(data))              # head + tail of a large file
     assert round(mp4_duration(part), 2) == 17.4 and mp4_dims(part) == (1080, 1920)
     assert mp4_duration(b"not an mp4 at all, but it says mvhd somewhere") is None
+
+
+def test_mp4_duration_v0():
+    from tests.fixtures.synthetic import _box
+    mvhd = _box(b"mvhd", bytes(4) + bytes(8) + (600).to_bytes(4, "big") + (7494).to_bytes(4, "big"))
+    assert abs(__import__('gp2sm.media.mp4', fromlist=['mp4_duration']).mp4_duration(_box(b"moov", mvhd)) - 12.49) < 0.001

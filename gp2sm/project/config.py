@@ -19,7 +19,7 @@ CONFIG_NAME = "gp2sm.toml"
 
 # section -> key -> (type, default, help). Types: str, int (positive), "count" (0 or more), list (of str),
 # "template", "timezone", "rules" (an array of tables), or a tuple of allowed strings (a choice).
-DATE_SOURCES = ("camera", "filename", "album", "upload", "legacy")
+DATE_SOURCES = ("camera", "filename", "album", "upload")
 RULE_KEYS = ("name", "album", "make", "model", "filename")
 SCHEMA = {
     "project": {
@@ -40,10 +40,6 @@ SCHEMA = {
         "duplicates": (str, "Duplicates (review)", "album for byte-identical extra copies (moved, not deleted)"),
         "soft_cap": (int, 4000, "split an album into '- Part N' above this many items"),
         "hard_cap": (int, 5000, "never put more than this many items in one album"),
-    },
-    "consolidate": {
-        "sources": (list, [], "substrings of album paths to consolidate from"),
-        "legacy_dbs": (list, [], "optional legacy transfer databases (Google item lists) for dating"),
     },
     "takeout": {
         "archives": (str, "takeout", "folder with the Google Takeout archives (.zip or .tgz)"),
@@ -69,8 +65,7 @@ SCHEMA = {
     "organize": {
         "sources": (list, [], "folders or albums (by name) whose items are organized, e.g. [\"Uploads\"]"),
         "dates": (list, ["camera", "filename", "album"], "where capture dates come from, in order: camera (the "
-                  "file's own date), filename, album (a date in the source album's name), upload (last resort), "
-                  "legacy (old transfer DBs)"),
+                  "file's own date), filename, album (a date in the source album's name), upload (last resort)"),
         "mode": (("move", "collect"), "move", "move items into the dated albums, or collect them (copies stay in "
                                               "the source; use for albums an uploader app still writes to)"),
         "skip_newer_than_days": ("count", 0, "leave items uploaded within this many days alone (0 = none)"),
@@ -126,14 +121,12 @@ class ProjectConfig:
         return self.path(os.path.join("logs", "gp2sm.log"))
 
     def tool_settings(self, credentials_file=None):
-        """The flat settings dict the tool modules use (organize.consolidate.DEFAULTS keys)."""
+        """The flat settings dict the commands use."""
         a, d = self.values["albums"], self.values["destination"]
         return {
             "smugmug_config": credentials_file,
             "state_db": self.state_db,
             "log_file": self.log_file,
-            "legacy_dbs": [self.path(p) for p in self.values["consolidate"]["legacy_dbs"]],
-            "source_album_patterns": list(self.values["consolidate"]["sources"]),
             "target_folder": d["folder"],
             "photo_album_template": a["photo"],
             "video_album_template": a["video"],

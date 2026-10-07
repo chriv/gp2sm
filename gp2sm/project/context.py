@@ -1,19 +1,14 @@
-"""Resolve a command's settings and paths: from a project (gp2sm.toml) or a legacy JSON config.
+"""Resolve a command's project: --project DIR, or the nearest gp2sm.toml upward from the current folder.
 
-Order: --config FILE (legacy JSON) > --project DIR or the nearest gp2sm.toml upward from the current folder >
-an existing data/consolidate.json (legacy layout) > error suggesting `gp2sm init`.
-Path options left unset (--index, --takeout-dir, --stage-dir, --state, --db) are filled from the same source.
+Settings come from the project's gp2sm.toml; path options left unset (--index, --takeout-dir, --stage-dir, --db)
+are filled from the project; credentials come from the per-user store.
 """
 
 import atexit
 import os
 
 from gp2sm.project import credentials
-from gp2sm.project.config import find_project, load, organize_settings, section_settings, takeout_policies
-
-LEGACY_CONFIG = "data/consolidate.json"
-LEGACY_PATHS = {"index": "data/takeout_index.db", "takeout_dir": "data/takeout", "stage_dir": "data/stage",
-                "state": "data/consolidation.db", "db": "data/takeout_index.db"}
+from gp2sm.project.config import find_project, load
 
 
 class NoProject(SystemExit):
@@ -21,39 +16,26 @@ class NoProject(SystemExit):
 
 
 def add_args(parser, paths=()):
-    """--project/--config, plus the given path options (defaults resolved later)."""
+    """--project, plus the given path options (defaults resolved later)."""
     parser.add_argument("--project", help="project folder with gp2sm.toml (default: nearest one upward from here)")
-    parser.add_argument("--config", default=None, help="legacy JSON settings file (instead of a project)")
-    flags = {"index": "--index", "takeout_dir": "--takeout-dir", "stage_dir": "--stage-dir", "state": "--state",
-             "db": "--db"}
+    flags = {"index": "--index", "takeout_dir": "--takeout-dir", "stage_dir": "--stage-dir", "db": "--db"}
     for name in paths:
         parser.add_argument(flags[name], dest=name, default=None)
 
 
 def resolve(args):
-    """Settings dict for the tools; also fills unset path attributes on args. Sets args.project_root."""
-    from gp2sm.organize.consolidate import load_config  # legacy JSON loader
-    root = None
-    if not getattr(args, "config", None):
-        root = os.path.abspath(args.project) if getattr(args, "project", None) else find_project()
-    if root:
-        pc = load(root)
-        name = pc.get("destination", "credentials")
-        creds = credentials.path(name) if credentials.exists(name) else None
-        cfg = pc.tool_settings(credentials_file=creds)
-        cfg["_credentials_name"] = name
-        paths = {"index": pc.path(pc.get("takeout", "index")), "takeout_dir": pc.path(pc.get("takeout", "archives")),
-                 "stage_dir": pc.path("stage"), "state": pc.state_db, "db": pc.path(pc.get("takeout", "index"))}
-        os.makedirs(os.path.dirname(cfg["log_file"]), exist_ok=True)
-    else:
-        config = getattr(args, "config", None) or (LEGACY_CONFIG if os.path.exists(LEGACY_CONFIG) else None)
-        if not config:
-            raise NoProject("no gp2sm project here: run `gp2sm init` (or pass --project DIR / --config FILE)")
-        cfg = load_config(config)
-        cfg.setdefault("takeout", takeout_policies())
-        cfg.setdefault("organize", organize_settings())
-        cfg.setdefault("naming", section_settings("naming"))
-        paths = dict(LEGACY_PATHS, state=cfg["state_db"])
+    """Settings dict for the commands; also fills unset path attributes on args. Sets args.project_root."""
+    root = os.path.abspath(args.project) if getattr(args, "project", None) else find_project()
+    if not root:
+        raise NoProject("no gp2sm project here: run `gp2sm init`, or pass --project DIR")
+    pc = load(root)
+    name = pc.get("destination", "credentials")
+    creds = credentials.path(name) if credentials.exists(name) else None
+    cfg = pc.tool_settings(credentials_file=creds)
+    cfg["_credentials_name"] = name
+    paths = {"index": pc.path(pc.get("takeout", "index")), "takeout_dir": pc.path(pc.get("takeout", "archives")),
+             "stage_dir": pc.path("stage"), "db": pc.path(pc.get("takeout", "index"))}
+    os.makedirs(os.path.dirname(cfg["log_file"]), exist_ok=True)
     for name, value in paths.items():
         if hasattr(args, name) and getattr(args, name) is None:
             setattr(args, name, value)

@@ -1,7 +1,6 @@
 """Stage, upload, verify and remove Takeout files recorded in the `uploads` table.
 
-Rows come from `gp2sm takeout plan` (importer rows: source_ref set) or from the legacy migration's
-`gp2sm takeout-upload plan` (gp2sm.contrib.legacy_bridge). Either way:
+Rows come from `gp2sm takeout plan`:
 
   stage    stream the archives: convert to JPEG where planned (EXIF kept; a missing capture date filled
            from the Takeout metadata, losslessly) and write other files as they are into the stage folder
@@ -17,7 +16,6 @@ import fnmatch
 import hashlib
 import logging
 import os
-import sqlite3
 from zoneinfo import ZoneInfo
 
 import piexif
@@ -26,33 +24,16 @@ from gp2sm.cli import run
 from gp2sm.importer.dedupe import bounded_map
 from gp2sm.importer.plan import landed_name
 from gp2sm.media.convert import to_jpeg
-from gp2sm.media.mp4 import clip_creation_ts
-from gp2sm.organize.consolidate import ensure_target
+from gp2sm.organize.engine import ensure_target
 from gp2sm.smugmug.client import NotFound, SmugMugError
 from gp2sm.state import now
 from gp2sm.takeout.archive import read_members
 
 log = logging.getLogger("gp2sm.takeout.upload")
 
-CONTENT_TYPES = {".JPG": "image/jpeg", ".MP4": "video/mp4"}
 
 
 # ------------------------------------------------------------------ pure parts
-
-def stem_of(filename):
-    return os.path.splitext(filename or "")[0]
-
-
-def unique_name(name, taken):
-    """Return name, or name with ' (k)' before the extension if `taken` (a set of lowercase names) has it."""
-    if name.lower() not in taken:
-        return name
-    stem, ext = os.path.splitext(name)
-    k = 1
-    while f"{stem} ({k}){ext}".lower() in taken:
-        k += 1
-    return f"{stem} ({k}){ext}"
-
 
 def exif_datetime_fields(taken_ts, tz_name):
     """Unix seconds -> ('YYYY:MM:DD HH:MM:SS' local, '+HH:MM' offset) for EXIF."""
@@ -61,9 +42,6 @@ def exif_datetime_fields(taken_ts, tz_name):
     sign = "-" if off < datetime.timedelta(0) else "+"
     minutes = abs(int(off.total_seconds())) // 60
     return dt.strftime("%Y:%m:%d %H:%M:%S"), f"{sign}{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-MAX_CLIP_SKEW = 120  # a Live Photo clip starts within seconds of its still
 
 
 def fill_exif_date(jpg_path, taken_ts, tz_name):
@@ -106,36 +84,19 @@ def cmd_stage(st, cfg, args):
     rows = select(st, ("planned",), args)
     if not rows:
         return {"staged": 0}
-    taken = {}
-    if any(r["source_ref"] is None for r in rows):   # legacy rows: capture times from the takeout-match items
-        idx = sqlite3.connect(f"file:{os.path.abspath(args.index)}?mode=ro", uri=True)
-        taken = dict(idx.execute("SELECT item_id, taken_ts FROM items").fetchall())
     os.makedirs(args.stage_dir, exist_ok=True)
     by_member = {(r["archive"], r["src_path"]): r for r in rows}
     done = failed = 0
 
     def work(row, data):
         dest = os.path.join(args.stage_dir, f"{row['upload_id']}_{row['upload_name']}")
-        if row["source_ref"] is not None:   # importer rows: the plan already paired clips by time
-            if row["convert"]:
-                note = convert_still(data, os.path.splitext(row["src_path"])[1].lower(), dest, row["taken_ts"],
-                                     cfg["timezone"])
-            else:
-                with open(dest, "wb") as f:
-                    f.write(data)
-                note = "as is"
-        elif row["role"] == "still":
-            note = convert_still(data, os.path.splitext(row["src_path"])[1].lower(), dest,
-                                 taken.get(row["item_id"]), cfg["timezone"])
-        else:
-            clip_ts = clip_creation_ts(data)
-            still_ts = taken.get(row.get("pair_item_id") or row["item_id"])  # re-paired clips use their new still
-            paired = row["target_name"] != cfg["undated_video_album"]  # unsorted clips aren't next to a still
-            if paired and clip_ts and still_ts and abs(clip_ts - still_ts) > MAX_CLIP_SKEW:
-                raise PairingError(f"clip created {clip_ts - still_ts:+d}s from its still; likely not its pair")
+        if row["convert"]:
+            note = convert_still(data, os.path.splitext(row["src_path"])[1].lower(), dest, row["taken_ts"],
+                                 cfg["timezone"])
+        else:   # clips were paired with their stills by time in the plan
             with open(dest, "wb") as f:
                 f.write(data)
-            note = f"clip time {clip_ts - still_ts:+d}s from still" if clip_ts and still_ts else "clip time unknown"
+            note = "as is"
         with open(dest, "rb") as f:
             md5 = hashlib.md5(f.read()).hexdigest()
         return dest, os.path.getsize(dest), md5, note
@@ -154,10 +115,6 @@ def cmd_stage(st, cfg, args):
                                   "exif_note=?, updated_at=? WHERE upload_id=?",
                                   (dest, size, md5, note, now(), row["upload_id"]))
                     done += 1
-                except PairingError as e:
-                    st.db.execute("UPDATE uploads SET status='needs_pairing', last_error=?, updated_at=? "
-                                  "WHERE upload_id=?", (str(e), now(), row["upload_id"]))
-                    failed += 1
                 except Exception as e:
                     st.db.execute("UPDATE uploads SET status='failed', last_error=?, updated_at=? WHERE upload_id=?",
                                   (f"stage: {e!r}"[:500], now(), row["upload_id"]))
@@ -169,10 +126,6 @@ def cmd_stage(st, cfg, args):
 
 
 # ---------------------------------------------------------------------- upload
-
-class PairingError(Exception):
-    """A motion clip whose own timestamp doesn't fit its still."""
-
 
 def find_in_album(client, album_key, filename, md5=None):
     """Return (item_id, item_ref) of an item named `filename` (and, if given, with this md5) in the album."""
@@ -235,9 +188,7 @@ def cmd_upload(st, cfg, client, args):
     log.info("uploading %d files into %d albums", len(rows), len(albums))
 
     def one(r):
-        ext = os.path.splitext(r["upload_name"])[1].upper()
-        content_type = r["content_type"] or CONTENT_TYPES[ext]
-        return client.upload_file(albums[r["target_name"]], r["staged_path"], r["upload_name"], content_type)
+        return client.upload_file(albums[r["target_name"]], r["staged_path"], r["upload_name"], r["content_type"])
 
     totals = {"uploaded": 0, "failed": 0, "unknown": 0}
     progress = run.Progress(len(rows), "uploading")
@@ -311,7 +262,7 @@ def cmd_remove(st, cfg, client, args):
             client.remove_item(r["album_image_uri"])
         except NotFound:
             log.info("%s already gone", r["upload_name"])
-        new_status = "needs_pairing" if r["role"] == "clip" else "staged"
+        new_status = "staged"   # uploaded again only by a later `gp2sm takeout upload --yes`
         st.db.execute("UPDATE uploads SET status=?, image_key=NULL, album_image_uri=NULL, last_error=?, updated_at=? "
                       "WHERE upload_id=?", (new_status, f"removed: {args.reason}", now(), r["upload_id"]))
         st.event("upload_removed", commit=False, upload_id=r["upload_id"], name=r["upload_name"],

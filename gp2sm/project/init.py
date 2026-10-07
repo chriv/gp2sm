@@ -12,8 +12,9 @@ SECTION_HELP = {
     "project": "General",
     "destination": "Where items go",
     "albums": "Album names and limits",
-    "consolidate": "Reorganizing existing albums (`gp2sm consolidate`)",
-    "takeout": "Google Takeout import",
+    "takeout": "Google Takeout import (`gp2sm takeout`)",
+    "organize": "Organizing items already on the destination (`gp2sm organize`)",
+    "naming": "Album names (`gp2sm albums`)",
     "run": "Performance",
 }
 
@@ -65,7 +66,7 @@ def main(argv=None, ask=input, show=print):
     p.add_argument("--folder", help="destination folder for this project's albums")
     p.add_argument("--prefix", help="album name prefix, e.g. 'Family' -> 'Family {yyyy}-{mm}'")
     p.add_argument("--credentials", default=None, help="stored credential name (default: smugmug)")
-    p.add_argument("--source", action="append", default=[], help="album path substring to consolidate from (repeatable)")
+    p.add_argument("--source", action="append", default=[], help="folder or album (by name) to organize (repeatable)")
     p.add_argument("--non-interactive", action="store_true", help="don't ask; use flags and defaults")
     p.add_argument("--force", action="store_true", help="overwrite an existing gp2sm.toml")
     args = p.parse_args(argv)
@@ -95,7 +96,7 @@ def main(argv=None, ask=input, show=print):
         "albums": {"photo": f"{prefix} {{yyyy}}-{{mm}}", "video": f"{prefix} {{yyyy}}-{{mm}}",
                    "undated_photo": f"{prefix} Undated", "undated_video": f"{prefix} Videos Undated",
                    "duplicates": f"{prefix} Duplicates (review)"},
-        "consolidate": {"sources": args.source},
+        "organize": {"sources": args.source},
     }
     os.makedirs(os.path.join(root, "logs"), exist_ok=True)
     os.makedirs(os.path.join(root, "takeout"), exist_ok=True)

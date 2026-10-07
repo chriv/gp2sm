@@ -1,13 +1,7 @@
 import piexif
 from PIL import Image
 
-from gp2sm.takeout.upload import exif_datetime_fields, fill_exif_date, unique_name
-
-
-def test_unique_name():
-    assert unique_name("IMG_1.JPG", set()) == "IMG_1.JPG"
-    assert unique_name("IMG_1.JPG", {"img_1.jpg"}) == "IMG_1 (1).JPG"
-    assert unique_name("IMG_1.JPG", {"img_1.jpg", "img_1 (1).jpg"}) == "IMG_1 (2).JPG"
+from gp2sm.takeout.upload import exif_datetime_fields, fill_exif_date
 
 
 def test_exif_fields_use_local_time_and_offset():

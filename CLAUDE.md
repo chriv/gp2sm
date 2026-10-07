@@ -13,39 +13,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 .venv/bin/pip install -e '.[dev]'                        # install (editable) with pytest + ruff
 .venv/bin/python -m pytest -q                            # all tests
-.venv/bin/python -m pytest -q tests/test_planning.py -k heic   # single test
+.venv/bin/python -m pytest -q tests/test_album_naming.py -k year   # single test
 .venv/bin/ruff check gp2sm tests                         # lint (config in pyproject.toml)
 GP2SM_LIVE_SMUGMUG=smugmug_config.json .venv/bin/python -m pytest -q -m live   # destination contract vs real SmugMug (sandbox folder, cleaned up)
 .venv/bin/gp2sm --help                                   # all commands (gp2sm <command> --help for each)
 ```
 
-Organize (A4, any project): `gp2sm organize inventory → plan → report → apply [--yes] → verify`, plus `reconcile`, `undo <album>` and the gated `delete-*` steps. Rules in `[organize]` (sources by folder/album name, date chain, `[[organize.group]]`).
-
-Legacy consolidation, the first migration's (`gp2sm consolidate <step>`; each step can be rerun; state lives in `data/consolidation.db`):
-`inventory → import-legacy → match → plan → report → apply [--yes|--limit N|--target GLOB] → verify`, plus `reconcile` and `undo <album name>` for recovery.
-
-Takeout import (A3, any project; archives in the project's `takeout/` folder):
-`gp2sm takeout index → inventory → dedupe → [review, review --read] → plan → stage → upload --yes → verify`, plus `report`. Re-running any step only adds new work.
-
-Legacy migration tools (the first real migration's state, `data/`): `takeout-match`, `content-match`, `takeout-upload`, `place-clips`, `date-undated`.
+Every command works on a project (a folder with `gp2sm.toml`; `gp2sm init` creates one). `gp2sm plan | apply [--yes] | verify | report | undo` run the project's pipeline; each pipeline also has its own steps:
+- Takeout import: `gp2sm takeout index → inventory → dedupe → [review, review --read] → plan → stage → upload --yes → verify`, plus `report` and `remove IDS`.
+- Organize: `gp2sm organize inventory → plan → report → apply [--yes] → verify`, plus `reconcile`, `undo <album>` and the gated `delete-*` steps.
+- Album names: `gp2sm albums inventory [--sample N] → plan → report → [approve --name GLOB] → apply [--yes] → verify`, plus `undo`.
+Re-running any step only adds new work. Backwards compatibility isn't a goal before the first public release: no shims, no legacy commands.
 
 ## Architecture (`gp2sm/`)
 
-- `project/`: `config.py` (gp2sm.toml schema + validation), `credentials.py` (per-user credential store), `init.py`, and `context.py`. Every tool's `main()` calls `context.add_args` + `context.resolve(args)`, which picks `--config` JSON > `--project`/nearest gp2sm.toml > legacy `data/consolidate.json` and fills unset path args. It calls `context.client(cfg)` for the destination and `context.acquire_lock(state_db, label)` before destination-changing commands (stale locks are taken over).
+- `project/`: `config.py` (gp2sm.toml schema + validation), `credentials.py` (per-user credential store), `init.py`, and `context.py`. Every command's `main()` calls `context.add_args` + `context.resolve(args)`, which finds the project (`--project` or the nearest gp2sm.toml upward) and fills unset path args. It calls `context.client(cfg)` for the destination and `context.acquire_lock(state_db, label)` before destination-changing commands (stale locks are taken over).
 - `services/`: `registry.py` discovers services via the `gp2sm.services` entry-point group (built-ins SmugMug and Google Takeout register the same way; plugins can't shadow built-ins; factories are checked against the protocol). `base.py` has the service-neutral `PhotoDestination`/`PhotoSource` protocols, records (`ItemRecord`, `AlbumRecord`, `SourceItem`) and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (against the fake in CI; opt-in live run against SmugMug). Any source must pass `tests/contracts/source.py`.
 - `smugmug/client.py`: the SmugMug adapter, and the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging, per-endpoint list keys, rate-limit headers, and ambiguous writes (never blindly retried). It declares `SMUGMUG_CAPABILITIES`.
 - `takeout/`: `archive.py` (the only code that opens archives: `.zip` and `.tgz`, `iter_members`/`read_members`), `index.py` (one streaming pass: MD5, sidecars, and each media file's dimensions/duration/own capture time via `media.probe`), `items.py` (sidecar ↔ media pairing incl. `(N)` names, Live Photo clips), `source.py` (`TakeoutSource`, the PhotoSource), `cli.py` (`gp2sm takeout …`), `upload.py` (stage/upload/verify/remove rows of the `uploads` table; HEIC→JPEG keeping EXIF, filling in missing dates).
 - `importer/` (service-neutral; any PhotoSource → any PhotoDestination): `inventory.py` snapshots the destination albums in scope (`list_folder_albums`, by folder display names) into `dest_albums`/`dest_items`; `dedupe.py` decides per source item `exact | same | new | review | source_duplicate` (pure `decide`, cached dHashes in `hash_source`/`hash_dest`, results in `source_matches`; a person's `reviewed` answer wins). Wired to Takeout by `takeout/cli.py` (`gp2sm takeout …`).
 - `organize/`:
   - `rules.py`: pure organize rules: the date chain (`camera` → `filename` patterns → `upload`, plus plugins), `[[organize.group]]` grouping (first match wins, else `unassigned`), album names with `{yyyy}`/`{mm}`/`{group}`, `skip_newer_than_days`
-  - `planning.py`: pure matching, duplicate grouping and album planning
-  - `cli.py`: `gp2sm organize`: inventory by names (`inventory_albums`), rules → `planning.plan_organize` → `write_plan`; apply/verify/undo/deletions shared with consolidate
-  - `consolidate.py`: inventory → match → plan → apply → verify, reconcile/undo, gated deletions (apply/verify/undo/deletes are reused by organize)
-  - `place_clips.py`: unsorted clips → beside their still, by time + aspect
-  - `date_undated.py`: evidence chain for undated items, server-confirmed moves
+  - `planning.py`: pure organize planning (`plan_organize`, soft-cap parts)
+  - `cli.py`: `gp2sm organize`: inventory by names, rules → `planning.plan_organize` → `engine.write_plan`
+  - `engine.py`: inventory storage, plan writing, and the steps that change the destination (apply with move or collect, reconcile, verify, undo, gated deletions; `ensure_target` is also used by the Takeout uploader)
 - `state/`: the SQLite schema, plus `migrations.py` (ordered, versioned, idempotent steps recorded in `schema_history`; new DBs are created at LATEST; to add one, append a step, update SCHEMA, and test an upgrade from the previous version). `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`. Specific TODOs for a neutral, versioned schema are in `state/__init__.py`.
 - `media/`: `probe.py` (`probe(data, ext)`: dimensions, duration, own capture time as ISO with offset when recorded), `still.py` (EXIF via Pillow), `mp4.py` (MP4 header parsing: duration, dimensions, aspect, clip capture time: Apple `creationdate` else `mvhd`) and `convert.py` (cross-platform HEIC/any→JPEG via Pillow + pillow-heif; original EXIF bytes passed through untouched, Orientation reset to 1 since libheif applies the rotation; `render_small` for hashing; optional `sips` backend on macOS).
-- `contrib/legacy_bridge/`: only for libraries first moved with the old v1/v2 tool: `takeout_match` (link a Takeout to the legacy transfer DB), `content_match` (dHash vs legacy uploads, bursts), `takeout_upload` (that migration's upload plan), `legacy_dates` (`import-legacy`, `match`, and the `legacy` date source for organize).
 - `albums/`: `naming.py` (pure: dates in album names with confidence, rename proposals from templates, dating name-less albums from tightly clustered photo samples) and `cli.py` (`gp2sm albums inventory|plan|report|approve|apply|verify|undo`; changes recorded in `album_changes` with old values; display names only, never `UrlName`).
 - `cli/`: the `gp2sm <command>` dispatcher, `status`, `services`, `auth`, and `run.py`, which every tool uses: `add_yes` (anything that changes the destination is a dry run without `--yes`), `install_sigint`/`Stop` (first Ctrl-C finishes the work in flight; second aborts), `run_command` (records the run as ok/stopped/interrupted/failed, releases the project lock, exit 130 on abort) and `Progress`.
 
@@ -63,12 +56,12 @@ The goal is a plugin architecture with any photo service on either end (see `doc
 
 ## Gotchas
 
-- Google: the Google Photos API can no longer export a library; Google Takeout is the only way out, and it always contains the whole service (no album selection). The legacy v1/v2 tool used the old API; its transfer databases are history, read only through `contrib/legacy_bridge`.
+- Google: the Google Photos API can no longer export a library; Google Takeout is the only way out, and it always contains the whole service (no album selection).
 - SmugMug collect: removing an item from its **original** album deletes every collected copy. Undo a collect by removing the copy in the target only; never delete or empty a source album items were collected from (organize refuses `delete-empty-sources` with collect).
 - SmugMug album settings: read privacy from the album's **node** (`Privacy`, `EffectivePrivacy`); `Album.Privacy` shows the effective value. Several PATCHes return 200 and do nothing (`Date`; `MaxPhotoDownloadSize` while downloads are off; `UrlName` collisions with `AutoRename`). Changing `UrlName` breaks old links. See `docs/smugmug-api.md`.
 - SmugMug converts HEIC to JPEG on upload (`NAME.HEIC` becomes `NAME.JPG`, and the original isn't kept). It re-encodes videos, rejects WebP/ICO/BMP and tiny videos (code 64 or 6), and silently accepts duplicate uploads.
 - `AlbumImage.Date` is the upload time. Capture time comes from `ImageMetadata.DateTimeCreated` (use `_expand=ImageMetadata` on `!images`).
-- Legacy conversion uploads lost their EXIF. Their capture dates come from the legacy transfer DBs (`media_items.creation_timestamp`), joined in `matches`.
+- Uploads converted by other tools often lost their EXIF: dates then come from file or album names, or the photos' neighbours (see `organize/rules.py`, `albums/naming.py`).
 
 ## Code style
 

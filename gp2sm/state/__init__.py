@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, run_id INT, level TEXT, kind TEXT,
   image_key TEXT, album_key TEXT, detail TEXT);
 
--- Albums whose contents are being consolidated.
+-- Albums whose items are being organized (gp2sm organize inventory).
 CREATE TABLE IF NOT EXISTS source_albums(
   album_key TEXT PRIMARY KEY, album_uri TEXT, name TEXT, url_path TEXT,
   image_count INT, rows_stored INT, inventoried_at TEXT,

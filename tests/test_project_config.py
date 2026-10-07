@@ -18,7 +18,7 @@ folder = "My Imports"
 photo = "Imports {yyyy}-{mm}"
 video = "Imports {yyyy}-{mm}"
 
-[consolidate]
+[organize]
 sources = ["Old-Import", "Auto-Upload"]
 """
 
@@ -33,7 +33,7 @@ def test_good_config_loads_with_defaults(tmp_path):
     assert cfg.get("albums", "photo") == "Imports {yyyy}-{mm}"
     assert cfg.get("albums", "soft_cap") == 4000                       # default filled in
     s = cfg.tool_settings(credentials_file="/creds/smugmug.json")
-    assert s["target_folder"] == "My Imports" and s["source_album_patterns"] == ["Old-Import", "Auto-Upload"]
+    assert s["target_folder"] == "My Imports" and s["organize"]["sources"] == ["Old-Import", "Auto-Upload"]
     assert s["state_db"] == str(tmp_path / "state.db") and s["smugmug_config"] == "/creds/smugmug.json"
 
 
@@ -43,7 +43,7 @@ def test_good_config_loads_with_defaults(tmp_path):
     ("[project]\ntimezone = 'Mars/Olympus'", "not a known time zone"),
     ("[albums]\nsoft_cap = 0", "positive integer"),
     ("[albums]\nsoft_cap = 6000\nhard_cap = 5000", "must not exceed hard_cap"),
-    ("[consolidate]\nsources = 'Old-Import'", "list of strings"),
+    ("[organize]\nsources = 'Old-Import'", "list of strings"),
     ("[albums]\nphot = 'x {yyyy}'", "unknown key [albums] phot"),
     ("[albumz]\nphoto = 'x {yyyy}'", "unknown section [albumz]"),
     ("[run]\nworkers = true", "positive integer"),
@@ -77,10 +77,13 @@ def test_find_project_walks_up(tmp_path):
     assert find_project(str(sub)) == str(tmp_path)
 
 
-def test_tool_settings_cover_every_setting_the_tools_use(tmp_path):
-    from gp2sm.organize.consolidate import DEFAULTS
+def test_tool_settings_cover_every_setting_the_commands_use(tmp_path):
     settings = load(write(tmp_path, GOOD)).tool_settings()
-    assert set(DEFAULTS) <= set(settings)
+    used = {"smugmug_config", "state_db", "log_file", "target_folder", "photo_album_template", "video_album_template",
+            "undated_photo_album", "undated_video_album", "duplicates_album", "timezone", "album_soft_cap",
+            "album_hard_cap", "move_batch_size", "max_consecutive_failures", "takeout", "organize", "naming"}
+    assert used <= set(settings)
+    assert settings["organize"]["sources"] == ["Old-Import", "Auto-Upload"]
 
 
 @pytest.mark.parametrize("example", sorted(glob.glob(os.path.join(os.path.dirname(__file__), "..", "examples", "*.toml"))))

@@ -1,102 +1,32 @@
-"""Consolidate earlier conversion uploads on SmugMug into dated albums.
+"""The organize engine: inventory storage, plan writing, and the steps that change the destination.
 
-Pipeline (each step is idempotent and recorded in the state DB):
+Used by `gp2sm organize` (organize/cli.py), and by the Takeout importer for its target albums:
 
-  inventory      list source albums on SmugMug (with metadata) into `images`
-  import-legacy  load Google item lists / MD5s from the legacy transfer DBs
-  match          tie each image to a Google item; group exact duplicates; pick keepers
-  plan           decide each image's destination album (dated / undated / duplicates)
-  report         summarize state
-  apply          create albums and move images (batched, verified, resumable)
-  reconcile      re-check in-progress/unknown items against the server
-  verify         compare every target/source album on the server with the DB
-  undo           move a target album's items back to their source albums
-  delete-duplicates     delete the duplicates album(s) after server-side checks (--yes)
-  delete-empty-sources  delete source albums the server reports as empty (--yes)
-  delete-empty-targets  delete albums this tool created that are empty and have nothing planned (--yes)
-
-Usage: gp2sm consolidate [--config data/consolidate.json] <command> [options]
+  inventory_albums     record albums and their items (with metadata) in source_albums / images
+  write_plan           store plan rows; work that has started is never re-planned
+  cmd_apply            create albums and move or collect items (batched, verified, resumable)
+  cmd_reconcile        re-check in-progress/unknown items against the server
+  cmd_verify           compare every target/source album on the server with the plan
+  cmd_undo             move a target album's items back (or remove collected copies)
+  cmd_delete_*         gated deletions: duplicates, empty sources, empty albums this tool created
 """
 
-import argparse
 import concurrent.futures
 import fnmatch
 import json
 import logging
-import os
-import sys
 import uuid
 
 from gp2sm.cli import run
-from gp2sm.contrib.legacy_bridge.legacy_dates import cmd_import_legacy, cmd_match
-from gp2sm.organize import planning
-from gp2sm.project import context
 from gp2sm.smugmug.client import NotFound, SmugMugError
-from gp2sm.state import State, now
+from gp2sm.state import now
 
-log = logging.getLogger("gp2sm.organize.consolidate")
+log = logging.getLogger("gp2sm.organize.engine")
 
-DEFAULTS = {
-    "smugmug_config": "smugmug_config.json",
-    "state_db": "data/consolidation.db",
-    "log_file": "data/consolidate.log",
-    "legacy_dbs": [],
-    "source_album_patterns": [],
-    "target_folder": "Consolidated",
-    "photo_album_template": "Photos {yyyy}-{mm}",
-    "video_album_template": "Videos {yyyy}",
-    "undated_photo_album": "Photos Undated",
-    "undated_video_album": "Videos Undated",
-    "duplicates_album": "Duplicates (review)",
-    "timezone": "UTC",
-    "album_soft_cap": 4000,
-    "album_hard_cap": 5000,
-    "move_batch_size": 25,
-    "max_consecutive_failures": 5,
-}
 KIND_ORDER = {"photo": 0, "video": 1, "photo_undated": 2, "video_undated": 3, "duplicates": 4}
 
 
-def load_config(path):
-    cfg = dict(DEFAULTS)
-    with open(path) as f:
-        cfg.update({k: v for k, v in json.load(f).items() if not k.startswith("_")})
-    return cfg
-
-
-def setup_logging(log_file, debug=False):
-    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-    for old in [h for h in root.handlers if getattr(h, "_gp2sm", False)]:   # calling again replaces, not stacks
-        root.removeHandler(old)
-        old.close()
-    fh = logging.FileHandler(log_file)
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s"))
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.DEBUG if debug else logging.INFO)
-    ch.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-    for h in (fh, ch):
-        h._gp2sm = True
-        root.addHandler(h)
-    for noisy in ("urllib3", "requests_oauthlib", "oauthlib"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
-
-
 # ---------------------------------------------------------------- inventory
-
-def cmd_inventory(st, cfg, client, args):
-    patterns = [p.lower() for p in cfg["source_album_patterns"]]
-    if not patterns:
-        raise SystemExit("config: source_album_patterns is empty")
-    target_prefix = "/" + cfg["target_folder"].strip("/").lower() + "/"
-    albums = [a for a in client.list_albums()
-              if any(p in (a["path"] or "").lower() for p in patterns)
-              and not (a["path"] or "").lower().startswith(target_prefix)]
-    log.info("%d source albums match %s", len(albums), cfg["source_album_patterns"])
-    return inventory_albums(st, client, albums, args.workers)
-
 
 def inventory_albums(st, client, albums, workers):
     """Record the albums and every item in them (with metadata) in source_albums/images."""
@@ -145,19 +75,6 @@ def inventory_albums(st, client, albums, workers):
 
 # --------------------------------------------------------------------- plan
 
-def cmd_plan(st, cfg, client, args):
-    images = [dict(r) for r in st.q("SELECT image_key AS item_id, filename, is_video, archived_md5 AS md5, uploaded "
-                                    "FROM images")]
-    matches = {r["image_key"]: dict(r) for r in st.q("SELECT * FROM matches")}
-    groups = {r["item_id"]: dict(r) for r in st.q(
-        "SELECT image_key AS item_id, group_key, group_size, keeper_image_key AS keeper_item_id, is_keeper FROM dup_groups")}
-    if not groups:
-        raise SystemExit("run `match` first")
-    existing = {r["item_id"]: dict(r) for r in st.q("SELECT image_key AS item_id, status, target_name FROM plan")}
-    rows = planning.plan_actions(images, matches, groups, cfg, existing)
-    return write_plan(st, rows, existing)
-
-
 def write_plan(st, rows, existing):
     """Store plan rows. Work that has started (done/in_progress/unknown) is never re-planned."""
     ts = now()
@@ -204,8 +121,6 @@ def cmd_report(st, cfg, client, args):
             print("  " + "  ".join(str(r[c]).ljust(w) for c, w in zip(cols, widths, strict=True)))
 
     table("Source albums", "SELECT url_path, image_count, rows_stored FROM source_albums ORDER BY url_path")
-    table("Match methods", "SELECT m.method, m.confidence, SUM(i.is_video=0) photos, SUM(i.is_video) videos "
-                           "FROM matches m JOIN images i USING(image_key) GROUP BY 1,2 ORDER BY 3 DESC")
     table("Plan status", "SELECT action, status, COUNT(*) n FROM plan GROUP BY 1,2 ORDER BY 1,2")
     if args.targets:
         table("Targets", "SELECT t.name, t.kind, t.album_key, t.planned, "
@@ -614,65 +529,3 @@ def undo_collected(st, client, rows, target):
         st.db.commit()
         removed += 1
     return removed
-
-
-# --------------------------------------------------------------------- main
-
-COMMANDS = {
-    "inventory": cmd_inventory, "import-legacy": cmd_import_legacy, "match": cmd_match, "plan": cmd_plan,
-    "report": cmd_report, "apply": cmd_apply, "reconcile": cmd_reconcile, "verify": cmd_verify, "undo": cmd_undo,
-    "delete-duplicates": cmd_delete_duplicates, "delete-empty-sources": cmd_delete_empty_sources,
-    "delete-empty-targets": cmd_delete_empty_targets,
-}
-WRITES = {"apply", "undo", "delete-duplicates", "delete-empty-sources", "delete-empty-targets"}
-NEEDS_CLIENT = {"inventory", "apply", "reconcile", "verify", "undo", "delete-duplicates", "delete-empty-sources",
-                "delete-empty-targets"}
-
-
-def main(argv=None):
-    p = argparse.ArgumentParser(prog="gp2sm consolidate", description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    context.add_args(p)
-    p.add_argument("--debug", action="store_true")
-    sub = p.add_subparsers(dest="command", required=True)
-    s = sub.add_parser("inventory")
-    s.add_argument("--workers", type=int, default=4)
-    sub.add_parser("import-legacy")
-    sub.add_parser("match")
-    sub.add_parser("plan")
-    s = sub.add_parser("report")
-    s.add_argument("--targets", action="store_true", help="list every target album")
-    s = sub.add_parser("apply")
-    run.add_yes(s, "move the items")
-    s.add_argument("--limit", type=int, help="max items to move this run")
-    s.add_argument("--target", action="append", help="only these target album names (glob ok; repeatable)")
-    s.add_argument("--kind", action="append", choices=list(KIND_ORDER), help="only these target kinds")
-    s.add_argument("--batch-size", type=int)
-    s = sub.add_parser("reconcile")
-    s.add_argument("--include-failed", action="store_true")
-    sub.add_parser("verify")
-    for name in ("delete-duplicates", "delete-empty-sources", "delete-empty-targets"):
-        s = sub.add_parser(name)
-        run.add_yes(s, "delete (permanent)")
-        if name == "delete-empty-targets":
-            s.add_argument("--name", action="append", help="only target albums matching this glob (repeatable)")
-    s = sub.add_parser("undo")
-    s.add_argument("target", help="exact target album name to move back out")
-    run.add_yes(s, "move the items back")
-    args = p.parse_args(argv)
-
-    cfg = context.resolve(args)
-    setup_logging(cfg["log_file"], args.debug)
-    st = State(cfg["state_db"])
-    client = context.client(cfg) if args.command in NEEDS_CLIENT else None
-    lock = None
-    if args.command in WRITES and args.yes:
-        lock = context.acquire_lock(cfg["state_db"], f"consolidate {args.command}")
-    code = run.run_command(st, args.command, args, lambda: COMMANDS[args.command](st, cfg, client, args), lock=lock)
-    if args.command.startswith("delete-") and not args.yes:
-        run.dry_run_footer()
-    return code
-
-
-if __name__ == "__main__":
-    sys.exit(main())

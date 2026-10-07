@@ -1,5 +1,5 @@
+from gp2sm.importer.pairing import assign
 from gp2sm.media import aspect, mp4_dims
-from gp2sm.organize.place_clips import assign
 
 
 def c(i, ts, r=1.5, order=None):

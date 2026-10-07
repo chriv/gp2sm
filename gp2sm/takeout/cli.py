@@ -8,6 +8,7 @@
   stage       read the planned files from the archives (HEIC/rejected formats converted to JPEG, EXIF kept)
   upload      upload staged files (dry run unless --yes)
   verify      confirm uploads on the destination
+  remove      delete specific uploads this tool made, by upload id (dry run unless --yes)
   report      what was planned, uploaded, held for review and skipped, and why
 
 Typical run: index -> inventory -> dedupe -> plan -> stage -> upload --yes -> verify
@@ -22,11 +23,10 @@ import sys
 from gp2sm.cli import run
 from gp2sm.importer import dedupe, inventory, review
 from gp2sm.importer import plan as planner
-from gp2sm.organize.consolidate import setup_logging
 from gp2sm.project import context
 from gp2sm.state import State, now
 from gp2sm.takeout import index as takeout_index
-from gp2sm.takeout import upload as legacy_upload
+from gp2sm.takeout import upload as transfer
 from gp2sm.takeout.archive import list_archives
 from gp2sm.takeout.source import TakeoutSource
 
@@ -172,15 +172,21 @@ def cmd_review(st, cfg, client, args):
 
 
 def cmd_stage(st, cfg, client, args):
-    return legacy_upload.cmd_stage(st, cfg, args)
+    return transfer.cmd_stage(st, cfg, args)
 
 
 def cmd_upload(st, cfg, client, args):
-    return legacy_upload.cmd_upload(st, cfg, client, args)
+    return transfer.cmd_upload(st, cfg, client, args)
 
 
 def cmd_verify(st, cfg, client, args):
-    return legacy_upload.cmd_verify(st, cfg, client, args)
+    return transfer.cmd_verify(st, cfg, client, args)
+
+
+def cmd_remove(st, cfg, client, args):
+    if not args.ids:
+        raise SystemExit("name the upload ids to remove (see `gp2sm takeout report`)")
+    return transfer.cmd_remove(st, cfg, client, args)
 
 
 def cmd_report(st, cfg, client, args):
@@ -199,31 +205,37 @@ def cmd_report(st, cfg, client, args):
 
 
 COMMANDS = {"index": cmd_index, "inventory": cmd_inventory, "dedupe": cmd_dedupe, "review": cmd_review, "plan": cmd_plan,
-            "stage": cmd_stage, "upload": cmd_upload, "verify": cmd_verify, "report": cmd_report}
-NEEDS_CLIENT = {"inventory", "dedupe", "review", "plan", "upload", "verify"}
+            "stage": cmd_stage, "upload": cmd_upload, "verify": cmd_verify, "remove": cmd_remove,
+            "report": cmd_report}
+NEEDS_CLIENT = {"inventory", "dedupe", "review", "plan", "upload", "verify", "remove"}
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gp2sm takeout", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=list(COMMANDS))
+    p.add_argument("ids", nargs="*", help="remove: upload ids")
+    p.add_argument("--reason", default="removed by request", help="remove: recorded reason")
     context.add_args(p, paths=("index", "takeout_dir", "stage_dir"))
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--target", action="append", help="stage/upload/verify: only these albums (glob; repeatable)")
     p.add_argument("--limit", type=int, help="stage/upload: at most this many files")
     p.add_argument("--all", action="store_true", help="verify: re-check everything, not just unverified uploads")
     p.add_argument("--read", action="store_true", help="review: read the answers sorted into same/ and different/")
-    run.add_yes(p, "upload")
+    run.add_yes(p, "upload / remove")
     args = p.parse_args(argv)
     cfg = context.resolve(args)
-    setup_logging(cfg["log_file"])
+    run.setup_logging(cfg["log_file"])
     st = State(cfg["state_db"])
     client = context.client(cfg) if args.command in NEEDS_CLIENT else None
     lock = None
-    if args.command == "upload" and args.yes:
-        lock = context.acquire_lock(cfg["state_db"], "takeout upload")
+    if args.command in ("upload", "remove") and args.yes:
+        lock = context.acquire_lock(cfg["state_db"], f"takeout {args.command}")
     command = COMMANDS[args.command]
-    return run.run_command(st, f"takeout.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
+    code = run.run_command(st, f"takeout.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
+    if args.command == "remove" and not args.yes:
+        run.dry_run_footer()
+    return code
 
 
 if __name__ == "__main__":

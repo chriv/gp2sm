@@ -18,13 +18,6 @@ COMMANDS = {
     "takeout": ("gp2sm.takeout.cli", "import a Google Takeout (index, inventory, dedupe, review, plan, stage, upload, verify)"),
     "albums": ("gp2sm.albums.cli", "album names: date-sortable renames with review and undo"),
     "organize": ("gp2sm.organize.cli", "gather items already on the destination into dated, grouped albums (rules)"),
-    "consolidate": ("gp2sm.organize.consolidate", "legacy: the first migration's consolidation (legacy-dated); new projects use organize"),
-    "takeout-index": ("gp2sm.takeout.index", "index Google Takeout archives without extracting them"),
-    "takeout-match": ("gp2sm.contrib.legacy_bridge.takeout_match", "legacy: link a Takeout index to the old transfer database"),
-    "content-match": ("gp2sm.contrib.legacy_bridge.content_match", "legacy: perceptual matching of Takeout stills to old uploads"),
-    "takeout-upload": ("gp2sm.contrib.legacy_bridge.takeout_upload", "legacy: the first migration's upload plan (stage/upload/verify shared)"),
-    "place-clips": ("gp2sm.organize.place_clips", "place unsorted clips beside their stills by capture time"),
-    "date-undated": ("gp2sm.organize.date_undated", "date items in undated albums from evidence and move them"),
 }
 
 
