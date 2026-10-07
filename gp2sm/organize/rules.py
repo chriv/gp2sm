@@ -117,9 +117,11 @@ def group_for(item, rules, unassigned):
 
 
 def album_name(template, capture_local, group):
-    """Fill an album template ({yyyy}, {mm}, {group}); the result is tidied of doubled or edge spaces."""
+    """Fill an album template ({yyyy}, {mm}, {group}); the result is tidied of doubled or edge spaces.
+    A "/" separates subfolders from the album name ("{yyyy}/{yyyy}-{mm}"); empty segments are dropped."""
     yyyy, mm = (capture_local[:4], capture_local[5:7]) if capture_local else ("", "")
-    return " ".join(template.format(yyyy=yyyy, mm=mm, group=group or "").split())
+    filled = template.format(yyyy=yyyy, mm=mm, group=group or "")
+    return "/".join(seg for seg in (" ".join(part.split()) for part in filled.split("/")) if seg)
 
 
 def recent(uploaded, days, now=None):

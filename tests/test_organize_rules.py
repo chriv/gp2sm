@@ -61,6 +61,9 @@ def test_album_names():
     assert rules.album_name("{group} {yyyy}-{mm}", "2023-05-04T10:00:00", "Kid iPad") == "Kid iPad 2023-05"
     assert rules.album_name("{yyyy}-{mm} {group}", "2023-05-04", "") == "2023-05"
     assert rules.album_name("Photos {yyyy}-{mm}", "2023-05-04", "ignored") == "Photos 2023-05"
+    assert rules.album_name("{yyyy}/{yyyy}-{mm}", "2023-05-04", "") == "2023/2023-05"      # in a year folder
+    assert rules.album_name("{group}/{yyyy}-{mm}", "2023-05-04", "") == "2023-05"           # empty folder dropped
+    assert rules.album_name(" {group} / {yyyy}-{mm}", "2023-05-04", "Kid  iPad") == "Kid iPad/2023-05"
 
 
 def test_recent_uploads_are_skipped():

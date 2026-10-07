@@ -61,7 +61,10 @@ def test_import_into_sandbox(sandbox, tmp_path):
     init_main([str(root), "--non-interactive", "--name", "live", "--timezone", "America/New_York",
                "--folder", folder_name], show=lambda *a: None)
     toml = (root / "gp2sm.toml").read_text().replace('rejected_types = "skip"', 'rejected_types = "convert"')
-    (root / "gp2sm.toml").write_text(toml)   # this test covers converting a rejected format
+    # check for duplicates only in the sandbox, not the whole account (the default), which would list every item
+    toml = toml.replace('existing = ["/"]', f'existing = ["{folder_name}"]')
+    assert f'existing = ["{folder_name}"]' in toml
+    (root / "gp2sm.toml").write_text(toml)   # this test also covers converting a rejected format
     d = "Photos from 2023"
     entries = [
         (f"{d}/IMG_0101.HEIC", heic_bytes(11)), (f"{d}/IMG_0101.HEIC.supplemental-metadata.json", sidecar("IMG_0101.HEIC", T)),

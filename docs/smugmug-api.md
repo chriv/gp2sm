@@ -35,6 +35,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 
 - **`_expand=ImageMetadata` can return stale, empty metadata for recently uploaded images.** (Observed on 2026-10-06: 18 of 27 new uploads still showed `DateTimeCreated` empty through `_expand` after more than 4 minutes, while a direct `GET {ImageUri}!metadata` returned the correct dates.) Use direct calls when verifying fresh uploads.
 - `GET /api/v2/image/{key}-{serial}` also returns `DateTimeOriginal`, which isn't in the `!images` listing. SmugMug converts EXIF local time to UTC there **without** using `OffsetTimeOriginal` (a −04:00 photo came back +7 h), so treat it as display-only. `!metadata`'s `DateTimeCreated` keeps the original local time.
+- **`!moveimages` sometimes fails with HTTP 500 or 504** (several times on 2026-10-07: a 504 in a 7,400-item run, 500s in the live contract moving seconds-old uploads). Later runs succeeded. Treat it as ambiguous: check where the items are before retrying (organize does).
 - **An album's `!images` listing lags behind deletions.** Minutes after `DELETE` succeeded, the listing still showed some deleted items (31 of ~440 shortly after, 3 a few minutes later) while `GET /image/{key}` returned 404. Treat a 404 on a listed item as already gone, and don't use the listing alone to confirm a delete. (Confirmed 2026-10-07.)
 - **Item keywords:** `!images` returns `KeywordArray` (and `Keywords`, a `;`-joined string) on each AlbumImage. SmugMug **adds keywords automatically from the file name**, split on separators (e.g. a UUID-named file gets its hex fragments as keywords), so a person's own tag (like `keep`, added in the web UI) sits among generated ones. Match whole keywords exactly, ignoring case. (Confirmed 2026-10-07.)
 - Album `SortMethod` can be set with `PATCH /api/v2/album/{key}` (`{"SortMethod":"FileName","SortDirection":"Ascending"}`). It's echoed back as `"Filename"`.
@@ -43,7 +44,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - `GET /api/v2/image!search?Scope=<album uri>&Text=<exact filename>` returned **0 results for a file known to be in the album**. Don't use it for existence checks. Use a local inventory built from `!images` listings.
 
 ## Albums and folders
-- Create: `POST {parentNodeUri}!children` with JSON `{"Type": "Folder"|"Album", "Name", "UrlName", "Privacy": "Private"}` → 201, `Response.Node`. The album URI is `Node.Uris.Album.Uri`.
+- Create: `POST {parentNodeUri}!children` with JSON `{"Type": "Folder"|"Album", "Name", "Privacy": "Private"}` (`UrlName` optional) → 201, `Response.Node`. The album URI is `Node.Uris.Album.Uri`.
 - `UrlName` must be unique among siblings.
 - `Album.ImageCount` updates immediately after upload, move, collect and delete.
 - **Album capacity:** documented as 5,000. Albums holding **5,001** items exist on the account. Not yet tested at the limit. Upload failure code 63 means "album full" (from legacy code, not re-verified).
@@ -78,7 +79,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - Changing **`UrlName`** moves the album's URL, and the **old path stops resolving** (`!urlpathlookup` on it returns no album; nothing redirects). Renaming `UrlName` breaks existing links, so only do it when the owner asks.
 - A `UrlName` that a sibling already uses is refused with **HTTP 409**. With `AutoRename: true` the same PATCH returns 200 and changes nothing (AutoRename doesn't help on PATCH).
 - Two albums in one folder may share the same display `Name`.
-- A `UrlName` must start with a letter: an album created as "2019-06-14 Beach Trip" gets `A-2019-06-14-Beach-Trip`. Renaming its display name later doesn't change that.
+- A `UrlName` you **supply** must start with a letter ("2019-06-14 Beach Trip" had to be sent as `A-2019-06-14-Beach-Trip`). **Leave `UrlName` out** when creating and SmugMug derives it from the name, digits first allowed: `2016` → `2016`, `2016-08` → `2016-08`, `Beach Trip` → `Beach-Trip` (confirmed 2026-10-07; gp2sm no longer sends one). The create response's `Node` already carries the assigned `UrlName` and `UrlPath`. Renaming the display name later doesn't change it.
 - Paging: `!images?start=N&count=M` (1-based `start`) fetches any page directly, which is how large albums are sampled.
 
 **Folder settings that round-trip:** `Privacy` (Public, Unlisted, Private), `SortMethod` (SortIndex, Name, DateAdded, DateModified), `SortDirection`, `Description`, `ShowCoverImage`.

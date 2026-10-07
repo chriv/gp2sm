@@ -140,7 +140,11 @@ def ensure_target(st, cfg, client, folder_node_uri, name):
     row = st.q("SELECT * FROM targets WHERE name=?", name)[0]
     if row["album_id"]:
         return row["album_id"]
-    album_id, album_ref, node_ref, created = client.ensure_album(folder_node_uri, name)
+    # "2016/2016-08": the album 2016-08 in the subfolder 2016 of the destination folder
+    sub, _, leaf = name.rpartition("/")
+    parent = (client.ensure_folder_path(client.root_folder(), f"{cfg['target_folder']}/{sub}") if sub
+              else folder_node_uri)
+    album_id, album_ref, node_ref, created = client.ensure_album(parent, leaf)
     st.db.execute("UPDATE targets SET album_id=?, album_ref=?, node_ref=?, created_at=? WHERE name=?",
                   (album_id, album_ref, node_ref, now() if created else None, name))
     st.event("album_created" if created else "album_found", album_id=album_id, name=name)

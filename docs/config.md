@@ -23,7 +23,7 @@ This page is generated from the code (`python -m gp2sm.project.reference`).
 
 | key | type | default | meaning |
 |---|---|---|---|
-| `photo` | album name template | `"Photos {yyyy}-{mm}"` | dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]] |
+| `photo` | album name template | `"Photos {yyyy}-{mm}"` | dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]]; a / puts it in subfolders, e.g. {yyyy}/{yyyy}-{mm} |
 | `video` | album name template | `"Photos {yyyy}-{mm}"` | dated album for videos (same as photo keeps them together) |
 | `undated_photo` | text | `"Photos Undated"` | album for photos with no confident date |
 | `undated_video` | text | `"Videos Undated"` | album for videos with no confident date |

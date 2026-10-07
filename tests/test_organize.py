@@ -189,3 +189,17 @@ def test_delete_duplicates_refuses_a_copy_that_is_also_in_another_album(project)
     with pytest.raises(SystemExit, match="also in another album"):
         run(root, "delete-duplicates", "--yes")
     assert "P3" in fake.albums["HANDMADE"]
+
+
+def test_album_template_with_year_folders(project):
+    root, fake, src = project
+    text = (root / "gp2sm.toml").read_text().replace('photo = "{group} {yyyy}-{mm}"', 'photo = "{yyyy}/{yyyy}-{mm}"')
+    (root / "gp2sm.toml").write_text(text)
+    for step in ("inventory", "plan"):
+        run(root, step)
+    st = State(str(root / "state.db"))
+    assert st.one("SELECT target_name FROM plan WHERE item_id='P1'") == "2023/2023-05"
+    assert run(root, "apply", "--yes") == 0
+    album = next(a for a, items in fake.albums.items() if "P1" in items)
+    assert fake.names[album] == "2023-05"                        # the album's own name has no folder in it
+    assert fake.folders[album] == "Organized/2023"               # created inside the year folder

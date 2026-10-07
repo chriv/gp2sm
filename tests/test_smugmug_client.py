@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError, url_name_for
+from gp2sm.smugmug.client import NotFound, SmugMugClient, SmugMugError
 
 
 class FakeResponse:
@@ -109,12 +109,6 @@ def test_low_ratelimit_sleeps():
     c = SmugMugClient("k", "s", "t", "ts", session_factory=lambda: session, sleep=slept.append)
     c.request("GET", "/x")
     assert slept and c.ratelimit_remaining == 5
-
-
-def test_url_name_for():
-    assert url_name_for("Person iPhone 2026-09") == "Person-iPhone-2026-09"
-    assert url_name_for("2026 videos") == "A-2026-videos"
-    assert url_name_for("dupes (review)") == "Dupes-review"
 
 
 def test_write_not_retried_after_504():

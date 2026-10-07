@@ -35,7 +35,8 @@ SCHEMA = {
     },
     "albums": {
         "photo": ("template", "Photos {yyyy}-{mm}",
-                  "dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]]"),
+                  "dated album name; {yyyy} and {mm} come from the capture date, {group} from [[organize.group]]; "
+                  "a / puts it in subfolders, e.g. {yyyy}/{yyyy}-{mm}"),
         "video": ("template", "Photos {yyyy}-{mm}", "dated album for videos (same as photo keeps them together)"),
         "undated_photo": (str, "Photos Undated", "album for photos with no confident date"),
         "undated_video": (str, "Videos Undated", "album for videos with no confident date"),

@@ -11,7 +11,6 @@ Every behavior relied on here is recorded in docs/smugmug-api.md. Notable traps 
 
 import json
 import logging
-import re
 import threading
 import time
 import urllib.parse
@@ -88,16 +87,6 @@ class SmugMugError(Exception):
 
 class NotFound(SmugMugError):
     """HTTP 404."""
-
-
-def url_name_for(name):
-    """SmugMug UrlName: alphanumerics and dashes, starting with an uppercase letter."""
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")
-    if not slug:
-        slug = "Album"
-    if not slug[0].isalpha():
-        slug = "A-" + slug
-    return slug[0].upper() + slug[1:]
 
 
 class SmugMugClient:
@@ -274,8 +263,7 @@ class SmugMugClient:
 
     def create_node(self, parent_node_uri, node_type, name, privacy="Private"):
         body = self.request("POST", f"{parent_node_uri}!children",
-                            json_body={"Type": node_type, "Name": name, "UrlName": url_name_for(name),
-                                       "Privacy": privacy})
+                            json_body={"Type": node_type, "Name": name, "Privacy": privacy})
         return body["Response"]["Node"]
 
     def find_child(self, parent_node_uri, node_type, name):
