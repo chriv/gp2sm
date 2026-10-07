@@ -298,7 +298,8 @@ Backwards compatibility isn't a goal before the first public release, and the fi
   - A9.3 going public, each step with the owner's go-ahead:
     - history rewrite, done 2026-10-07: a family detail removed, a commit message reworded; author names and emails kept
     - branches, done: the old `main`, `master` and `v3-consolidation` archived as `archive/*` tags; the v3 branch is now `main`, locally and on GitHub
-    - making the repository public, still to do
+    - release, done: tag `v3.0.0b1` and a GitHub pre-release with the wheel and source package; README badges; repository description and topics; the whole account is now the default for duplicate checks
+    - making the repository public: the owner does this
 - **PyPI: deferred** (owner's decision). Publish only once the CLI, config and plugin interfaces are stable and the owner is happy with the architecture, so that no breaking change follows the first PyPI release. Until then, install from a checkout or a GitHub release.
 
 - **Deliverables:**
