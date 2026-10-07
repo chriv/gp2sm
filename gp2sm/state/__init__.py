@@ -4,7 +4,7 @@ import datetime
 import json
 import sqlite3
 
-SCHEMA_VERSION = 1
+from gp2sm.state import migrations
 
 # TODO(schema, ROADMAP A1): this schema is SmugMug- and Google-shaped. That's acceptable while each
 # database tracks one job, but long-term tracking needs a neutral, versioned schema with a
@@ -20,8 +20,8 @@ SCHEMA_VERSION = 1
 #        uploads.image_key/album_image_uri -> dest_item_id/dest_item_ref.
 #   2. Source-side ids: matches.google_id and legacy_items/legacy_md5 belong to a Google "legacy bridge"
 #      plugin. Move them to plugin-owned tables (source_items(service, source_id, ...)) keyed by service.
-#   3. Make migrations real: bump SCHEMA_VERSION, keep ordered migration steps (ALTER/rename/copy), and
-#      test each step against a synthetic DB of the previous version. _add_missing_columns() is only a stopgap.
+#   3. Migrations are versioned (state/migrations.py); the neutral renames above become the next step(s)
+#      there, each tested against a synthetic DB of the previous version.
 #   4. Keep `events` append-only and service-neutral (`detail` JSON already is), so history stays readable
 #      across migrations.
 
@@ -130,18 +130,14 @@ class State:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
+        fresh = not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='images'").fetchone()
         self.db.executescript(SCHEMA)
-        self._add_missing_columns()
-        self.db.execute("INSERT OR IGNORE INTO meta VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
-        self.db.commit()
+        self.migrations_applied = migrations.migrate(self.db, fresh)
         self.run_id = None
 
-    def _add_missing_columns(self):
-        """Tiny forward migration for columns added after a DB was created."""
-        have = {r[1] for r in self.db.execute("PRAGMA table_info(uploads)")}
-        for col, decl in (("pair_item_id", "INT"), ("verified_at", "TEXT")):
-            if col not in have:
-                self.db.execute(f"ALTER TABLE uploads ADD COLUMN {col} {decl}")
+    @property
+    def schema_version(self):
+        return migrations.current_version(self.db)
 
     # ------------------------------------------------------------- runs/events
 

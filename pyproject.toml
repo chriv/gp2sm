@@ -24,6 +24,10 @@ dev = ["pytest>=7", "ruff>=0.5"]
 [project.scripts]
 gp2sm = "gp2sm.cli:main"
 
+[project.entry-points."gp2sm.services"]
+smugmug = "gp2sm.smugmug:service"
+google-takeout = "gp2sm.takeout:service"
+
 [tool.setuptools.dynamic]
 version = { attr = "gp2sm.__version__" }
 

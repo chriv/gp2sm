@@ -27,7 +27,7 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
 
 ## Architecture (`gp2sm/`)
 
-- `services/`: service-neutral `PhotoDestination`/`PhotoSource` protocols, records (`ItemRecord`, `AlbumRecord`, `SourceItem`) and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (against the fake in CI; opt-in live run against SmugMug). Any source must pass `tests/contracts/source.py`.
+- `services/`: `registry.py` discovers services via the `gp2sm.services` entry-point group (built-ins SmugMug and Google Takeout register the same way; plugins can't shadow built-ins; factories are checked against the protocol). `base.py` has the service-neutral `PhotoDestination`/`PhotoSource` protocols, records (`ItemRecord`, `AlbumRecord`, `SourceItem`) and `Capabilities`. Any destination must pass `tests/contracts/destination.py` (against the fake in CI; opt-in live run against SmugMug). Any source must pass `tests/contracts/source.py`.
 - `smugmug/client.py`: the SmugMug adapter, and the only place that talks to SmugMug. It handles retries (network, 429/5xx, 401 `nonce_used`), `stat:"fail"` arriving with HTTP 200, paging, per-endpoint list keys, rate-limit headers, and ambiguous writes (never blindly retried). It declares `SMUGMUG_CAPABILITIES`.
 - `takeout/`: `index.py` (stream-index `.tgz`, MD5 + sidecars), `match.py` (sidecar ↔ media pairing incl. `(N)` names, Live Photo clips), `source.py` (`TakeoutSource`, the PhotoSource), `upload.py` (plan/stage/upload/verify Live Photo pairs and HEIC; HEIC→JPEG keeping EXIF, filling in missing dates; clip-time pairing guard).
 - `organize/`:
@@ -36,8 +36,8 @@ Takeout pipeline (archives in `data/takeout/`, all gitignored):
   - `content_match.py`: dHash matching, burst pairing
   - `place_clips.py`: unsorted clips → beside their still, by time + aspect
   - `date_undated.py`: evidence chain for undated items, server-confirmed moves
-- `state/`: the SQLite schema. `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`. Specific TODOs for a neutral, versioned schema are in `state/__init__.py`.
-- `media/`: MP4 header parsing (duration, dimensions), aspect ratio.
+- `state/`: the SQLite schema, plus `migrations.py` (ordered, versioned, idempotent steps recorded in `schema_history`; new DBs are created at LATEST; to add one, append a step, update SCHEMA, and test an upgrade from the previous version). `plan.status` goes pending → in_progress → done | failed, with `unknown` meaning "ask the server". Every action is also appended to `events`. Specific TODOs for a neutral, versioned schema are in `state/__init__.py`.
+- `media/`: `mp4.py` (MP4 header parsing: duration, dimensions, aspect) and `convert.py` (cross-platform HEIC/any→JPEG via Pillow + pillow-heif; original EXIF bytes passed through untouched, Orientation reset to 1 since libheif applies the rotation; `render_small` for hashing; optional `sips` backend on macOS).
 - `cli/`: the `gp2sm <command>` dispatcher.
 
 ## Modularity rule (until Stage A1 adds the service layer)
