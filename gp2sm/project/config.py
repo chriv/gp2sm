@@ -19,7 +19,7 @@ CONFIG_NAME = "gp2sm.toml"
 
 # section -> key -> (type, default, help). Types: str, int (positive), "count" (0 or more), list (of str),
 # "template", "timezone", "rules" (an array of tables), or a tuple of allowed strings (a choice).
-DATE_SOURCES = ("camera", "filename", "upload", "legacy")
+DATE_SOURCES = ("camera", "filename", "album", "upload", "legacy")
 RULE_KEYS = ("name", "album", "make", "model", "filename")
 SCHEMA = {
     "project": {
@@ -67,8 +67,9 @@ SCHEMA = {
     },
     "organize": {
         "sources": (list, [], "folders or albums (by name) whose items are organized, e.g. [\"Uploads\"]"),
-        "dates": (list, ["camera", "filename"], "where capture dates come from, in order: camera (the file's own "
-                                                "date), filename, upload (last resort), legacy (old transfer DBs)"),
+        "dates": (list, ["camera", "filename", "album"], "where capture dates come from, in order: camera (the "
+                  "file's own date), filename, album (a date in the source album's name), upload (last resort), "
+                  "legacy (old transfer DBs)"),
         "mode": (("move", "collect"), "move", "move items into the dated albums, or collect them (copies stay in "
                                               "the source; use for albums an uploader app still writes to)"),
         "skip_newer_than_days": ("count", 0, "leave items uploaded within this many days alone (0 = none)"),

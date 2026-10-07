@@ -133,8 +133,8 @@ def inventory_albums(st, client, albums, workers):
                          it["uploaded"], it["capture_time"], json.dumps(it["raw"]),
                          json.dumps(it["raw_metadata"]) if it.get("raw_metadata") else None, ts, ts,
                          it.get("make"), it.get("model")))
-                st.db.execute("UPDATE source_albums SET rows_stored=?, inventoried_at=? WHERE album_key=?",
-                              (len(items), ts, key))
+                st.db.execute("UPDATE source_albums SET rows_stored=?, image_count=COALESCE(image_count, ?), "
+                              "inventoried_at=? WHERE album_key=?", (len(items), len(items), ts, key))
                 st.event("inventory_album", album_key=key, commit=False, rows=len(items),
                          item_count=album["item_count"], path=album["path"])
             flag = "" if album["item_count"] in (None, len(items)) else f" (album reports {album['item_count']})"
@@ -331,7 +331,8 @@ def cmd_apply(st, cfg, client, args):
         reconcile_keys(st, client, stuck)
 
     targets = [dict(r) for r in st.q(
-        "SELECT t.name, t.kind, t.album_key, COUNT(p.image_key) pending FROM targets t "
+        "SELECT t.name, t.kind, t.album_key, COUNT(p.image_key) pending, "
+        "SUM(p.action='collect') collect FROM targets t "
         "JOIN plan p ON p.target_name=t.name AND p.status='pending' GROUP BY t.name")]
     if args.target:
         targets = [t for t in targets if any(fnmatch.fnmatch(t["name"], pat) for pat in args.target)]
@@ -341,7 +342,8 @@ def cmd_apply(st, cfg, client, args):
     limit = args.limit
     if not args.yes:
         for t in targets:
-            print(f"  would move {t['pending']:5} -> {t['name']} ({t['kind']})")
+            verb = "collect" if t["collect"] == t["pending"] else "move" if not t["collect"] else "move/collect"
+            print(f"  would {verb} {t['pending']:5} -> {t['name']} ({t['kind']})")
         total = sum(t["pending"] for t in targets)
         print(f"  {total if limit is None else min(total, limit)} items across {len(targets)} albums"
               + (f" (limit {limit})" if limit is not None else ""))
@@ -351,7 +353,8 @@ def cmd_apply(st, cfg, client, args):
         return None
 
     run.install_sigint()
-    progress = run.Progress(min(sum(t["pending"] for t in targets), limit or 10**12), "moving")
+    progress = run.Progress(min(sum(t["pending"] for t in targets), limit or 10**12),
+                            "collecting" if all(t["collect"] == t["pending"] for t in targets) else "moving")
     folder_uri = client.ensure_folder_path(client.root_folder(), cfg["target_folder"])
     totals = {"moved": 0, "failed": 0, "albums": 0}
     consecutive_failures = 0
@@ -373,7 +376,8 @@ def cmd_apply(st, cfg, client, args):
                      server_count=server_count, pending=len(rows))
             continue
         totals["albums"] += 1
-        log.info("-> %s: moving %d (server has %d)", t["name"], len(rows), server_count)
+        log.info("-> %s: %s %d (server has %d)", t["name"], "collecting" if t["collect"] == len(rows) else "moving",
+                 len(rows), server_count)
         bs = args.batch_size or cfg["move_batch_size"]
         # batch within a single source album and action (move | collect)
         i = 0
@@ -540,8 +544,8 @@ def cmd_delete_empty_targets(st, cfg, client, args):
         except NotFound:
             continue
         if count or planned:
-            if args.name:
-                out["kept"].append((t["name"], count, planned))
+            reason = f"{count} items on the server" if count else f"{planned} items still planned for it"
+            out["kept"].append(f"{t['name']}: {reason}")
             continue
         if not args.yes:
             log.info("dry run: would delete empty target album %s", t["name"])

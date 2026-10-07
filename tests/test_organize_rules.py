@@ -39,6 +39,8 @@ def test_date_chain_precedence_and_plugins():
     bare = {"filename": "IMG_1.jpg", "capture_time": "0000:00:00 00:00:00", "uploaded": "2024-06-01T02:00:00+00:00"}
     assert rules.date_for(bare, ["camera", "filename"], "UTC", today=TODAY) == (None, "none")
     assert rules.date_for(bare, ["camera", "upload"], "America/New_York", today=TODAY) == ("2024-05-31T22:00:00", "upload")
+    old = {"filename": "PICT0008.TIF", "capture_time": None, "album_name": "2004-03-17 New puppy (6 weeks old)"}
+    assert rules.date_for(old, ["camera", "filename", "album"], "UTC", today=TODAY) == ("2004-03-17", "album:iso_date")
     plugin = {"legacy": lambda it: "2019-12-31T23:59:59"}
     assert rules.date_for(bare, ["legacy", "upload"], "UTC", plugins=plugin, today=TODAY)[1] == "legacy"
     with pytest.raises(ValueError):

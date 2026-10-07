@@ -140,3 +140,16 @@ def test_organize_collect_end_to_end(project):
     assert run(root, "undo", "Phone 2023-05", "--yes") == 0                # removes only the collected copy
     assert fake.albums[src] == {"P1", "P2", "P3", "P4", "P5"}
     assert fake.item_album_ids("P1") == [src]
+
+
+def test_delete_empty_targets_says_why_it_kept_an_album(project, capsys):
+    root, fake, src = project
+    for step in ("inventory", "plan"):
+        run(root, step)
+    run(root, "apply", "--yes")
+    run(root, "undo", "Phone 2023-05", "--yes")               # empty again, but its items are planned once more
+    capsys.readouterr()
+    assert run(root, "delete-empty-targets", "--yes") == 0
+    out = capsys.readouterr().out
+    assert "Phone 2023-05: 1 items still planned for it" in out
+    assert any(n == "Phone 2023-05" for n in fake.names.values())        # kept

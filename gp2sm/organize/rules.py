@@ -3,6 +3,7 @@
 Dates come from an ordered chain; the first source that gives a plausible date wins and is recorded:
   camera    the capture time the destination read from the file (EXIF DateTimeOriginal / video creation time)
   filename  a date in the file name, from common camera, phone and app patterns (FILENAME_PATTERNS)
+  album     a date in the source album's name (e.g. "2004-03-17 New puppy"), with the same patterns
   upload    when the item was uploaded (a last resort; off unless listed)
 Other sources can be added by plugins (e.g. the legacy transfer database in gp2sm.contrib.legacy_bridge).
 
@@ -82,6 +83,11 @@ def date_for(item, chain, tz_name, plugins=None, today=None):
             value, pattern = date_from_filename(item.get("filename"), today)
             if value:
                 return value, f"filename:{pattern}"
+            continue
+        elif source == "album":
+            value, pattern = date_from_filename(item.get("album_name"), today)
+            if value:
+                return value, f"album:{pattern}"
             continue
         elif source == "upload":
             value = upload_date(item.get("uploaded"), tz_name)
