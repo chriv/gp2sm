@@ -2,6 +2,25 @@
 
 All notable changes to gp2sm. Versions follow [semantic versioning](https://semver.org): after 3.0, new features come in minor releases and fixes in patch releases.
 
+## 3.0.0b3 (beta)
+
+Found and fixed while organizing a real account (auto-upload albums, a folder merge, renames, settings policies).
+
+- **Fixed:**
+  - `organize verify` reported every existing target album as wrong, because of the items that were already there (#6).
+  - The `album` date source didn't read month galleries named like `2016-08` (#5).
+  - Album renames kept words left dangling by the date ("Portraits taken on …") and mangled year ranges (#7).
+  - The settings audit blamed a folder for privacy when the album itself was private (#9).
+  - `albums verify` and `undo` got confused when gp2sm changed the same setting twice: undo restored the intermediate values (#10).
+- **New:**
+  - Album templates can put albums in subfolders, e.g. `{yyyy}/{yyyy}-{mm}` for year folders (#4). SmugMug now names new folders' and albums' web addresses itself (`2016-08`, not `A-2016-08`).
+  - A year-range album (a school year, `2019/2020`) is dated from its photos when they're one tight cluster inside the range, and the range is kept (#8).
+  - `albums approve --name … --as "NEW NAME"`: approve one reviewed rename under a name you choose.
+  - `albums inventory --name GLOB`.
+  - Checks (`plan`, `verify`, `albums audit`) exit with code 3 when they find something for a person to look at, so a script or scheduler can tell drift from a clean run.
+- **State schema v2:** older project databases upgrade automatically.
+- **Documented:** a name with a full date is trusted without checking its photos; album listings lag behind deletions; `moveimages` sometimes returns 500/504.
+
 ## 3.0.0b2 (beta)
 
 - **Fixed:** listing a SmugMug album lost each item's metadata after the first page, so most items looked undated to organize (#1). SmugMug's next-page link drops `_expand`, so the original parameters are now resent on every page.
