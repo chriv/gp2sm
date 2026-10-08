@@ -158,3 +158,41 @@ def test_approve_as_a_name_the_reviewer_chooses(project):
     assert changes(root)["Christmas 2015"] == ("2015-12-25 Christmas", "planned")
     assert run(root, "apply", "--yes", "--name", "Christmas 2015") == 0
     assert fake.names[ids["Christmas 2015"]] == "2015-12-25 Christmas"
+
+
+def test_a_setting_changed_twice_verifies_and_undoes_to_the_start(policy_project):
+    root, fake, ids = policy_project
+    original = fake.album_settings(ids["beach"])["comments"]
+    toml = (root / "gp2sm.toml").read_text()
+    (root / "gp2sm.toml").write_text(toml + f'\n[[policy]]\nscope = ["Family/Beach"]\ncomments = {str(not original).lower()}\n')
+    run(root, "audit")
+    run(root, "fix", "--yes")                                          # round 1: the opposite (a test)
+    (root / "gp2sm.toml").write_text(toml + '\n[[policy]]\nscope = ["Family/Beach"]\ncomments = true\n'
+                                     .replace("true", str(original).lower()))
+    run(root, "audit")
+    run(root, "fix", "--yes")                                          # round 2: back again
+    st = State(str(root / "state.db"))
+    assert st.one("SELECT COUNT(*) FROM album_changes WHERE field='comments' AND status='done'") == 2
+    run(root, "verify")
+    assert "changed since" not in (st.one("SELECT detail FROM events WHERE kind='verify' ORDER BY rowid DESC") or "")
+    run(root, "undo", "--yes")
+    assert fake.album_settings(ids["beach"])["comments"] == original    # as before the first change
+    assert st.one("SELECT COUNT(*) FROM album_changes WHERE field='comments' AND status='undone'") == 2
+
+
+def test_verify_checks_only_the_newest_change(policy_project):
+    from gp2sm.albums import cli
+    rows = [{"album_id": "A", "kind": "setting", "field": "comments", "change_id": 1},
+            {"album_id": "A", "kind": "setting", "field": "comments", "change_id": 2},
+            {"album_id": "A", "kind": "rename", "field": None, "change_id": 3},
+            {"album_id": "A", "kind": "rename", "field": None, "change_id": 4}]
+    assert [r["change_id"] for r in cli.newest(rows)] == [2, 4]
+
+
+def test_chain_follows_linked_changes_back_to_the_start():
+    from gp2sm.albums import cli
+    newest_first = [{"change_id": 3, "old_value": '"b"', "new_value": '"c"'},
+                    {"change_id": 2, "old_value": '"a"', "new_value": '"b"'},
+                    {"change_id": 1, "old_value": '"x"', "new_value": '"y"'}]    # not linked: someone changed it between
+    linked, before = cli.chain(newest_first)
+    assert [c["change_id"] for c in linked] == [3, 2] and before == '"a"'

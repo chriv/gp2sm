@@ -332,10 +332,32 @@ def cmd_apply(st, cfg, client, args):
     return out
 
 
+def newest(rows):
+    """Only the newest change of each (album, setting) or album rename: gp2sm may change the same thing twice."""
+    latest = {}
+    for r in rows:
+        key = (r["album_id"], r["kind"], r["field"] if r["kind"] == "setting" else None)
+        if key not in latest or r["change_id"] > latest[key]["change_id"]:
+            latest[key] = r
+    return sorted(latest.values(), key=lambda r: r["change_id"])
+
+
+def chain(changes):
+    """changes: one album setting's (or name's) done changes, newest first. Returns (linked changes, value before the
+    first of them): older changes count only while each one's new value is the next one's old value."""
+    linked, before = [changes[0]], changes[0]["old_value"]
+    for c in changes[1:]:
+        if json.loads(c["new_value"]) != json.loads(before):
+            break
+        linked.append(c)
+        before = c["old_value"]
+    return linked, before
+
+
 def cmd_verify(st, cfg, client, args):
     out = {"in_place": 0, "changed_since": []}
     settings = {}
-    for r in st.q("SELECT * FROM album_changes WHERE kind='setting' AND status='done'"):
+    for r in newest(st.q("SELECT * FROM album_changes WHERE kind='setting' AND status='done'")):
         if r["album_id"] not in settings:
             try:
                 settings[r["album_id"]] = client.album_settings(r["album_id"])
@@ -346,7 +368,7 @@ def cmd_verify(st, cfg, client, args):
             out["in_place"] += 1
         else:
             out["changed_since"].append(f"{r['album_id']} {r['field']} is now {value!r}")
-    for r in st.q("SELECT * FROM album_changes WHERE kind='rename' AND status='done'"):
+    for r in newest(st.q("SELECT * FROM album_changes WHERE kind='rename' AND status='done'")):
         try:
             name = client.album_info(r["album_id"])["name"]
         except NotFound:
@@ -371,19 +393,26 @@ def cmd_undo(st, cfg, client, args):
     run.install_sigint()
     out = {"restored": 0, "skipped": [], "failed": 0}
     undo_settings(st, client, args, out)
-    for r in rows:
+    by_album = {}
+    for r in rows:                     # newest first
+        by_album.setdefault(r["album_id"], []).append(r)
+    for album_id, renames in by_album.items():
         if run.Stop.requested:
             break
-        current = client.album_info(r["album_id"])["name"]
-        if current != r["new_value"]:
-            out["skipped"].append(f"{r['new_value']!r} was renamed since (now {current!r}); left alone")
+        current = client.album_info(album_id)["name"]
+        if current != renames[0]["new_value"]:
+            out["skipped"].append(f"{renames[0]['new_value']!r} was renamed since (now {current!r}); left alone")
             continue
-        got = client.rename_album(r["album_id"], r["old_value"])
-        ok = got == r["old_value"]
-        st.db.execute("UPDATE album_changes SET status=?, last_error=? WHERE change_id=?",
-                      ("undone" if ok else "done", None if ok else f"undo read back {got!r}", r["change_id"]))
-        st.event("album_rename_undone" if ok else "album_rename_undo_failed", album_id=r["album_id"], commit=False,
-                 restored=r["old_value"])
+        linked, before = chain([dict(r, new_value=json.dumps(r["new_value"]), old_value=json.dumps(r["old_value"]))
+                                for r in renames])
+        before = json.loads(before)
+        got = client.rename_album(album_id, before)
+        ok = got == before
+        for r in linked:
+            st.db.execute("UPDATE album_changes SET status=?, last_error=? WHERE change_id=?",
+                          ("undone" if ok else "done", None if ok else f"undo read back {got!r}", r["change_id"]))
+        st.event("album_rename_undone" if ok else "album_rename_undo_failed", album_id=album_id, commit=False,
+                 restored=before)
         st.db.commit()
         out["restored" if ok else "failed"] += 1
     return out
@@ -403,15 +432,22 @@ def undo_settings(st, client, args, out):
             break
         current = client.album_settings(album_id)
         allowed = client.capabilities.album_settings
-        todo = {}
-        for c in changes:
-            old = json.loads(c["old_value"])
-            if current.get(c["field"]) != json.loads(c["new_value"]):
-                out["skipped"].append(f"{c['name']}: {c['field']} was changed since; left alone")
-            elif old not in allowed.get(c["field"], ()):
-                out["skipped"].append(f"{c['name']}: {c['field']} was {old!r}, which can't be written back")
-            else:
-                todo[c["field"]] = old
+        todo, linked_by_field = {}, {}
+        by_field = {}
+        for c in changes:              # newest first
+            by_field.setdefault(c["field"], []).append(c)
+        for field, field_changes in by_field.items():
+            if current.get(field) != json.loads(field_changes[0]["new_value"]):
+                out["skipped"].append(f"{field_changes[0]['name']}: {field} was changed since; left alone")
+                continue
+            # changed more than once by gp2sm (e.g. a test, then the real policy): back to before the first change
+            linked, before = chain(field_changes)
+            old = json.loads(before)
+            if old not in allowed.get(field, ()):
+                out["skipped"].append(f"{field_changes[0]['name']}: {field} was {old!r}, which can't be written back")
+                continue
+            todo[field] = old
+            linked_by_field[field] = linked
         results = {}
         # download size can only be restored with downloads on: restore it before switching downloads off
         if "download_size" in todo and todo.get("downloads") is False:
@@ -419,12 +455,11 @@ def undo_settings(st, client, args, out):
             results["download_size"] = first.get("download_size") == todo.pop("download_size")
         got = client.set_album_settings(album_id, todo) if todo else current
         results.update({k: got.get(k) == v for k, v in todo.items()})
-        for c in changes:
-            if c["field"] in results:
-                ok = results[c["field"]]
+        for field, ok in results.items():
+            for c in linked_by_field[field]:
                 st.db.execute("UPDATE album_changes SET status=? WHERE change_id=?", ("undone" if ok else "done",
                                                                                      c["change_id"]))
-                out["restored" if ok else "failed"] += 1
+            out["restored" if ok else "failed"] += 1
         st.db.commit()
 
 
