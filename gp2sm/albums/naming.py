@@ -55,6 +55,7 @@ class Parsed:
     confidence: str = "none"         # high | medium | none
     pattern: Optional[str] = None
     note: str = ""
+    year_end: Optional[int] = None   # last year of a range ("2019/2020")
 
     def iso(self):
         if self.precision == "none":
@@ -103,7 +104,7 @@ def parse(name, today=None):
             g = m.groupdict()
             if pname == "y_range":   # spans years: not one event's date, so the name is left as it is
                 return Parsed(int(g["y"]), precision="range", subject=clean_subject(name), pattern=pname,
-                              note=f"the name spans {g['y']}-{g['y2']}")
+                              note=f"the name spans {g['y']}-{g['y2']}", year_end=int(g["y2"]))
             y = int(g["y"]) if g.get("y") else _year2(int(g["yy"]), today) if g.get("yy") else None
             mo = MONTHS[g["mon"].lower().rstrip(".")] if g.get("mon") else int(g["m"]) if g.get("m") else None
             d = int(g["d"]) if g.get("d") else None
@@ -184,7 +185,15 @@ def propose(name, templates, keep_day=True, min_confidence="high", photo_dates=N
                        note=f"year from the name; {p2.note}")
             source = "name+photos"
     if p.precision == "range":
-        return Proposal(name, None, None, "none", "none", False, f"{p.note}; left as it is")
+        # often a school or season year; one tightly clustered event inside it gets the photos' date, range kept
+        if photo_dates and not (spread_days(upload_dates) or 0) > max_spread_days:
+            p2, _ = date_from_photos(photo_dates, max_spread_days, min_photos)
+            if p2 is not None and p.year <= p2.year <= p.year_end:
+                p = Parsed(p2.year, p2.month, p2.day, p2.precision, p.subject, "high", pattern="range+photos",
+                           note=f"{p.note} (kept in the name); {p2.note}")
+                source = "range+photos"
+        if p.precision == "range":
+            return Proposal(name, None, None, "none", "none", False, f"{p.note}; left as it is")
     if p.precision == "none":
         uploads = spread_days(upload_dates)
         if photo_dates and uploads is not None and uploads > max_spread_days:

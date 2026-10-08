@@ -114,3 +114,13 @@ def test_year_ranges_are_left_as_they_are():
         p = naming.propose(name, T)
         assert p.new is None and "spans" in p.note
     assert naming.propose("Trip 2010-11", T).new == "2010-11 Trip"                    # a month, not a range
+
+
+def test_a_year_range_album_is_dated_by_clustered_photos_inside_the_range():
+    one_day = ["2020-04-05T10:00:00"] * 23
+    p = naming.propose("Portraits 2019/2020", T, photo_dates=one_day)
+    assert p.new == "2020-04-05 Portraits 2019/2020" and p.auto and "kept in the name" in p.note
+    outside = ["2022-04-05T10:00:00"] * 23                                  # photos outside the named years
+    assert naming.propose("Portraits 2019/2020", T, photo_dates=outside).new is None
+    spread = [f"2020-{m:02d}-01T10:00:00" for m in range(1, 13)]             # a whole year: not one event
+    assert naming.propose("Portraits 2019/2020", T, photo_dates=spread).new is None
