@@ -145,6 +145,10 @@ def ensure_target(st, cfg, client, folder_node_uri, name):
     parent = (client.ensure_folder_path(client.root_folder(), f"{cfg['target_folder']}/{sub}") if sub
               else folder_node_uri)
     album_id, album_ref, node_ref, created = client.ensure_album(parent, leaf)
+    if not created:
+        # an existing album (e.g. an uploader's month gallery): remember what was already in it, for verify
+        before = [(name, it["item_id"]) for it in client.list_album_items(album_id, ids_only=True)]
+        st.db.executemany("INSERT OR IGNORE INTO target_items_before VALUES(?,?)", before)
     st.db.execute("UPDATE targets SET album_id=?, album_ref=?, node_ref=?, created_at=? WHERE name=?",
                   (album_id, album_ref, node_ref, now() if created else None, name))
     st.event("album_created" if created else "album_found", album_id=album_id, name=name)
@@ -352,7 +356,9 @@ def cmd_verify(st, cfg, client, args):
             out.setdefault("targets_deleted", 0)
             out["targets_deleted"] += 1  # e.g. a duplicates album removed by delete-duplicates
             continue
-        missing, extra = expected - server, server - expected
+        before = {r[0] for r in st.q("SELECT item_id FROM target_items_before WHERE target_name=?", t["name"])}
+        # items that were already in an existing album aren't unexpected (and may since have been removed by hand)
+        missing, extra = expected - server, server - expected - before
         ok = not missing and not extra
         out["targets_ok" if ok else "targets_bad"] += 1
         st.db.execute("UPDATE targets SET server_count=?, checked_at=? WHERE name=?", (len(server), now(), t["name"]))

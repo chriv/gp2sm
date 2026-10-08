@@ -17,7 +17,14 @@ def _columns(db, table):
     return {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
 
 
-MIGRATIONS = []   # (version, description, step(db)) for versions 2, 3, ...
+def _v2_target_items_before(db):
+    db.execute("CREATE TABLE IF NOT EXISTS target_items_before(target_name TEXT, item_id TEXT, "
+               "PRIMARY KEY(target_name, item_id))")
+
+
+MIGRATIONS = [   # (version, description, step(db)) for versions 2, 3, ...
+    (2, "target_items_before: items already in a found target album", _v2_target_items_before),
+]
 BASE = 1
 
 HISTORY = "CREATE TABLE IF NOT EXISTS schema_history(version INT PRIMARY KEY, description TEXT, applied_at TEXT)"

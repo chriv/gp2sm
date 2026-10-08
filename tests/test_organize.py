@@ -203,3 +203,24 @@ def test_album_template_with_year_folders(project):
     album = next(a for a, items in fake.albums.items() if "P1" in items)
     assert fake.names[album] == "2023-05"                        # the album's own name has no folder in it
     assert fake.folders[album] == "Organized/2023"               # created inside the year folder
+
+
+def test_verify_accepts_items_already_in_an_existing_target(project):
+    root, fake, src = project
+    existing = fake.ensure_album(fake.ensure_folder_path(fake.root_folder(), "Organized"), "Phone 2023-05")[0]
+    fake.items["E1"] = {"name": "earlier.jpg", "md5": "z", "uploaded": "2023-05-05T00:00:00+00:00"}
+    fake.albums[existing] = {"E1"}                           # the album P1 goes to already holds a photo
+    for step in ("inventory", "plan"):
+        run(root, step)
+    assert run(root, "apply", "--yes") == 0
+    assert fake.albums[existing] == {"E1", "P1"}
+    st = State(str(root / "state.db"))
+    assert st.q("SELECT item_id FROM target_items_before WHERE target_name='Phone 2023-05'")[0][0] == "E1"
+    assert run(root, "verify") == 0
+    assert st.one("SELECT detail FROM events WHERE kind='verify' ORDER BY rowid DESC LIMIT 1").count('"targets_bad": 0')
+    fake.albums[existing].discard("E1")                      # an earlier photo removed by hand: still fine
+    fake.items["X1"] = {"name": "stray.jpg", "md5": "y", "uploaded": "2024-01-01T00:00:00+00:00"}
+    fake.albums[existing].add("X1")                          # something nobody planned: flagged
+    run(root, "verify")
+    detail = st.one("SELECT detail FROM events WHERE kind='verify_mismatch' ORDER BY rowid DESC LIMIT 1")
+    assert '"extra": ["X1"]' in detail and '"missing": []' in detail

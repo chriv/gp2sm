@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS targets(
   name TEXT PRIMARY KEY, kind TEXT, album_id TEXT, album_ref TEXT, node_ref TEXT,
   created_at TEXT, planned INT, server_count INT, checked_at TEXT);
 
+-- Items already in a target album when it was found (not created): verify expects them besides the planned ones.
+CREATE TABLE IF NOT EXISTS target_items_before(target_name TEXT, item_id TEXT, PRIMARY KEY(target_name, item_id));
+
 -- What should happen to each organized item and how far it got.
 -- action: move | collect | park_duplicate (keeper_item_id: the copy that is kept)
 -- status: pending -> in_progress -> done | failed ; unknown = must be reconciled against the server ; deleted
