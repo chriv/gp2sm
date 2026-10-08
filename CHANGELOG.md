@@ -2,7 +2,7 @@
 
 All notable changes to gp2sm. Versions follow [semantic versioning](https://semver.org): after 3.0, new features come in minor releases and fixes in patch releases.
 
-## Unreleased
+## 3.0.0b4 (beta)
 
 - **Python 3.11 or newer is required.** Python 3.10 reaches end of life in October 2026; the `tomli` dependency is gone (3.11 has `tomllib`).
 - CI uses `actions/checkout` and `actions/setup-python` v7 (Node 24).
