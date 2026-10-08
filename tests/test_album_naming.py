@@ -100,3 +100,17 @@ def test_year_only_names_gain_the_month_from_agreeing_photos():
     assert naming.propose("Cotton Pickin 2011", T, photo_dates=other_year, today=TODAY).new == "2011 Cotton Pickin"
     one_day = ["2011-10-02"] * 5
     assert naming.propose("Cotton Pickin 2011", T, photo_dates=one_day, today=TODAY).new == "2011-10-02 Cotton Pickin"
+
+
+def test_words_left_dangling_by_the_date_are_dropped():
+    assert naming.propose("Pat Portraits taken November 12, 2005", T).new == "2005-11-12 Pat Portraits"
+    assert naming.propose("Pat Portraits Taken on August 03, 2005", T).new == "2005-08-03 Pat Portraits"
+    assert naming.propose("Snow in December 2009", T).new == "2009-12 Snow"
+    assert naming.propose("Day of Caring 2014", T).new == "2014 Day of Caring"        # "of" mid-name stays
+
+
+def test_year_ranges_are_left_as_they_are():
+    for name in ("Portraits 2019/2020", "Trip 2010-2012", "Archive 1999 – 2003"):
+        p = naming.propose(name, T)
+        assert p.new is None and "spans" in p.note
+    assert naming.propose("Trip 2010-11", T).new == "2010-11 Trip"                    # a month, not a range

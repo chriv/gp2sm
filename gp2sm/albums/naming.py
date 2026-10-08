@@ -28,6 +28,7 @@ MIN_YEAR, CONFIDENCE = 1900, {"high": 2, "medium": 1, "none": 0}
 SEP = r"[-./_ ]"
 # Each pattern: (name, regex, precision, confidence). Groups: y (4 digits), yy (2 digits), m, mon, d.
 PATTERNS = [
+    ("y_range", r"(?<!\d)(?P<y>(?:19|20)\d\d)\s*[-/–]\s*(?P<y2>(?:19|20)\d\d)(?!\d)", "range", "none"),
     ("ymd", rf"(?<!\d)(?P<y>\d{{4}}){SEP}(?P<m>\d{{1,2}}){SEP}(?P<d>\d{{1,2}})(?!\d)", "day", "high"),
     ("ymd_compact", r"(?<!\d)(?P<y>(?:19|20)\d\d)(?P<m>0[1-9]|1[0-2])(?P<d>0[1-9]|[12]\d|3[01])(?!\d)", "day", "high"),
     ("d_mon_y", rf"(?<![a-z\d])(?P<d>\d{{1,2}})(?:st|nd|rd|th)?\s+(?P<mon>{MONTH_RX})\.?,?\s+(?P<y>\d{{4}})(?!\d)", "day", "high"),
@@ -40,6 +41,7 @@ PATTERNS = [
     ("y", r"(?<![\d#])(?P<y>(?:19|20)\d\d)(?![\d])", "year", "medium"),
     ("yy", r"(?<![\w])'(?P<yy>\d\d)(?!\d)", "year", "medium"),
 ]
+DANGLING = re.compile(r"\s+(?:taken|on|of|from|in|at|dated|circa|ca\.?)$", re.I)
 _COMPILED = [(n, re.compile(rx, re.I), p, c) for n, rx, p, c in PATTERNS]
 
 
@@ -48,7 +50,7 @@ class Parsed:
     year: Optional[int] = None
     month: Optional[int] = None
     day: Optional[int] = None
-    precision: str = "none"          # day | month | year | none
+    precision: str = "none"          # day | month | year | range (spans years) | none
     subject: str = ""
     confidence: str = "none"         # high | medium | none
     pattern: Optional[str] = None
@@ -84,7 +86,13 @@ def clean_subject(text):
     """Tidy what's left once the date is removed: separators at the edges, doubled spaces, empty brackets."""
     text = re.sub(r"\(\s*\)|\[\s*\]", " ", text)
     text = re.sub(r"\s+", " ", text)
-    return text.strip(" -_.,:;/|–—")
+    text = text.strip(" -_.,:;/|–—")
+    # words that only made sense next to the date ("Portraits taken on August 3, 2005" -> "Portraits")
+    while True:
+        trimmed = DANGLING.sub("", text).strip(" -_.,:;/|–—")
+        if trimmed == text:
+            return text
+        text = trimmed
 
 
 def parse(name, today=None):
@@ -93,6 +101,9 @@ def parse(name, today=None):
     for pname, rx, precision, conf in _COMPILED:
         for m in rx.finditer(name or ""):
             g = m.groupdict()
+            if pname == "y_range":   # spans years: not one event's date, so the name is left as it is
+                return Parsed(int(g["y"]), precision="range", subject=clean_subject(name), pattern=pname,
+                              note=f"the name spans {g['y']}-{g['y2']}")
             y = int(g["y"]) if g.get("y") else _year2(int(g["yy"]), today) if g.get("yy") else None
             mo = MONTHS[g["mon"].lower().rstrip(".")] if g.get("mon") else int(g["m"]) if g.get("m") else None
             d = int(g["d"]) if g.get("d") else None
@@ -172,6 +183,8 @@ def propose(name, templates, keep_day=True, min_confidence="high", photo_dates=N
             p = Parsed(p.year, p2.month, p2.day, p2.precision, p.subject, "high", pattern="name+photos",
                        note=f"year from the name; {p2.note}")
             source = "name+photos"
+    if p.precision == "range":
+        return Proposal(name, None, None, "none", "none", False, f"{p.note}; left as it is")
     if p.precision == "none":
         uploads = spread_days(upload_dates)
         if photo_dates and uploads is not None and uploads > max_spread_days:
