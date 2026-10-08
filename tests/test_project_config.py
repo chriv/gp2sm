@@ -49,9 +49,8 @@ def test_good_config_loads_with_defaults(tmp_path):
     ("[run]\nworkers = true", "positive integer"),
 ])
 def test_bad_configs_explain_the_problem(snippet, message):
-    import sys
-    toml = __import__("tomllib") if sys.version_info >= (3, 11) else __import__("tomli")
-    _, problems = validate(toml.loads(snippet))
+    import tomllib
+    _, problems = validate(tomllib.loads(snippet))
     assert any(message in p for p in problems), problems
 
 

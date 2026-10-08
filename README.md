@@ -1,7 +1,7 @@
 # gp2sm
 
 [![CI](https://github.com/chriv/gp2sm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chriv/gp2sm/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status: beta](https://img.shields.io/badge/status-beta-orange)](CHANGELOG.md)
 [![Platforms: Linux | macOS | Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](.github/workflows/ci.yml)
@@ -19,7 +19,7 @@ Move a photo library into **SmugMug** and keep it organized. Every step is plann
 
 ## Install
 
-Install it from GitHub (Python 3.10 or newer):
+Install it from GitHub (Python 3.11 or newer):
 
 ```bash
 pipx install git+https://github.com/chriv/gp2sm.git

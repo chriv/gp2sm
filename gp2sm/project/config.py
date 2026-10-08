@@ -6,16 +6,11 @@ their config in one pass. Paths in the file are relative to the project folder.
 
 import os
 import string
-import sys
+import tomllib
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from gp2sm.services.base import ALBUM_SETTING_VALUES
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised on 3.10 in CI
-    import tomli as tomllib
 
 CONFIG_NAME = "gp2sm.toml"
 
