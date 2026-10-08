@@ -123,6 +123,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
   - **⚠️ Removing the original** from its own album **deletes the image everywhere**: the collected copies vanish too. Never delete or empty an album whose items were collected elsewhere.
   - Moving the original to another album keeps the collected copy, and the image is then in both of those albums.
   - Collecting an item that is already in the destination is a silent no-op (no error, no extra copy).
+  - Moving the original into the album that already holds its collected copy merges them (confirmed 2026-10-08 on 3 items collected by the Android app): the destination keeps one entry per image (its count is unchanged), the source loses it, and the image is then only in the destination. So "collect, then move the original" ends up the same as a plain move.
 - Delete from an album: `DELETE <AlbumImage uri>` → 200.
 - **Moving an item that's still processing is silently ignored.** (Observed 2026-10-06.) A video stuck in `Status: "Preprocess"`, `Processing: true` hours after upload: `!moveimages` returned `200 Ok`, but the item stayed in its source album, repeatably. **Always confirm a move on the server** (`image!albums`, or the target's `ImageCount` delta) instead of trusting the response, and retry once processing has finished.
 - Moves occasionally fail with HTTP 500 without being applied. Once the server confirms the item didn't move, retrying is safe. (6 of 6 succeeded on retry.)
