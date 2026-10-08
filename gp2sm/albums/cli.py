@@ -2,7 +2,7 @@
 
 Names:
   inventory   list the albums in [naming] scope; for albums with no date in their name (or only a year, or a range of years),
-              sample a few pages of photos for their capture dates (--sample N checks only N random albums)
+              sample a few pages of photos for their capture dates (--sample N checks only N random albums, --name GLOB only matching ones)
   plan        propose new names: confident ones are planned, the rest wait for review
   approve     move reviewed proposals into the plan (--name GLOB, repeatable)
   apply       rename (display names only; links never change); dry run unless --yes
@@ -73,6 +73,8 @@ def cmd_inventory(st, cfg, client, args):
     if not nm["scope"]:
         raise SystemExit("[naming] scope is empty: name the folders or albums whose names to check ([\"/\"] = all)")
     albums = [a for a in albums_in_scope(client, nm["scope"]) if not excluded(a, nm["exclude"])]
+    if args.name:
+        albums = [a for a in albums if any(fnmatch.fnmatch((a["name"] or "").lower(), g.lower()) for g in args.name)]
     if args.sample and args.sample < len(albums):
         albums = random.Random(args.seed).sample(albums, args.sample)
     progress = run.Progress(len(albums), "albums checked")
