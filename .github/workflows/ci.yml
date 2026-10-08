@@ -1,9 +1,19 @@
 name: CI
 
+# Pushes and pull requests run a slim matrix; a version tag (v*) runs every OS x Python before a release.
+# Changes that touch only documentation don't run CI (macOS minutes are expensive).
 on:
   push:
     branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["docs/**", "**/*.md", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
   pull_request:
+    paths-ignore: ["docs/**", "**/*.md", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
+
+# a newer push to the same branch cancels a run still in progress
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -20,8 +30,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.11", "3.12", "3.14"]
+        # full matrix on a version tag, slim otherwise
+        include: >-
+          ${{ fromJSON(startsWith(github.ref, 'refs/tags/v') && '[
+          {"os": "ubuntu-latest", "python": "3.11"}, {"os": "ubuntu-latest", "python": "3.12"},
+          {"os": "ubuntu-latest", "python": "3.14"}, {"os": "macos-latest", "python": "3.11"},
+          {"os": "macos-latest", "python": "3.12"}, {"os": "macos-latest", "python": "3.14"},
+          {"os": "windows-latest", "python": "3.11"}, {"os": "windows-latest", "python": "3.12"},
+          {"os": "windows-latest", "python": "3.14"}]' || '[
+          {"os": "ubuntu-latest", "python": "3.11"}, {"os": "ubuntu-latest", "python": "3.14"},
+          {"os": "macos-latest", "python": "3.14"}, {"os": "windows-latest", "python": "3.11"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

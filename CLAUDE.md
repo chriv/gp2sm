@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .venv/bin/python -m pytest -q                            # all tests
 .venv/bin/python -m pytest -q tests/test_album_naming.py -k year   # single test
 .venv/bin/ruff check gp2sm tests                         # lint (config in pyproject.toml)
+scripts/test-pythons.sh                                  # tests on every local Python 3.11/3.12/3.14 (venvs in .venvs/); CI pushes run a slim matrix, v* tags the full one
 GP2SM_LIVE_SMUGMUG=smugmug_config.json .venv/bin/python -m pytest -q -m live   # destination contract vs real SmugMug (sandbox folder, cleaned up)
 .venv/bin/gp2sm --help                                   # all commands (gp2sm <command> --help for each)
 ```

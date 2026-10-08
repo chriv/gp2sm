@@ -1,5 +1,6 @@
 .idea/
 .venv/
+.venvs/
 .vscode/
 temp_downloads/
 *.json
