@@ -18,6 +18,8 @@ Press Ctrl-C once and the command finishes the work in flight, then stops. Press
 
 `gp2sm verify` compares SmugMug with what the project recorded: every upload, every moved item, every renamed album and changed setting. Run it after `apply`. `gp2sm report` accounts for every source file and states whether everything has been verified.
 
+Checks exit with code 3 when they find something to look at (`verify`: a mismatch or a name or setting changed since; `albums audit`: drift from a policy; `plan`: work to do), and 0 when everything is in order, so a script or a scheduler can tell the two apart. See the FAQ.
+
 ## What can be undone
 
 | what | undo |

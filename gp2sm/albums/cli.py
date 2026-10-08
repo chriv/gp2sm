@@ -465,6 +465,14 @@ def undo_settings(st, client, args, out):
 
 COMMANDS = {"inventory": cmd_inventory, "plan": cmd_plan, "report": cmd_report, "approve": cmd_approve,
             "apply": cmd_apply, "audit": cmd_audit, "fix": cmd_fix, "verify": cmd_verify, "undo": cmd_undo}
+# exit code 3 (run.ATTENTION_EXIT) when a check finds something for a person to look at
+ATTENTION = {
+    "plan": lambda s: (s.get("planned") or s.get("review")) and
+    f"{s.get('planned', 0)} names to fix, {s.get('review', 0)} for review",
+    "audit": lambda s: (s["fixes"] or s["warnings"] or s["findings"]) and
+    f"{s['fixes']} settings differ from the policies, {s['warnings']} warnings, {s['findings']} findings",
+    "verify": lambda s: s["changed_since"] and f"{len(s['changed_since'])} names or settings changed since gp2sm set them",
+}
 NEEDS_CLIENT = {"inventory", "apply", "audit", "fix", "verify", "undo"}
 WRITES = {"apply", "fix", "undo"}
 
@@ -489,7 +497,8 @@ def main(argv=None):
     if args.command in WRITES and args.yes:
         lock = context.acquire_lock(cfg["state_db"], f"albums {args.command}")
     command = COMMANDS[args.command]
-    return run.run_command(st, f"albums.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
+    return run.run_command(st, f"albums.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock,
+                           attention=ATTENTION.get(args.command))
 
 
 if __name__ == "__main__":

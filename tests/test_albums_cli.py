@@ -47,7 +47,7 @@ def changes(root):
 def test_names_end_to_end(project, capsys):
     root, fake, ids = project
     assert run(root, "inventory") == 0
-    assert run(root, "plan") == 0
+    assert run(root, "plan") == 3                                   # names to fix: needs attention
     c = changes(root)
     assert c["Beach Trip 06-2019"] == ("2019-06 Beach Trip", "review")     # collides with an existing album
     assert c["Christmas 2015"] == ("2015 Christmas", "review")             # year only: medium
@@ -73,7 +73,7 @@ def test_names_end_to_end(project, capsys):
     assert run(root, "undo", "--yes") == 0
     assert fake.names[ids["Lake weekend"]] == "Lake weekend"
     assert changes(root)["Lake weekend"][1] == "undone"
-    assert run(root, "plan") == 0 and changes(root)["Lake weekend"] == ("2021-07 Lake weekend", "review")
+    assert run(root, "plan") == 3 and changes(root)["Lake weekend"] == ("2021-07 Lake weekend", "review")
 
 
 def test_sample_limits_inventory(project):
@@ -108,7 +108,7 @@ def policy_project(tmp_path, monkeypatch):
 
 def test_settings_audit_fix_verify_undo(policy_project, capsys):
     root, fake, ids = policy_project
-    assert run(root, "audit") == 0
+    assert run(root, "audit") == 3                                  # drift: needs attention
     st = State(str(root / "state.db"))
     planned = {(r["album_id"], r["field"]): (r["old_value"], r["new_value"]) for r in
                st.q("SELECT * FROM album_changes WHERE kind='setting' AND status='planned'")}
@@ -140,7 +140,7 @@ def test_settings_audit_fix_verify_undo(policy_project, capsys):
 def test_unknown_current_values_go_to_review(policy_project):
     root, fake, ids = policy_project
     fake.settings.setdefault(ids["beach"], {})["sort"] = "Shuffle (app-made)"   # a value gp2sm doesn't know
-    assert run(root, "audit") == 0
+    assert run(root, "audit") == 3
     st = State(str(root / "state.db"))
     row = st.q("SELECT status, note FROM album_changes WHERE album_id=? AND field='sort'", ids["beach"])[0]
     assert row["status"] == "review" and "couldn't be undone" in row["note"]
@@ -196,3 +196,12 @@ def test_chain_follows_linked_changes_back_to_the_start():
                     {"change_id": 1, "old_value": '"x"', "new_value": '"y"'}]    # not linked: someone changed it between
     linked, before = cli.chain(newest_first)
     assert [c["change_id"] for c in linked] == [3, 2] and before == '"a"'
+
+
+def test_checks_exit_3_when_something_needs_attention(policy_project):
+    root, fake, ids = policy_project
+    assert run(root, "audit") == 3                                       # settings drift from the policies
+    run(root, "fix", "--yes")
+    assert run(root, "verify") == 0                                      # everything as gp2sm set it
+    fake.set_album_settings(ids["beach"], {"downloads": False})          # someone changes a setting by hand
+    assert run(root, "verify") == 3

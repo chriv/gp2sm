@@ -56,6 +56,14 @@ def organize_items(st, cfg):
     return out, skipped
 
 
+# exit code 3 (run.ATTENTION_EXIT) when a check finds something for a person to look at
+ATTENTION = {
+    "plan": lambda s: s.get("to_do") and f"{s['to_do']} items to organize",
+    "verify": lambda s: (s.get("targets_bad") or s.get("sources_bad")) and
+    f"{s.get('targets_bad', 0)} target and {s.get('sources_bad', 0)} source albums differ from the plan",
+}
+
+
 def cmd_plan(st, cfg, client, args):
     items, skipped = organize_items(st, cfg)
     existing = {r["item_id"]: dict(r) for r in st.q("SELECT item_id AS item_id, status, target_name FROM plan")}
@@ -73,6 +81,7 @@ def cmd_plan(st, cfg, client, args):
     for it in items:
         key = it["method"].split(":")[0]
         methods[key] = methods.get(key, 0) + 1
+    out["to_do"] = st.one("SELECT COUNT(*) FROM plan WHERE status IN ('pending', 'failed', 'unknown')") or 0
     out.update(dated_by=dict(sorted(methods.items())), skipped_recent=len(skipped),
                groups=dict(sorted({g: sum(1 for i in items if i["group"] == g) for g in {i["group"] for i in items}}
                                   .items())))
@@ -139,7 +148,8 @@ def main(argv=None):
     if args.command in WRITES and args.yes:
         lock = context.acquire_lock(cfg["state_db"], f"organize {args.command}")
     command = COMMANDS[args.command]
-    code = run.run_command(st, f"organize.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
+    code = run.run_command(st, f"organize.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock,
+                           attention=ATTENTION.get(args.command))
     if args.command.startswith("delete-") and not args.yes:
         run.dry_run_footer()
     return code

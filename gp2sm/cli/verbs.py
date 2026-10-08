@@ -14,6 +14,7 @@ Each verb runs the pipeline's steps in order and stops at the first one that fai
 import argparse
 import os
 
+from gp2sm.cli.run import ATTENTION_EXIT
 from gp2sm.project import context
 from gp2sm.takeout.archive import list_archives
 
@@ -65,13 +66,16 @@ def make_main(verb):
             raise SystemExit(f"`{verb}` isn't available for {chosen}")
         common = ["--project", args.project] if args.project else []
         run = runner(chosen)
+        result = 0
         for i, step in enumerate(steps):
             show(f"== {chosen} {step}")
             last = i == len(steps) - 1
             code = run(common + [step] + (extra if last else []))
-            if code:
+            if code == ATTENTION_EXIT:   # something to look at; the following steps still run
+                result = code
+            elif code:
                 return code
-        return 0
+        return result
     return main
 
 

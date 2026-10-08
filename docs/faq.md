@@ -23,3 +23,9 @@ No. Renames change the display name only; SmugMug never redirects an album's old
 
 **Can I use it without Google Photos?**
 Yes: `gp2sm organize` and `gp2sm albums` work on any SmugMug account. The import side is built on a general "source" interface, and Google Takeout is the one implemented so far.
+
+**Does renaming check an album's date against its photos?**
+Only when the name doesn't settle it. An album with no date in its name, only a year, or a range of years (like a school year, `2019/2020`) is dated from a sample of its photos, and only when they were taken close together. A name with a full date (`Snow 1-21-2016`, `March 10, 2005`) is trusted as it is: a typo in the name is carried into the new name. Look over `gp2sm albums report` before `apply`.
+
+**Can gp2sm run on a schedule?**
+gp2sm doesn't schedule itself; use your system's scheduler (cron, launchd, Task Scheduler) or run checks by hand. The check commands (`plan`, `verify`, and `albums audit`) exit with code **3** when they find something for a person to look at (drift from a policy, names to fix, items to organize, a mismatch), **0** when everything is in order, **130** when interrupted, and **1** on an error. A scheduled job can report or alert on exit code 3 and leave every change to a deliberate `--yes`.

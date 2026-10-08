@@ -353,7 +353,8 @@ Each step below is its own project (separate config and state), so results stay 
 - Naming (A6): propose `YYYY-MM Subject` renames across chosen folders, auto-apply the confident ones, review the rest.
 - Settings policy (A7): define the preferred settings per scope, audit drift, fix it in bulk, then re-audit.
 
-### Stage B3: Routine drift checks
+### Stage B3: Routine drift checks (deferred)
 
-- Run the auto-upload organize periodically, skipping the most recent weeks.
-- Run the naming and settings audits periodically as a report, applying fixes after a quick review of the drift.
+- Scheduling isn't part of gp2sm: periodic runs belong to the system (cron, launchd, Task Scheduler) or are done by hand. Event-driven checks are deferred too.
+- What gp2sm provides is done: every check can be run on demand, reports what it found, and verification and fixes stay separate steps. Checks exit with code 3 when something needs a person (drift, names to fix, items to organize, a mismatch) and 0 when all is in order, so any scheduler can act on the result.
+- Ways to use it: re-run an auto-upload organize project to file new uploads; run `albums plan`/`albums audit` per folder project as a report; apply after reviewing.

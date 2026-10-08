@@ -9,6 +9,10 @@ and how sure it is:
 whether the change is confident enough to apply automatically. Albums whose names carry no date can still
 be dated from their photos (`date_from_photos`): the median capture date when the photos are close
 together, never when they span a long time.
+
+Known limit: a name with a full, unambiguous date is trusted as it is. Its photos aren't sampled, so a typo in
+the name ("Snow 1-12-2016" for photos taken on 2016-01-21) is carried into the new name. Only names with no
+date, a year alone, or a range of years are compared with their photos.
 """
 
 import datetime

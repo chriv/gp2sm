@@ -180,6 +180,13 @@ def cmd_upload(st, cfg, client, args):
     return transfer.cmd_upload(st, cfg, client, args)
 
 
+# exit code 3 (run.ATTENTION_EXIT) when a check finds something for a person to look at
+ATTENTION = {
+    "verify": lambda s: (s.get("albums_bad") or s.get("uploads_missing")) and
+    f"{s.get('uploads_missing', 0)} uploads missing in {s.get('albums_bad', 0)} albums",
+}
+
+
 def cmd_verify(st, cfg, client, args):
     return transfer.cmd_verify(st, cfg, client, args)
 
@@ -233,7 +240,8 @@ def main(argv=None):
     if args.command in ("upload", "remove") and args.yes:
         lock = context.acquire_lock(cfg["state_db"], f"takeout {args.command}")
     command = COMMANDS[args.command]
-    code = run.run_command(st, f"takeout.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock)
+    code = run.run_command(st, f"takeout.{args.command}", args, lambda: command(st, cfg, client, args), lock=lock,
+                           attention=ATTENTION.get(args.command))
     if args.command == "remove" and not args.yes:
         run.dry_run_footer()
     return code

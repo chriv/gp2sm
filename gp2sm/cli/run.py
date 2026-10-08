@@ -18,6 +18,7 @@ from gp2sm.project.context import release_lock
 log = logging.getLogger("gp2sm")
 
 INTERRUPTED_EXIT = 130
+ATTENTION_EXIT = 3   # finished, but found something for a person to look at (drift, a mismatch, work to do)
 
 
 class Stop:
@@ -68,16 +69,17 @@ def install_sigint():
     signal.signal(signal.SIGINT, handler)
 
 
-def run_command(st, name, args, fn, show=print, lock=None):
-    """Run fn() as a recorded run: ok | stopped | interrupted | failed. Prints the summary; returns the exit code.
-    Releases `lock` (from context.acquire_lock) when done."""
+def run_command(st, name, args, fn, show=print, lock=None, attention=None):
+    """Run fn() as a recorded run: ok | stopped | interrupted | failed. Prints the summary; returns the exit code:
+    0, ATTENTION_EXIT when attention(summary) gives a reason (so a script or scheduler can tell drift from a clean
+    run), INTERRUPTED_EXIT, or an exception. Releases `lock` (from context.acquire_lock) when done."""
     try:
-        return _run(st, name, args, fn, show)
+        return _run(st, name, args, fn, show, attention)
     finally:
         release_lock(lock)
 
 
-def _run(st, name, args, fn, show):
+def _run(st, name, args, fn, show, attention=None):
     Stop.requested = False
     st.start_run(name, vars(args))
     try:
@@ -99,6 +101,12 @@ def _run(st, name, args, fn, show):
         show(json.dumps(summary, indent=1, default=str))
     if Stop.requested:
         show("Stopped early at your request; rerun the same command to continue.", file=sys.stderr)
+        return 0
+    reason = attention(summary) if attention and summary is not None else None
+    if reason:
+        st.event("needs_attention", level="warning", reason=reason)
+        show(f"Needs attention: {reason}", file=sys.stderr)
+        return ATTENTION_EXIT
     return 0
 
 

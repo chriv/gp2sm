@@ -101,7 +101,7 @@ def test_organize_end_to_end(project, capsys):
     assert run(root, "inventory") == 0
     st = State(str(root / "state.db"))
     assert st.one("SELECT COUNT(*) FROM items") == 5                      # the project's own folder isn't a source
-    assert run(root, "plan") == 0
+    assert run(root, "plan") == 3                    # items to organize: needs attention
     plan = dict(st.q("SELECT item_id, target_name FROM plan"))
     assert plan == {"P1": "Phone 2023-05", "P2": "Screens 2023-06", "P3": "Photos Duplicates (review)",
                     "P4": "Unassigned Undated"}
@@ -127,8 +127,8 @@ def test_organize_collect_end_to_end(project):
     root, fake, src = project
     text = (root / "gp2sm.toml").read_text().replace('mode = "move"', 'mode = "collect"')
     (root / "gp2sm.toml").write_text(text)
-    for step in ("inventory", "plan"):
-        assert run(root, step) == 0
+    assert run(root, "inventory") == 0
+    assert run(root, "plan") == 3                                         # items to collect: needs attention
     assert run(root, "apply", "--yes") == 0
     names = {fake.names.get(a, a): items for a, items in fake.albums.items()}
     assert names["Phone 2023-05"] == {"P1", "P3"}                       # identical copies aren't parked
