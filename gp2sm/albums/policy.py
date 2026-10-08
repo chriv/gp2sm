@@ -52,10 +52,17 @@ def drift(actual, want):
                 continue
         if actual.get(k) != value:
             fixes.append({"setting": k, "actual": actual.get(k), "desired": value, "policy": n})
-    if "privacy" in want and actual.get("effective_privacy") and \
-            RANK.get(actual["effective_privacy"], 0) > RANK.get(want["privacy"][0], 0):
-        warnings.append(f"a containing folder makes it {actual['effective_privacy']}; the album's own "
-                        f"'{want['privacy'][0]}' setting can't take effect")
+    if "privacy" in want:
+        wanted = RANK.get(want["privacy"][0], 0)
+        if actual.get("folder_privacy"):   # the folders' own limit, when the destination reports it
+            cap = actual["folder_privacy"]
+            capped = RANK.get(cap, 0) > wanted
+        else:   # else only provable when the album is stricter in effect than its own setting
+            cap = actual.get("effective_privacy")
+            capped = cap and RANK.get(cap, 0) > wanted and RANK.get(cap, 0) > RANK.get(actual.get("privacy"), 0)
+        if capped:
+            warnings.append(f"a containing folder makes it {cap}; the album's own "
+                            f"'{want['privacy'][0]}' setting can't take effect")
     return fixes, warnings
 
 

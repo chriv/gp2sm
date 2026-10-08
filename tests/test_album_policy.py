@@ -45,3 +45,14 @@ def test_findings():
     assert policy.findings({"item_count": 4500}, 4000, 5000) == ["near the item cap (4500 of 5000)"]
     assert policy.findings({"item_count": 5001}, 4000, 5000) == ["over the item cap (5001 > 5000)"]
     assert policy.findings({"item_count": 10}, 4000, 5000) == []
+
+
+def test_an_album_private_by_its_own_setting_is_not_blamed_on_its_folder():
+    want = {"privacy": ("public", 1)}
+    own = {"privacy": "private", "effective_privacy": "private"}
+    fixes, warnings = policy.drift(dict(own, folder_privacy="public"), want)
+    assert [f["desired"] for f in fixes] == ["public"] and warnings == []            # the fix will take effect
+    fixes, warnings = policy.drift(dict(own, folder_privacy="private"), want)
+    assert "containing folder makes it private" in warnings[0]                      # the folder keeps it private
+    assert policy.drift(own, want)[1] == []                                         # unknown folder: not blamed
+    assert "containing folder" in policy.drift({"privacy": "unlisted", "effective_privacy": "private"}, want)[1][0]

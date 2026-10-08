@@ -101,6 +101,7 @@ class FakeSmugMug:
         folder = self.folders.get(album_id, "")
         capped = any(folder == f or folder.startswith(f + "/") for f in self.private_folders)
         s["effective_privacy"] = "private" if capped else s["privacy"]
+        s["folder_privacy"] = "private" if capped else "public"
         return s
 
     def set_album_settings(self, album_id, changes):

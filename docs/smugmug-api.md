@@ -75,6 +75,7 @@ Probe scripts live in `probes/` (gitignored). Raw request/response logs are writ
 - **Folder `SmugSearchable` `Local`/`LocalUser`/`Yes` and `WorldSearchable` `HomeOnly`/`Yes`** are listed but refused with 400, even on a Public folder. Only `No` and `Inherit from User` were accepted (account-level settings may be what decides).
 
 **Names and links:**
+- A node's `Uris.ParentNode` (`/api/v2/node/{key}!parent`) gives its folder; that node's `EffectivePrivacy` is the most the folders allow. An album private by its **own** setting has `EffectivePrivacy` Private while its folder is Public, so compare against the parent, not the album, to tell whether a folder is the cause (confirmed 2026-10-07).
 - Changing an album's **`Name`** leaves its `UrlName` and links unchanged.
 - Changing **`UrlName`** moves the album's URL, and the **old path stops resolving** (`!urlpathlookup` on it returns no album; nothing redirects). Renaming `UrlName` breaks existing links, so only do it when the owner asks.
 - A `UrlName` that a sibling already uses is refused with **HTTP 409**. With `AutoRename: true` the same PATCH returns 200 and changes nothing (AutoRename doesn't help on PATCH).

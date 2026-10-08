@@ -425,6 +425,14 @@ class SmugMugClient:
                 out[name] = raw
         privacy_back = {v: k for k, v in ALBUM_SETTINGS["privacy"][1].items()}
         out["effective_privacy"] = privacy_back.get(node.get("EffectivePrivacy"), node.get("EffectivePrivacy"))
+        # what the containing folders allow at most (so a stricter album setting isn't blamed on the folder)
+        parent_uri = node.get("Uris", {}).get("ParentNode", {}).get("Uri")
+        if parent_uri:
+            cache = self.__dict__.setdefault("_folder_privacy", {})
+            if parent_uri not in cache:
+                parent = self.request("GET", parent_uri, params={"_filter": "EffectivePrivacy"})["Response"]["Node"]
+                cache[parent_uri] = privacy_back.get(parent.get("EffectivePrivacy"), parent.get("EffectivePrivacy"))
+            out["folder_privacy"] = cache[parent_uri]
         return out
 
     def set_album_settings(self, album_id, changes):
