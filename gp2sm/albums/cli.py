@@ -4,7 +4,7 @@ Names:
   inventory   list the albums in [naming] scope; for albums with no date in their name (or only a year, or a range of years),
               sample a few pages of photos for their capture dates (--sample N checks only N random albums, --name GLOB only matching ones)
   plan        propose new names: confident ones are planned, the rest wait for review
-  approve     move reviewed proposals into the plan (--name GLOB, repeatable)
+  approve     move reviewed proposals into the plan (--name GLOB, repeatable; --as NAME picks another name)
   apply       rename (display names only; links never change); dry run unless --yes
 Settings:
   audit       read the settings of every album a [[policy]] covers (--sample N, --name GLOB) and plan the fixes;
@@ -273,6 +273,14 @@ def cmd_approve(st, cfg, client, args):
         raise SystemExit("name the reviewed albums to approve with --name GLOB (old or new name)")
     rows = matching([dict(r) for r in st.q("SELECT * FROM album_changes WHERE kind='rename' AND status='review'")],
                     args.name)
+    if args.as_name:
+        if len(rows) != 1:
+            raise SystemExit(f"--as names exactly one reviewed rename; --name matches {len(rows)}")
+        with st.db:
+            st.db.execute("UPDATE album_changes SET status='planned', new_value=?, note=? WHERE change_id=?",
+                          (args.as_name, (rows[0]["note"] + "; " if rows[0]["note"] else "") + "name chosen by a person",
+                           rows[0]["change_id"]))
+        return {"approved": 1, "new_name": args.as_name}
     rows += [dict(r) for r in st.q("SELECT c.* , a.name FROM album_changes c JOIN album_settings_seen a USING(album_id) "
                                    "WHERE c.kind='setting' AND c.status='review'")
              if any(fnmatch.fnmatch((r["name"] or "").lower(), g.lower()) for g in args.name)]
@@ -434,6 +442,7 @@ def main(argv=None):
     p.add_argument("--sample", type=int, help="inventory/audit: check only this many random albums")
     p.add_argument("--seed", type=int, default=1, help="inventory/audit: which random sample (repeatable)")
     p.add_argument("--name", action="append", help="only albums whose name (old or new) matches this glob")
+    p.add_argument("--as", dest="as_name", help="approve: rename the one matching album to this name instead")
     p.add_argument("--limit", type=int, help="apply/fix: at most this many albums; report: rows shown per section")
     run.add_yes(p, "rename / fix / undo")
     args = p.parse_args(argv)

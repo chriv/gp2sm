@@ -146,3 +146,15 @@ def test_unknown_current_values_go_to_review(policy_project):
     assert row["status"] == "review" and "couldn't be undone" in row["note"]
     assert run(root, "approve", "--name", "Beach") == 0
     assert st.one("SELECT status FROM album_changes WHERE album_id=? AND field='sort'", ids["beach"]) == "planned"
+
+
+def test_approve_as_a_name_the_reviewer_chooses(project):
+    root, fake, ids = project
+    run(root, "inventory")
+    run(root, "plan")
+    with pytest.raises(SystemExit, match="exactly one"):
+        run(root, "approve", "--name", "*", "--as", "Anything")              # several reviewed renames match
+    assert run(root, "approve", "--name", "Christmas 2015", "--as", "2015-12-25 Christmas") == 0
+    assert changes(root)["Christmas 2015"] == ("2015-12-25 Christmas", "planned")
+    assert run(root, "apply", "--yes", "--name", "Christmas 2015") == 0
+    assert fake.names[ids["Christmas 2015"]] == "2015-12-25 Christmas"
